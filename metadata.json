@@ -1,0 +1,5 @@
+{
+  "name": "LiveDrop",
+  "description": "Hyperlocal live deals app where nearby businesses post limited-time deals, and users claim them before they expire.",
+  "requestFramePermissions": ["geolocation"]
+}
