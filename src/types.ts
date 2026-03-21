@@ -1,6 +1,7 @@
 export interface Deal {
   id: string;
   businessType?: 'local' | 'online';
+  status?: 'active' | 'expired' | 'draft';
   businessName: string;
   logoUrl?: string;
   imageUrl?: string;

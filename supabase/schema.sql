@@ -22,8 +22,34 @@ create table if not exists public.user_app_state (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.deals (
+  id text primary key,
+  owner_id uuid references auth.users (id) on delete set null,
+  business_type text not null default 'local' check (business_type in ('local', 'online')),
+  status text not null default 'active' check (status in ('active', 'expired', 'draft')),
+  business_name text not null,
+  logo_url text,
+  image_url text,
+  title text not null,
+  description text not null,
+  offer_text text not null,
+  website_url text,
+  product_url text,
+  has_timer boolean not null default true,
+  distance text not null default 'Online',
+  lat double precision not null default 0,
+  lng double precision not null default 0,
+  created_at timestamptz not null default timezone('utc', now()),
+  expires_at timestamptz not null,
+  max_claims integer not null default 0,
+  current_claims integer not null default 0,
+  claim_count integer not null default 0,
+  category text not null
+);
+
 alter table public.profiles enable row level security;
 alter table public.user_app_state enable row level security;
+alter table public.deals enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own"
@@ -68,3 +94,32 @@ for update
 to authenticated
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+
+drop policy if exists "deals_select_all" on public.deals;
+create policy "deals_select_all"
+on public.deals
+for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "deals_insert_authenticated" on public.deals;
+create policy "deals_insert_authenticated"
+on public.deals
+for insert
+to anon, authenticated
+with check (true);
+
+drop policy if exists "deals_update_owner" on public.deals;
+create policy "deals_update_owner"
+on public.deals
+for update
+to authenticated
+using (auth.uid() = owner_id or owner_id is null)
+with check (auth.uid() = owner_id or owner_id is null);
+
+drop policy if exists "deals_delete_owner" on public.deals;
+create policy "deals_delete_owner"
+on public.deals
+for delete
+to authenticated
+using (auth.uid() = owner_id or owner_id is null);

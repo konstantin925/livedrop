@@ -36,6 +36,7 @@ const LOCAL_ADMIN_MODE = true;
 
 const USER_PROFILE_TABLE = 'profiles';
 const USER_STATE_TABLE = 'user_app_state';
+const DEALS_TABLE = 'deals';
 const BUSINESS_PLAN_ID = 'business_monthly';
 
 const getNotificationMessage = (
@@ -81,6 +82,7 @@ const readStoredDeals = (): Deal[] => {
       ? parsed.map((deal) => ({
           ...deal,
           businessType: deal.businessType ?? 'local',
+          status: deal.status ?? 'active',
           currentClaims: deal.currentClaims ?? deal.claimCount ?? 0,
           claimCount: deal.claimCount ?? deal.currentClaims ?? 0,
           createdAt: deal.createdAt ?? Date.now(),
@@ -184,6 +186,80 @@ const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
   return [...seededOnlineDeals, ...nonSeededDeals];
 };
 
+type DealRow = {
+  id: string;
+  business_type: 'local' | 'online';
+  status: 'active' | 'expired' | 'draft';
+  business_name: string;
+  logo_url: string | null;
+  image_url: string | null;
+  title: string;
+  description: string;
+  offer_text: string;
+  website_url: string | null;
+  product_url: string | null;
+  has_timer: boolean;
+  distance: string;
+  lat: number;
+  lng: number;
+  created_at: string;
+  expires_at: string;
+  max_claims: number;
+  current_claims: number;
+  claim_count: number;
+  category: string;
+  owner_id: string | null;
+};
+
+const mapDealRowToDeal = (row: DealRow): Deal => ({
+  id: row.id,
+  businessType: row.business_type,
+  status: row.status,
+  businessName: row.business_name,
+  logoUrl: row.logo_url ?? undefined,
+  imageUrl: row.image_url ?? undefined,
+  title: row.title,
+  description: row.description,
+  offerText: row.offer_text,
+  websiteUrl: row.website_url ?? undefined,
+  productUrl: row.product_url ?? undefined,
+  hasTimer: row.has_timer,
+  distance: row.distance,
+  lat: row.lat,
+  lng: row.lng,
+  createdAt: new Date(row.created_at).getTime(),
+  expiresAt: new Date(row.expires_at).getTime(),
+  maxClaims: row.max_claims,
+  currentClaims: row.current_claims,
+  claimCount: row.claim_count,
+  category: row.category,
+});
+
+const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => ({
+  id: deal.id,
+  business_type: deal.businessType ?? 'local',
+  status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
+  business_name: deal.businessName,
+  logo_url: deal.logoUrl ?? null,
+  image_url: deal.imageUrl ?? null,
+  title: deal.title,
+  description: deal.description,
+  offer_text: deal.offerText,
+  website_url: deal.websiteUrl ?? null,
+  product_url: deal.productUrl ?? null,
+  has_timer: deal.hasTimer ?? true,
+  distance: deal.distance,
+  lat: deal.lat,
+  lng: deal.lng,
+  created_at: new Date(deal.createdAt).toISOString(),
+  expires_at: new Date(deal.expiresAt).toISOString(),
+  max_claims: deal.maxClaims,
+  current_claims: deal.currentClaims,
+  claim_count: deal.claimCount ?? deal.currentClaims,
+  category: deal.category,
+  owner_id: ownerId ?? null,
+});
+
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('live-deals');
   const [role, setRole] = useState<UserRole>('customer');
@@ -217,6 +293,8 @@ export default function App() {
   const [authInfo, setAuthInfo] = useState('');
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
+  const [dealsLoading, setDealsLoading] = useState(true);
+  const [dealsError, setDealsError] = useState('');
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
@@ -236,6 +314,47 @@ export default function App() {
       role,
     },
   });
+
+  const applyDealsState = (nextDeals: Deal[]) => {
+    setDeals(nextDeals);
+    seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
+  };
+
+  const fetchSharedDeals = async () => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Shared deals backend is not configured.');
+    }
+
+    const { data, error } = await supabase
+      .from(DEALS_TABLE)
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
+  };
+
+  const publishDealToBackend = async (deal: Deal) => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Shared deals backend is not configured.');
+    }
+
+    const payload = mapDealToDealRow(deal, authUser?.id ?? null);
+    const { data, error } = await supabase
+      .from(DEALS_TABLE)
+      .upsert(payload, { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return mapDealRowToDeal(data as DealRow);
+  };
 
   const upsertUserProfile = async (
     user: User,
@@ -316,17 +435,20 @@ export default function App() {
     setCloudSyncEnabled(true);
   };
 
-  // Load data from localStorage or use seeded data
+  // Load shared deals from the backend with bundled fallback data
   useEffect(() => {
+    let cancelled = false;
+
     const savedDeals = readStoredDeals();
     const savedClaims = readStoredClaims();
     const savedCatalog = readStoredCatalog();
     const savedNotifications = readStoredNotifications();
     const savedRole = readStoredRole();
+    const fallbackDeals = syncSharedOnlineDeals(savedDeals);
 
-    const hydratedDeals = syncSharedOnlineDeals(savedDeals);
-    setDeals(hydratedDeals);
-    seenDealIdsRef.current = new Set(hydratedDeals.map((deal) => deal.id));
+    applyDealsState(fallbackDeals);
+    setDealsLoading(true);
+    setDealsError('');
 
     setRole(savedRole);
     if (LOCAL_ADMIN_MODE) {
@@ -338,6 +460,40 @@ export default function App() {
     const refreshedCatalog = refreshCatalogCoupons(savedCatalog);
     setCatalogCoupons(refreshedCatalog.coupons);
     setCatalogDropWarnings(refreshedCatalog.droppedIds);
+
+    const hydrateSharedDeals = async () => {
+      if (!supabase || !hasSupabaseConfig) {
+        if (!cancelled) {
+          setDealsLoading(false);
+          setDealsError('Shared deal sync is unavailable. Showing fallback drops.');
+        }
+        return;
+      }
+
+      try {
+        const remoteDeals = await fetchSharedDeals();
+        if (cancelled) return;
+
+        const nextDeals = remoteDeals.length > 0 ? syncSharedOnlineDeals(remoteDeals) : fallbackDeals;
+        applyDealsState(nextDeals);
+        setDealsError(remoteDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to load shared deals:', error);
+        applyDealsState(fallbackDeals);
+        setDealsError('Could not load shared deals. Showing fallback drops.');
+      } finally {
+        if (!cancelled) {
+          setDealsLoading(false);
+        }
+      }
+    };
+
+    void hydrateSharedDeals();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -701,19 +857,34 @@ export default function App() {
     return newClaim;
   };
 
-  const handleCreateDeal = (dealData: Omit<Deal, 'id' | 'createdAt' | 'currentClaims'>) => {
-    const newDeal: Deal = {
+  const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt' | 'currentClaims'>) => {
+    const localDeal: Deal = {
       ...dealData,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: Date.now(),
       currentClaims: 0,
-      claimCount: 0
+      claimCount: 0,
+      status: 'active',
     };
 
-    setDeals(prev => [newDeal, ...prev]);
+    let publishedDeal = localDeal;
+
+    if (supabase && hasSupabaseConfig) {
+      try {
+        publishedDeal = await publishDealToBackend(localDeal);
+        setDealsError('');
+      } catch (error) {
+        console.error('Failed to publish deal to shared backend:', error);
+        setDealsError('Could not publish to the shared backend. Showing your local copy for now.');
+      }
+    } else {
+      setDealsError('Shared backend is not configured. Showing local-only publishing fallback.');
+    }
+
+    setDeals(prev => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
     setDealDraft(null);
-    if (newDeal.businessType !== 'online') {
-      setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, newDeal)));
+    if (publishedDeal.businessType !== 'online') {
+      setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, publishedDeal)));
       setDropMode('local');
     } else {
       setDropMode('online');
@@ -1142,6 +1313,18 @@ export default function App() {
 
     return (
       <div className="space-y-4">
+        {dealsLoading ? (
+          <div className="rounded-[1.25rem] border border-indigo-100 bg-indigo-50/80 px-4 py-3 text-[11px] font-semibold text-indigo-700">
+            Loading live deals...
+          </div>
+        ) : null}
+
+        {!dealsLoading && dealsError ? (
+          <div className="rounded-[1.25rem] border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-semibold text-amber-700">
+            {dealsError}
+          </div>
+        ) : null}
+
         {/* Developer Debug Section */}
         {showDebug && dropMode === 'local' && (
           <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
@@ -1724,6 +1907,11 @@ export default function App() {
 
       return (
         <div className="space-y-8">
+          {!dealsLoading && dealsError ? (
+            <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+              {dealsError}
+            </div>
+          ) : null}
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-black text-slate-900">Business Portal</h2>
@@ -1864,6 +2052,11 @@ export default function App() {
 
     return (
       <div className="space-y-8">
+        {!dealsLoading && dealsError ? (
+          <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+            {dealsError}
+          </div>
+        ) : null}
         <div className="flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-black text-slate-900">Business Portal</h2>
