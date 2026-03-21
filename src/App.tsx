@@ -194,6 +194,7 @@ export default function App() {
   const [catalogCoupons, setCatalogCoupons] = useState<CatalogCoupon[]>([]);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [dealDraft, setDealDraft] = useState<Deal | null>(null);
   const [userLocation, setUserLocation] = useState<UserLocation>(DEFAULT_LOCATION);
   const [radius, setRadius] = useState<number>(5);
   const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
@@ -714,6 +715,7 @@ export default function App() {
     };
 
     setDeals(prev => [newDeal, ...prev]);
+    setDealDraft(null);
     if (newDeal.businessType !== 'online') {
       setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, newDeal)));
       setDropMode('local');
@@ -723,6 +725,60 @@ export default function App() {
     setPortalSuccessMessage('Your deal is live');
     setIsCreating(false);
     setCurrentView('live-deals');
+  };
+
+  const handleOpenCreateDeal = () => {
+    setPortalSuccessMessage('');
+    setDealDraft(null);
+    setIsCreating(true);
+  };
+
+  const createReusedDealPayload = (
+    sourceDeal: Deal,
+    options?: {
+      durationMinutes?: number;
+      publishImmediately?: boolean;
+    },
+  ): Omit<Deal, 'id' | 'createdAt' | 'currentClaims'> => {
+    const durationMinutes = options?.durationMinutes ?? 30;
+    const nextExpiry = Date.now() + durationMinutes * 60 * 1000;
+
+    return {
+      businessType: sourceDeal.businessType,
+      businessName: sourceDeal.businessName,
+      logoUrl: sourceDeal.logoUrl,
+      imageUrl: sourceDeal.imageUrl,
+      title: sourceDeal.title,
+      description: sourceDeal.description,
+      offerText: sourceDeal.offerText,
+      websiteUrl: sourceDeal.websiteUrl,
+      productUrl: sourceDeal.productUrl,
+      hasTimer: true,
+      distance: sourceDeal.businessType === 'online' ? 'Online' : sourceDeal.distance,
+      lat: sourceDeal.lat,
+      lng: sourceDeal.lng,
+      expiresAt: nextExpiry,
+      maxClaims: sourceDeal.maxClaims,
+      claimCount: 0,
+      category: sourceDeal.category,
+    };
+  };
+
+  const handleReuseDeal = (deal: Deal) => {
+    setPortalSuccessMessage('');
+    setDealDraft({
+      ...deal,
+      expiresAt: Date.now() + 30 * 60 * 1000,
+      currentClaims: 0,
+      claimCount: 0,
+      hasTimer: true,
+    });
+    setIsCreating(true);
+  };
+
+  const handleReuseDealAndGoLive = (deal: Deal) => {
+    handleCreateDeal(createReusedDealPayload(deal, { durationMinutes: 30, publishImmediately: true }));
+    setPortalSuccessMessage('Your deal is live');
   };
 
   const handleCancelDeal = (dealId: string) => {
@@ -1062,6 +1118,26 @@ export default function App() {
       return true;
     });
 
+    const getOnlineDealHeroLabel = (offerText: string) => {
+      const normalizedOffer = offerText.trim();
+      const uppercaseOffer = normalizedOffer.toUpperCase();
+      const percentMatch = uppercaseOffer.match(/\d+\s*%(\s*OFF)?/);
+
+      if (percentMatch) {
+        return percentMatch[0].replace(/\s+/g, ' ').trim().includes('OFF')
+          ? percentMatch[0].replace(/\s+/g, ' ').trim()
+          : `${percentMatch[0].replace(/\s+/g, ' ').trim()} OFF`;
+      }
+
+      if (uppercaseOffer.includes('FREE SHIPPING')) return 'FREE SHIPPING';
+      if (uppercaseOffer.includes('FREE')) return 'FREE';
+      if (uppercaseOffer.includes('2 FOR 1')) return '2 FOR 1';
+      if (uppercaseOffer.includes('BUNDLE')) return 'BUNDLE DEAL';
+      if (uppercaseOffer.includes('FLASH')) return 'FLASH SALE';
+
+      return uppercaseOffer.length > 18 ? `${uppercaseOffer.slice(0, 18).trim()}...` : uppercaseOffer;
+    };
+
     const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
     const controlHeightClass = 'h-9';
     const controlRadiusClass = 'rounded-xl';
@@ -1296,9 +1372,9 @@ export default function App() {
             )
           ) : (
             filteredOnlineDealsByTab.length > 0 ? (
-              filteredOnlineDealsByTab.map((deal) => (
-                <div key={deal.id} className="overflow-hidden rounded-[1.45rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40">
-                  <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+            filteredOnlineDealsByTab.map((deal) => (
+              <div key={deal.id} className="overflow-hidden rounded-[1.45rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40">
+                  <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
                     {deal.imageUrl ? (
                       <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover" />
                     ) : (
@@ -1306,6 +1382,11 @@ export default function App() {
                         <AppIcon name="online" size={28} />
                       </div>
                     )}
+                    <div className="pointer-events-none absolute left-3 top-3">
+                      <span className="inline-flex min-h-[34px] items-center rounded-[0.95rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-3 py-1.5 text-[14px] font-black uppercase tracking-[0.08em] text-white shadow-[0_10px_24px_rgba(99,102,241,0.28)] ring-1 ring-white/30 backdrop-blur-sm">
+                        {getOnlineDealHeroLabel(deal.offerText)}
+                      </span>
+                    </div>
                   </div>
                   <div className="p-3">
                     <div className="mb-2 flex items-start justify-between gap-2.5">
@@ -1635,8 +1716,12 @@ export default function App() {
         return (
           <CreateDealForm
             onSubmit={handleCreateDeal}
-            onCancel={() => setIsCreating(false)}
+            onCancel={() => {
+              setIsCreating(false);
+              setDealDraft(null);
+            }}
             userLocation={userLocation}
+            initialData={dealDraft}
           />
         );
       }
@@ -1651,10 +1736,7 @@ export default function App() {
               ) : null}
             </div>
             <button
-              onClick={() => {
-                setPortalSuccessMessage('');
-                setIsCreating(true);
-              }}
+              onClick={handleOpenCreateDeal}
               className="bg-indigo-600 p-3 rounded-2xl text-white shadow-xl shadow-indigo-200 hover:scale-105 transition-transform"
             >
               <AppIcon name="plus" size={24} />
@@ -1667,7 +1749,7 @@ export default function App() {
             <div className="space-y-4">
               {deals.length > 0 ? (
                 deals.map(deal => (
-                  <div key={deal.id} className="bg-slate-50 border border-slate-100 rounded-3xl p-5">
+                  <div key={deal.id} className="overflow-hidden bg-slate-50 border border-slate-100 rounded-3xl px-5 py-5">
                     <div className="flex justify-between items-start mb-4">
                       <div className="flex items-start gap-3 min-w-0">
                         <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={40} />
@@ -1684,19 +1766,35 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between mt-5 pt-5 border-t border-slate-200/50">
-                      <div className="flex items-center gap-6">
+                    <div className="mt-5 border-t border-slate-200/50 pt-5">
+                      <div className="flex flex-col gap-3">
                         <div className="flex flex-col">
                           <span className="text-[8px] text-slate-400 font-black uppercase tracking-widest">Claims</span>
                           <span className="text-lg font-mono font-black text-slate-900">{deal.claimCount ?? deal.currentClaims}/{deal.maxClaims}</span>
                         </div>
+                        <div className="flex w-full flex-wrap items-center justify-start gap-2">
+                          <button
+                            onClick={() => handleReuseDealAndGoLive(deal)}
+                            className="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white transition-colors hover:bg-indigo-500"
+                          >
+                            <AppIcon name="zap" size={14} />
+                            Go Live
+                          </button>
+                          <button
+                            onClick={() => handleReuseDeal(deal)}
+                            className="inline-flex h-9 w-[88px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                          >
+                            Reuse
+                          </button>
+                          <button
+                            onClick={() => handleCancelDeal(deal.id)}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500"
+                            aria-label="Delete deal"
+                          >
+                            <AppIcon name="trash" size={16} />
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => handleCancelDeal(deal.id)}
-                        className="text-slate-300 hover:text-rose-500 transition-colors p-2"
-                      >
-                        <AppIcon name="trash" size={20} />
-                      </button>
                     </div>
                   </div>
                 ))
@@ -1718,10 +1816,7 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => {
-              setPortalSuccessMessage('');
-              setIsCreating(true);
-            }}
+            onClick={handleOpenCreateDeal}
             className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-lg flex items-center justify-center gap-3 shadow-2xl shadow-slate-200 hover:bg-slate-800 transition-all"
           >
             <AppIcon name="plus" size={24} />
@@ -1761,8 +1856,12 @@ export default function App() {
       return (
         <CreateDealForm 
           onSubmit={handleCreateDeal} 
-          onCancel={() => setIsCreating(false)} 
+          onCancel={() => {
+            setIsCreating(false);
+            setDealDraft(null);
+          }} 
           userLocation={userLocation}
+          initialData={dealDraft}
         />
       );
     }
@@ -1777,10 +1876,7 @@ export default function App() {
             ) : null}
           </div>
           <button 
-            onClick={() => {
-              setPortalSuccessMessage('');
-              setIsCreating(true);
-            }}
+            onClick={handleOpenCreateDeal}
             className="bg-indigo-600 p-3 rounded-2xl text-white shadow-xl shadow-indigo-200 hover:scale-105 transition-transform"
           >
             <AppIcon name="plus" size={24} />
@@ -1793,7 +1889,7 @@ export default function App() {
           <div className="space-y-4">
             {deals.length > 0 ? (
               deals.map(deal => (
-                <div key={deal.id} className="bg-slate-50 border border-slate-100 rounded-3xl p-5">
+                <div key={deal.id} className="overflow-hidden bg-slate-50 border border-slate-100 rounded-3xl px-5 py-5">
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex items-start gap-3 min-w-0">
                       <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={40} />
@@ -1810,19 +1906,35 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mt-5 pt-5 border-t border-slate-200/50">
-                    <div className="flex items-center gap-6">
+                  <div className="mt-5 border-t border-slate-200/50 pt-5">
+                    <div className="flex flex-col gap-3">
                       <div className="flex flex-col">
                         <span className="text-[8px] text-slate-400 font-black uppercase tracking-widest">Claims</span>
                         <span className="text-lg font-mono font-black text-slate-900">{deal.claimCount ?? deal.currentClaims}/{deal.maxClaims}</span>
                       </div>
+                      <div className="flex w-full flex-wrap items-center justify-start gap-2">
+                        <button
+                          onClick={() => handleReuseDealAndGoLive(deal)}
+                          className="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white transition-colors hover:bg-indigo-500"
+                        >
+                          <AppIcon name="zap" size={14} />
+                          Go Live
+                        </button>
+                        <button
+                          onClick={() => handleReuseDeal(deal)}
+                          className="inline-flex h-9 w-[88px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                        >
+                          Reuse
+                        </button>
+                        <button
+                          onClick={() => handleCancelDeal(deal.id)}
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500"
+                          aria-label="Delete deal"
+                        >
+                          <AppIcon name="trash" size={16} />
+                        </button>
+                      </div>
                     </div>
-                    <button 
-                      onClick={() => handleCancelDeal(deal.id)}
-                      className="text-slate-300 hover:text-rose-500 transition-colors p-2"
-                    >
-                      <AppIcon name="trash" size={20} />
-                    </button>
                   </div>
                 </div>
               ))
@@ -1844,10 +1956,7 @@ export default function App() {
         </div>
 
         <button 
-          onClick={() => {
-            setPortalSuccessMessage('');
-            setIsCreating(true);
-          }}
+          onClick={handleOpenCreateDeal}
           className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-lg flex items-center justify-center gap-3 shadow-2xl shadow-slate-200 hover:bg-slate-800 transition-all"
         >
           <AppIcon name="plus" size={24} />

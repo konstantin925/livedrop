@@ -9,6 +9,7 @@ interface CreateDealFormProps {
   onSubmit: (deal: Omit<Deal, 'id' | 'createdAt' | 'currentClaims'>) => void;
   onCancel: () => void;
   userLocation: UserLocation;
+  initialData?: Deal | null;
 }
 
 const BUSINESS_DEFAULTS_KEY = 'livedrop_business_defaults';
@@ -26,9 +27,59 @@ function readBusinessDefaults() {
   }
 }
 
-export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation }) => {
-  const savedDefaults = readBusinessDefaults();
-  const [formData, setFormData] = useState({
+const getOfferTypeFromDeal = (deal: Deal): OfferType => {
+  const trimmedOffer = deal.offerText.trim();
+
+  if (/%\s*OFF$/i.test(trimmedOffer)) return 'percentage';
+  if (/^\$\d+(\.\d+)?\s*OFF$/i.test(trimmedOffer)) return 'fixed';
+  return 'custom';
+};
+
+const getDiscountValueFromDeal = (deal: Deal) => {
+  const trimmedOffer = deal.offerText.trim();
+  const percentageMatch = trimmedOffer.match(/^(\d+(\.\d+)?)\s*%\s*OFF$/i);
+  if (percentageMatch) return percentageMatch[1];
+
+  const fixedMatch = trimmedOffer.match(/^\$(\d+(\.\d+)?)\s*OFF$/i);
+  if (fixedMatch) return fixedMatch[1];
+
+  return '30';
+};
+
+const getInitialFormData = (
+  savedDefaults: ReturnType<typeof readBusinessDefaults>,
+  initialData?: Deal | null,
+) => {
+  if (initialData) {
+    const inferredOfferType = getOfferTypeFromDeal(initialData);
+    const inferredRadiusMiles = initialData.businessType === 'online'
+      ? '1'
+      : (() => {
+          const radiusMatch = initialData.distance.match(/(\d+(\.\d+)?)/);
+          return radiusMatch?.[1] ?? '1';
+        })();
+
+    return {
+      businessMode: (initialData.businessType ?? 'local') as BusinessMode,
+      businessName: initialData.businessName,
+      websiteUrl: initialData.websiteUrl ?? '',
+      productUrl: initialData.productUrl ?? '',
+      title: initialData.title,
+      description: initialData.description,
+      category: initialData.category,
+      offerType: inferredOfferType,
+      discountValue: getDiscountValueFromDeal(initialData),
+      customOfferText: inferredOfferType === 'custom' ? initialData.offerText : '',
+      quantity: initialData.maxClaims,
+      durationPreset: '30' as const,
+      customDuration: '45',
+      radiusMiles: inferredRadiusMiles,
+      boostDeal: false,
+      imageUrl: initialData.imageUrl ?? '',
+    };
+  }
+
+  return {
     businessMode: savedDefaults?.businessMode ?? 'local' as BusinessMode,
     businessName: savedDefaults?.businessName ?? '',
     websiteUrl: '',
@@ -45,7 +96,12 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     radiusMiles: '1',
     boostDeal: false,
     imageUrl: '',
-  });
+  };
+};
+
+export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, initialData }) => {
+  const savedDefaults = readBusinessDefaults();
+  const [formData, setFormData] = useState(() => getInitialFormData(savedDefaults, initialData));
   const [submitError, setSubmitError] = useState<string>('');
 
   const durationMinutes = formData.durationPreset === 'custom'
@@ -182,7 +238,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       <div className="flex justify-between items-center mb-2">
         <div>
           <h2 className="text-2xl font-black">Drop a Deal</h2>
-          <p className="text-xs text-slate-400 font-semibold uppercase tracking-[0.18em] mt-1">Post in under 30 seconds</p>
+          <p className="text-xs text-slate-400 font-semibold uppercase tracking-[0.18em] mt-1">
+            {initialData ? 'Reuse, tweak, and launch again' : 'Post in under 30 seconds'}
+          </p>
         </div>
         <button type="button" onClick={onCancel} className="text-zinc-500 text-sm font-bold uppercase">Cancel</button>
       </div>
