@@ -6,7 +6,7 @@ import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
 
 interface CreateDealFormProps {
-  onSubmit: (deal: Omit<Deal, 'id' | 'createdAt' | 'currentClaims'>) => void;
+  onSubmit: (deal: Omit<Deal, 'id' | 'createdAt'>) => void;
   onCancel: () => void;
   userLocation: UserLocation;
   initialData?: Deal | null;
@@ -46,12 +46,39 @@ const getDiscountValueFromDeal = (deal: Deal) => {
   return '30';
 };
 
+const getDurationFieldsFromDeal = (deal: Deal) => {
+  if (deal.hasTimer === false) {
+    return {
+      durationPreset: 'none' as const,
+      customDuration: '45',
+    };
+  }
+
+  const durationMinutes = Math.max(
+    1,
+    Math.round((deal.expiresAt - deal.createdAt) / (60 * 1000)),
+  );
+
+  if (durationMinutes === 15 || durationMinutes === 30 || durationMinutes === 60) {
+    return {
+      durationPreset: String(durationMinutes) as '15' | '30' | '60',
+      customDuration: String(durationMinutes),
+    };
+  }
+
+  return {
+    durationPreset: 'custom' as const,
+    customDuration: String(durationMinutes),
+  };
+};
+
 const getInitialFormData = (
   savedDefaults: ReturnType<typeof readBusinessDefaults>,
   initialData?: Deal | null,
 ) => {
   if (initialData) {
     const inferredOfferType = getOfferTypeFromDeal(initialData);
+    const durationFields = getDurationFieldsFromDeal(initialData);
     const inferredRadiusMiles = initialData.businessType === 'online'
       ? '1'
       : (() => {
@@ -71,8 +98,9 @@ const getInitialFormData = (
       discountValue: getDiscountValueFromDeal(initialData),
       customOfferText: inferredOfferType === 'custom' ? initialData.offerText : '',
       quantity: initialData.maxClaims,
-      durationPreset: '30' as const,
-      customDuration: '45',
+      currentClaims: initialData.claimCount ?? initialData.currentClaims,
+      durationPreset: durationFields.durationPreset,
+      customDuration: durationFields.customDuration,
       radiusMiles: inferredRadiusMiles,
       boostDeal: false,
       imageUrl: initialData.imageUrl ?? '',
@@ -91,6 +119,7 @@ const getInitialFormData = (
     discountValue: '30',
     customOfferText: '',
     quantity: 20,
+    currentClaims: 0,
     durationPreset: '30' as '15' | '30' | '60' | 'custom' | 'none',
     customDuration: '45',
     radiusMiles: '1',
@@ -140,8 +169,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       createdAt: Date.now(),
       expiresAt: Date.now() + Math.max(durationMinutes, 1) * 60 * 1000,
       maxClaims: Math.max(Number(formData.quantity || 0), 0),
-      currentClaims: 0,
-      claimCount: 0,
+      currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
+      claimCount: Math.max(Number(formData.currentClaims || 0), 0),
       category: formData.category,
     };
   }, [
@@ -149,6 +178,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     formData.businessMode,
     formData.businessName,
     formData.category,
+    formData.currentClaims,
     formData.description,
     formData.durationPreset,
     formData.imageUrl,
@@ -202,6 +232,16 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       return;
     }
 
+    if (!Number.isFinite(Number(formData.currentClaims)) || Number(formData.currentClaims) < 0) {
+      setSubmitError('Current claims must be 0 or greater.');
+      return;
+    }
+
+    if (Number(formData.currentClaims) > Number(formData.quantity)) {
+      setSubmitError('Current claims cannot be greater than max claims.');
+      return;
+    }
+
     const safeRadius = Number.isFinite(radiusMiles) && radiusMiles >= 0 ? radiusMiles : 0;
     const latOffset = safeRadius / 69;
     const isOnline = formData.businessMode === 'online';
@@ -221,7 +261,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       lng: isOnline ? 0 : userLocation.lng,
       expiresAt: Date.now() + durationMinutes * 60 * 1000,
       maxClaims: Number(formData.quantity),
-      claimCount: 0,
+      currentClaims: Number(formData.currentClaims),
+      claimCount: Number(formData.currentClaims),
       category: formData.category,
       logoUrl: undefined,
     });
@@ -239,11 +280,20 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
         <div>
           <h2 className="text-2xl font-black">Drop a Deal</h2>
           <p className="text-xs text-slate-400 font-semibold uppercase tracking-[0.18em] mt-1">
-            {initialData ? 'Reuse, tweak, and launch again' : 'Post in under 30 seconds'}
+            {initialData ? 'Review imported details before publishing' : 'Post in under 30 seconds'}
           </p>
         </div>
         <button type="button" onClick={onCancel} className="text-zinc-500 text-sm font-bold uppercase">Cancel</button>
       </div>
+
+      {initialData ? (
+        <div className="rounded-[1.75rem] border border-indigo-100 bg-indigo-50/60 px-4 py-4">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Portal Draft Loaded</p>
+          <p className="mt-1 text-sm text-slate-600">
+            This deal was loaded into the portal from imported JSON. Review the fields below, then publish when it looks right.
+          </p>
+        </div>
+      ) : null}
 
       <div className="bg-white border border-slate-100 rounded-[2rem] p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
@@ -500,6 +550,22 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
               />
             </div>
           </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Current Claims</label>
+            <div className="relative">
+              <AppIcon name="trending" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+              <input
+                type="number"
+                min="0"
+                className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                value={formData.currentClaims}
+                onChange={e => setFormData({ ...formData, currentClaims: e.target.value })}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4">
           {formData.businessMode === 'local' ? (
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Radius</label>

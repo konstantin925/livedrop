@@ -1,10 +1,23 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const siteUrl = import.meta.env.VITE_SITE_URL;
+const readEnv = (value?: string) => value?.trim() ?? '';
+const looksLikePlaceholder = (value: string) =>
+  !value ||
+  value.includes('your-project.supabase.co') ||
+  value.includes('your-public-anon-key');
 
-export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
+const supabaseUrl = readEnv(import.meta.env.VITE_SUPABASE_URL);
+const supabaseAnonKey = readEnv(import.meta.env.VITE_SUPABASE_ANON_KEY);
+const siteUrl = readEnv(import.meta.env.VITE_SITE_URL);
+
+export const hasSupabaseConfig =
+  Boolean(supabaseUrl && supabaseAnonKey) &&
+  !looksLikePlaceholder(supabaseUrl) &&
+  !looksLikePlaceholder(supabaseAnonKey);
+
+export const supabaseConfigIssue = hasSupabaseConfig
+  ? ''
+  : 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.';
 
 export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl, supabaseAnonKey, {

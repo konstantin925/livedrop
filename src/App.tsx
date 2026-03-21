@@ -22,7 +22,8 @@ import { CompanyLogo } from './components/CompanyLogo';
 import { ToastStack } from './components/ToastStack';
 import { AuthModal } from './components/AuthModal';
 import { BusinessPaywall } from './components/BusinessPaywall';
-import { getAuthRedirectUrl, hasSupabaseConfig, supabase } from './lib/supabase';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { getAuthRedirectUrl, hasSupabaseConfig, supabase, supabaseConfigIssue } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
 
@@ -32,12 +33,49 @@ const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
-const LOCAL_ADMIN_MODE = true;
+const LOCAL_ADMIN_MODE = false;
+const ADMIN_SESSION_STORAGE_KEY = 'livedrop_admin_session';
+const ADMIN_EMAIL_STORAGE_KEY = 'livedrop_admin_email';
+const ADMIN_FLAG_STORAGE_KEY = 'livedrop_is_admin';
+const APPROVED_ADMIN_EMAIL = 'konstantin.perekipchenko@gmail.com';
+const APPROVED_ADMIN_PASSWORD = 'konstantin';
 
 const USER_PROFILE_TABLE = 'profiles';
 const USER_STATE_TABLE = 'user_app_state';
 const DEALS_TABLE = 'deals';
 const BUSINESS_PLAN_ID = 'business_monthly';
+const BULK_IMPORT_SAMPLE = JSON.stringify(
+  [
+    {
+      businessName: 'Amazon',
+      title: 'Portable Monitor Flash Deal',
+      description: 'A slim second-screen monitor with a limited online price drop for today.',
+      category: 'Tech',
+      offerText: '22% OFF',
+      imageUrl: 'https://images.unsplash.com/photo-1527443154391-507e9dc6c5cc?auto=format&fit=crop&w=900&q=80',
+      productUrl: 'https://example.com/portable-monitor',
+      websiteUrl: 'https://example.com/portable-monitor',
+      durationMinutes: 150,
+      claimCount: 84,
+      maxClaims: 999,
+    },
+    {
+      businessName: 'Pixel Forge',
+      title: 'Mechanical Keyboard Weekend Drop',
+      description: 'Hot-swappable boards and compact layouts are part of this limited online drop.',
+      category: 'Tech',
+      offerText: '40% OFF',
+      imageUrl: 'https://images.unsplash.com/photo-1511467687858-23d96c32e4ae?auto=format&fit=crop&w=900&q=80',
+      productUrl: 'https://example.com/keyboards',
+      websiteUrl: 'https://example.com/keyboards',
+      durationMinutes: 120,
+      claimCount: 126,
+      maxClaims: 999,
+    },
+  ],
+  null,
+  2,
+);
 
 const getNotificationMessage = (
   type: 'new_deal' | 'ending_soon' | 'catalog_drop',
@@ -186,16 +224,93 @@ const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
   return [...seededOnlineDeals, ...nonSeededDeals];
 };
 
+const getDealExternalUrl = (deal: Deal) => deal.affiliateUrl ?? deal.websiteUrl ?? deal.productUrl ?? null;
+
+const normalizeRoutePath = (path: string) => {
+  if (path === '/admin') return '/admin';
+  if (path === '/dashboard') return '/dashboard';
+  return '/';
+};
+
+const readAdminSessionEmail = () => {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const isAdmin = window.localStorage.getItem(ADMIN_FLAG_STORAGE_KEY);
+    if (isAdmin !== 'true') return null;
+
+    const emailValue = window.localStorage.getItem(ADMIN_EMAIL_STORAGE_KEY);
+    const rawValue = window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+    const candidate = rawValue ?? emailValue;
+    if (!candidate) return null;
+
+    const normalizedValue = candidate.trim().toLowerCase();
+    return normalizedValue || null;
+  } catch (error) {
+    console.warn('[LiveDrop] Failed to read admin session state', error);
+    return null;
+  }
+};
+
+type BulkImportDealInput = {
+  businessName: string;
+  title: string;
+  description: string;
+  category: string;
+  offerText: string;
+  originalPrice?: number;
+  price?: number;
+  discountPercent?: number;
+  affiliateUrl?: string;
+  rating?: number;
+  reviewCount?: number;
+  merchant?: string;
+  shippingInfo?: string;
+  summary?: string;
+  tags?: string[];
+  sourceType?: 'keyword' | 'url';
+  sourceQuery?: string;
+  maxPriceMatched?: boolean;
+  stockStatus?: string;
+  imageUrl?: string;
+  productUrl?: string;
+  websiteUrl?: string;
+  durationMinutes?: number;
+  claimCount?: number;
+  maxClaims?: number;
+  isOnline?: boolean;
+};
+
+type AIDealFinderResult = {
+  normalizedDeal: BulkImportDealInput;
+  generatedJson: string;
+  missingFields: string[];
+  dealScore: number;
+  summary?: string;
+  appliedFilters?: {
+    category?: string | null;
+    maxPrice?: number | null;
+    minDiscount?: number | null;
+  };
+};
+
 type DealRow = {
   id: string;
   business_type: 'local' | 'online';
   status: 'active' | 'expired' | 'draft';
+  featured: boolean | null;
+  admin_tag: 'featured' | 'trending' | null;
   business_name: string;
   logo_url: string | null;
   image_url: string | null;
   title: string;
   description: string;
   offer_text: string;
+  original_price: number | null;
+  discount_percent: number | null;
+  affiliate_url: string | null;
+  review_count: number | null;
+  stock_status: string | null;
   website_url: string | null;
   product_url: string | null;
   has_timer: boolean;
@@ -215,12 +330,19 @@ const mapDealRowToDeal = (row: DealRow): Deal => ({
   id: row.id,
   businessType: row.business_type,
   status: row.status,
+  featured: row.featured ?? false,
+  adminTag: row.admin_tag ?? null,
   businessName: row.business_name,
   logoUrl: row.logo_url ?? undefined,
   imageUrl: row.image_url ?? undefined,
   title: row.title,
   description: row.description,
   offerText: row.offer_text,
+  originalPrice: row.original_price,
+  discountPercent: row.discount_percent,
+  affiliateUrl: row.affiliate_url ?? undefined,
+  reviewCount: row.review_count,
+  stockStatus: row.stock_status ?? undefined,
   websiteUrl: row.website_url ?? undefined,
   productUrl: row.product_url ?? undefined,
   hasTimer: row.has_timer,
@@ -239,12 +361,19 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => ({
   id: deal.id,
   business_type: deal.businessType ?? 'local',
   status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
+  featured: deal.featured ?? false,
+  admin_tag: deal.adminTag ?? null,
   business_name: deal.businessName,
   logo_url: deal.logoUrl ?? null,
   image_url: deal.imageUrl ?? null,
   title: deal.title,
   description: deal.description,
   offer_text: deal.offerText,
+  original_price: deal.originalPrice ?? null,
+  discount_percent: deal.discountPercent ?? null,
+  affiliate_url: deal.affiliateUrl ?? null,
+  review_count: deal.reviewCount ?? null,
+  stock_status: deal.stockStatus ?? null,
   website_url: deal.websiteUrl ?? null,
   product_url: deal.productUrl ?? null,
   has_timer: deal.hasTimer ?? true,
@@ -260,8 +389,96 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => ({
   owner_id: ownerId ?? null,
 });
 
+const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
+  const candidate = JSON.parse(input);
+
+  if (!candidate || typeof candidate !== 'object') {
+    throw new Error('Import must be a JSON deal object or an array of deal objects.');
+  }
+
+  const rawDeals = Array.isArray(candidate) ? candidate : [candidate];
+
+  if (rawDeals.length === 0) {
+    throw new Error('Import JSON is empty.');
+  }
+
+  return rawDeals.map((item, index) => {
+    if (
+      !item ||
+      typeof item.businessName !== 'string' ||
+      typeof item.title !== 'string' ||
+      typeof item.description !== 'string' ||
+      typeof item.category !== 'string' ||
+      typeof item.offerText !== 'string'
+    ) {
+      throw new Error(`Deal at index ${index} is missing required fields.`);
+    }
+
+    return {
+      businessName: item.businessName.trim(),
+      title: item.title.trim(),
+      description: item.description.trim(),
+      category: item.category.trim(),
+      offerText: item.offerText.trim(),
+      originalPrice:
+        Number.isFinite(item.originalPrice) && Number(item.originalPrice) >= 0
+          ? Number(item.originalPrice)
+          : undefined,
+      price:
+        Number.isFinite(item.price) && Number(item.price) >= 0
+          ? Number(item.price)
+          : undefined,
+      discountPercent:
+        Number.isFinite(item.discountPercent) && Number(item.discountPercent) >= 0
+          ? Number(item.discountPercent)
+          : undefined,
+      affiliateUrl: typeof item.affiliateUrl === 'string' ? item.affiliateUrl.trim() : undefined,
+      rating:
+        Number.isFinite(item.rating) && Number(item.rating) >= 0
+          ? Number(item.rating)
+          : undefined,
+      reviewCount:
+        Number.isFinite(item.reviewCount) && Number(item.reviewCount) >= 0
+          ? Number(item.reviewCount)
+          : undefined,
+      merchant: typeof item.merchant === 'string' ? item.merchant.trim() : undefined,
+      shippingInfo: typeof item.shippingInfo === 'string' ? item.shippingInfo.trim() : undefined,
+      summary: typeof item.summary === 'string' ? item.summary.trim() : undefined,
+      tags: Array.isArray(item.tags)
+        ? item.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean)
+        : undefined,
+      sourceType:
+        item.sourceType === 'keyword' || item.sourceType === 'url'
+          ? item.sourceType
+          : undefined,
+      sourceQuery: typeof item.sourceQuery === 'string' ? item.sourceQuery.trim() : undefined,
+      maxPriceMatched: typeof item.maxPriceMatched === 'boolean' ? item.maxPriceMatched : undefined,
+      stockStatus: typeof item.stockStatus === 'string' ? item.stockStatus.trim() : undefined,
+      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl.trim() : undefined,
+      productUrl: typeof item.productUrl === 'string' ? item.productUrl.trim() : undefined,
+      websiteUrl: typeof item.websiteUrl === 'string' ? item.websiteUrl.trim() : undefined,
+      durationMinutes:
+        Number.isFinite(item.durationMinutes) && Number(item.durationMinutes) > 0
+          ? Number(item.durationMinutes)
+          : undefined,
+      claimCount:
+        Number.isFinite(item.claimCount) && Number(item.claimCount) >= 0
+          ? Number(item.claimCount)
+          : undefined,
+      maxClaims:
+        Number.isFinite(item.maxClaims) && Number(item.maxClaims) > 0
+          ? Number(item.maxClaims)
+          : undefined,
+      isOnline: typeof item.isOnline === 'boolean' ? item.isOnline : undefined,
+    };
+  });
+};
+
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('live-deals');
+  const [routePath, setRoutePath] = useState(() =>
+    typeof window !== 'undefined' ? normalizeRoutePath(window.location.pathname) : '/',
+  );
   const [role, setRole] = useState<UserRole>('customer');
   const [deals, setDeals] = useState<Deal[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -276,7 +493,7 @@ export default function App() {
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
   const [cityName, setCityName] = useState<string>('');
-  const [showDebug, setShowDebug] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
   const [claimCopyStatus, setClaimCopyStatus] = useState<Record<string, ClipboardCopyResult | null>>({});
   const [catalogDropWarnings, setCatalogDropWarnings] = useState<string[]>([]);
   const [catalogSaveFeedback, setCatalogSaveFeedback] = useState<Record<string, string | null>>({});
@@ -295,6 +512,26 @@ export default function App() {
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [dealsLoading, setDealsLoading] = useState(true);
   const [dealsError, setDealsError] = useState('');
+  const [bulkImportJson, setBulkImportJson] = useState('');
+  const [bulkImportLoading, setBulkImportLoading] = useState(false);
+  const [bulkImportMessage, setBulkImportMessage] = useState('');
+  const [bulkImportError, setBulkImportError] = useState('');
+  const [bulkImportCandidates, setBulkImportCandidates] = useState<BulkImportDealInput[]>([]);
+  const [selectedBulkImportIndex, setSelectedBulkImportIndex] = useState(0);
+  const [aiFinderKeyword, setAiFinderKeyword] = useState('');
+  const [aiFinderUrl, setAiFinderUrl] = useState('');
+  const [aiFinderMerchant, setAiFinderMerchant] = useState('Any');
+  const [aiFinderCategory, setAiFinderCategory] = useState('Tech');
+  const [aiFinderMaxPrice, setAiFinderMaxPrice] = useState('');
+  const [aiFinderMinDiscount, setAiFinderMinDiscount] = useState('');
+  const [aiFinderLoading, setAiFinderLoading] = useState(false);
+  const [aiFinderError, setAiFinderError] = useState('');
+  const [aiFinderMessage, setAiFinderMessage] = useState('');
+  const [aiFinderResult, setAiFinderResult] = useState<AIDealFinderResult | null>(null);
+  const [adminAccessError, setAdminAccessError] = useState('');
+  const [adminLogs, setAdminLogs] = useState<Array<{ id: string; level: 'info' | 'error'; message: string; detail?: string; timestamp: number }>>([]);
+  const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
+  const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
@@ -302,6 +539,11 @@ export default function App() {
   const cloudHydratedRef = useRef(false);
   const isBusinessSubscribed = role === 'business' && subscriptionStatus === 'active';
   const hasPortalAccess = LOCAL_ADMIN_MODE || isBusinessSubscribed;
+  const isAdminRoute = routePath === '/admin';
+  const isDashboardRoute = routePath === '/dashboard';
+  const isPublicRoute = !isAdminRoute;
+  const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
+  const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
 
   const getLocalCloudState = () => ({
     claims: readStoredClaims(),
@@ -320,26 +562,145 @@ export default function App() {
     seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
   };
 
+  const pushAdminLog = (level: 'info' | 'error', message: string, detail?: string) => {
+    setAdminLogs((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        level,
+        message,
+        detail,
+        timestamp: Date.now(),
+      },
+      ...prev,
+    ].slice(0, 20));
+  };
+
+  const navigateToPath = (path: string) => {
+    if (typeof window === 'undefined') return;
+    const nextPath = normalizeRoutePath(path);
+    console.info('[LiveDrop] Navigating', {
+      from: routePath,
+      to: nextPath,
+      hasAdminAccess,
+    });
+    window.history.pushState({}, '', nextPath);
+    setRoutePath(nextPath);
+  };
+
+  const resetAdminUiState = () => {
+    console.info('[LiveDrop] Resetting admin-only UI state');
+    setAdminAccessError('');
+    setBulkImportError('');
+    setBulkImportMessage('');
+    setAiFinderError('');
+    setAiFinderMessage('');
+    setAiFinderResult(null);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
+    setEditingDealId(null);
+    setDealDraft(null);
+    setIsCreating(false);
+    setShowDebug(false);
+    setCurrentView('live-deals');
+  };
+
   const fetchSharedDeals = async () => {
     if (!supabase || !hasSupabaseConfig) {
-      throw new Error('Shared deals backend is not configured.');
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
     }
 
-    const { data, error } = await supabase
+    const includeAllStatuses = isAdminRoute && hasAdminAccess;
+    console.info('[LiveDrop] Querying shared deals table:', DEALS_TABLE, includeAllStatuses ? '(all statuses)' : '(active only)');
+
+    const baseQuery = supabase
       .from(DEALS_TABLE)
       .select('*')
       .order('created_at', { ascending: false });
 
+    const { data, error } = includeAllStatuses
+      ? await baseQuery
+      : await baseQuery.eq('status', 'active');
+
     if (error) {
+      console.error('[LiveDrop] Supabase deals query failed', {
+        table: DEALS_TABLE,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', 'Shared deals fetch failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
       throw error;
     }
+
+    pushAdminLog('info', `Fetched ${data?.length ?? 0} shared deals from Supabase`);
 
     return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
   };
 
   const publishDealToBackend = async (deal: Deal) => {
     if (!supabase || !hasSupabaseConfig) {
-      throw new Error('Shared deals backend is not configured.');
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
+    }
+
+    const payload = mapDealToDealRow(deal, authUser?.id ?? null);
+    const { data, error } = await supabase
+      .from(DEALS_TABLE)
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[LiveDrop] Supabase deal insert failed', {
+        table: DEALS_TABLE,
+        payload,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', 'Shared deal publish failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      throw error;
+    }
+
+    pushAdminLog('info', `Published deal "${deal.title}" to shared backend`);
+
+    return mapDealRowToDeal(data as DealRow);
+  };
+
+  const publishDealsToBackend = async (inputDeals: Deal[]) => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
+    }
+
+    const payload = inputDeals.map((deal) => mapDealToDealRow(deal, authUser?.id ?? null));
+    const { data, error } = await supabase
+      .from(DEALS_TABLE)
+      .upsert(payload, { onConflict: 'id' })
+      .select();
+
+    if (error) {
+      console.error('[LiveDrop] Supabase bulk deal upsert failed', {
+        table: DEALS_TABLE,
+        payloadCount: payload.length,
+        payload,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', 'Bulk shared deal import failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      throw error;
+    }
+
+    pushAdminLog('info', `Bulk upserted ${data?.length ?? inputDeals.length} deals to shared backend`);
+
+    return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
+  };
+
+  const updateDealInBackend = async (deal: Deal) => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
     }
 
     const payload = mapDealToDealRow(deal, authUser?.id ?? null);
@@ -350,10 +711,294 @@ export default function App() {
       .single();
 
     if (error) {
+      console.error('[LiveDrop] Supabase deal update failed', {
+        table: DEALS_TABLE,
+        payload,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', 'Shared deal update failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
       throw error;
     }
 
+    pushAdminLog('info', `Updated deal "${deal.title}" in shared backend`);
     return mapDealRowToDeal(data as DealRow);
+  };
+
+  const deleteDealFromBackend = async (dealId: string) => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
+    }
+
+    const { error } = await supabase
+      .from(DEALS_TABLE)
+      .delete()
+      .eq('id', dealId);
+
+    if (error) {
+      console.error('[LiveDrop] Supabase deal delete failed', {
+        table: DEALS_TABLE,
+        dealId,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', 'Shared deal delete failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      throw error;
+    }
+
+    pushAdminLog('info', `Deleted deal ${dealId} from shared backend`);
+  };
+
+  const handleLoadBulkImportSample = () => {
+    setBulkImportJson(BULK_IMPORT_SAMPLE);
+    setBulkImportError('');
+    setBulkImportMessage('Sample JSON loaded.');
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
+  };
+
+  const extractAIDealFinderErrorMessage = async (error: unknown) => {
+    const fallback =
+      error instanceof Error ? error.message : 'Affiliate Deal Finder request failed.';
+
+    try {
+      if (error && typeof error === 'object' && 'context' in error) {
+        const context = (error as { context?: Response }).context;
+        if (context) {
+          const payload = await context.clone().json().catch(() => null);
+          const structuredMessage =
+            typeof payload?.error === 'string'
+              ? payload.error
+              : typeof payload?.message === 'string'
+                ? payload.message
+                : null;
+
+          if (structuredMessage) {
+            return structuredMessage;
+          }
+        }
+      }
+    } catch (parseError) {
+      console.warn('[LiveDrop] Failed to parse AI Deal Finder error payload', parseError);
+    }
+
+    if (fallback.includes('Failed to send a request to the Edge Function')) {
+      return 'Could not reach the ai-deal-finder Edge Function. Verify it is deployed and your Supabase project URL/API key are correct.';
+    }
+
+    return fallback;
+  };
+
+  const runAIDealFinder = async () => {
+    if (!supabase || !hasSupabaseConfig) {
+      const message = supabaseConfigIssue || 'Supabase is required for Affiliate Deal Finder.';
+      setAiFinderError(message);
+      throw new Error(message);
+    }
+
+    const keyword = aiFinderKeyword.trim();
+    const url = aiFinderUrl.trim();
+
+    if (!keyword && !url) {
+      const message = 'Enter a search keyword. A product URL is optional.';
+      setAiFinderError(message);
+      throw new Error(message);
+    }
+
+    setAiFinderLoading(true);
+    setAiFinderError('');
+    setAiFinderMessage('');
+
+    try {
+      console.info('[LiveDrop] Invoking Edge Function', {
+        functionName: 'ai-deal-finder',
+        keyword,
+        hasUrl: Boolean(url),
+        merchant: aiFinderMerchant,
+      });
+
+      const { data, error } = await supabase.functions.invoke('ai-deal-finder', {
+        body: {
+          keyword: keyword || undefined,
+          url: url || undefined,
+          merchant: aiFinderMerchant === 'Any' ? undefined : aiFinderMerchant,
+          category: aiFinderCategory || undefined,
+          maxPrice: aiFinderMaxPrice.trim() ? Number(aiFinderMaxPrice) : null,
+          minDiscount: aiFinderMinDiscount.trim() ? Number(aiFinderMinDiscount) : null,
+        },
+      });
+
+      if (error) {
+        console.error('[LiveDrop] AI Deal Finder function failed', error);
+        const message = await extractAIDealFinderErrorMessage(error);
+        pushAdminLog('error', 'Affiliate Deal Finder failed', message);
+        throw new Error(message);
+      }
+
+      if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') {
+        throw new Error(data.error);
+      }
+
+      const result = data as AIDealFinderResult | null;
+      if (!result?.normalizedDeal || !result?.generatedJson) {
+        console.error('[LiveDrop] AI Deal Finder returned incomplete data', data);
+        throw new Error('Affiliate Deal Finder returned an incomplete response.');
+      }
+
+      setAiFinderResult(result);
+      setAiFinderMessage('Deal data generated. Review it, then fill the portal when ready.');
+      pushAdminLog(
+        'info',
+        `Affiliate Deal Finder generated ${result.normalizedDeal.title}`,
+        result.missingFields.length ? `Missing: ${result.missingFields.join(', ')}` : 'All key fields extracted.',
+      );
+      return result;
+    } catch (error) {
+      const message = await extractAIDealFinderErrorMessage(error);
+      setAiFinderError(message);
+      console.error('[LiveDrop] Affiliate Deal Finder failed', {
+        functionName: 'ai-deal-finder',
+        keyword,
+        url,
+        merchant: aiFinderMerchant,
+        error,
+        message,
+      });
+      throw error instanceof Error ? error : new Error(message);
+    } finally {
+      setAiFinderLoading(false);
+    }
+  };
+
+  const handleSearchAIDeal = async () => {
+    try {
+      await runAIDealFinder();
+    } catch {
+      // Error is already surfaced in UI state.
+    }
+  };
+
+  const handleGenerateAIDealJson = async () => {
+    try {
+      const result = aiFinderResult ?? (await runAIDealFinder());
+      setBulkImportJson(result.generatedJson);
+      setBulkImportCandidates([]);
+      setSelectedBulkImportIndex(0);
+      setBulkImportError('');
+      setBulkImportMessage('Generated JSON inserted into the portal intake box.');
+    } catch (error) {
+      console.error('[LiveDrop] AI Deal Finder JSON generation failed', error);
+    }
+  };
+
+  const handleFillPortalFromAIDeal = async () => {
+    try {
+      const result = aiFinderResult ?? (await runAIDealFinder());
+      setBulkImportJson(result.generatedJson);
+      setBulkImportError('');
+      setBulkImportMessage('AI Deal Finder generated JSON and loaded it into the Business Portal.');
+      const parsedDeals = parseBulkImportDeals(result.generatedJson);
+      loadBulkImportCandidateIntoPortal(parsedDeals, 0);
+    } catch (error) {
+      console.error('[LiveDrop] AI Deal Finder portal fill failed', error);
+    }
+  };
+
+  const createDraftFromBulkImport = (item: BulkImportDealInput, index = 0): Deal => {
+    const durationMinutes = item.durationMinutes && item.durationMinutes > 0 ? item.durationMinutes : 120;
+    const currentClaims = item.claimCount && item.claimCount >= 0 ? item.claimCount : 0;
+    const maxClaims = item.maxClaims && item.maxClaims > 0 ? item.maxClaims : 999;
+    const createdAt = Date.now() - index * 60 * 1000;
+    const businessType = item.isOnline === false ? 'local' : 'online';
+    const affiliateUrl = item.affiliateUrl || undefined;
+    const websiteUrl = item.websiteUrl || affiliateUrl || item.productUrl || undefined;
+    const productUrl = item.productUrl || affiliateUrl || item.websiteUrl || undefined;
+
+    return {
+      id: `import-draft-${Math.random().toString(36).slice(2, 10)}`,
+      businessType,
+      status: 'draft',
+      businessName: item.businessName,
+      title: item.title,
+      description: item.description,
+      offerText: item.offerText,
+      originalPrice: item.originalPrice ?? null,
+      discountPercent: item.discountPercent ?? null,
+      affiliateUrl,
+      reviewCount: item.reviewCount ?? null,
+      stockStatus: item.stockStatus ?? null,
+      imageUrl: item.imageUrl || undefined,
+      websiteUrl,
+      productUrl,
+      hasTimer: true,
+      distance: businessType === 'online' ? 'Online' : '1 mi',
+      lat: businessType === 'online' ? 0 : userLocation.lat,
+      lng: businessType === 'online' ? 0 : userLocation.lng,
+      createdAt,
+      expiresAt: createdAt + durationMinutes * 60 * 1000,
+      maxClaims,
+      currentClaims,
+      claimCount: currentClaims,
+      category: item.category,
+    };
+  };
+
+  const loadBulkImportCandidateIntoPortal = (items: BulkImportDealInput[], index = 0) => {
+    const safeIndex = Math.min(Math.max(index, 0), items.length - 1);
+    const nextDraft = createDraftFromBulkImport(items[safeIndex], safeIndex);
+
+    setPortalSuccessMessage('');
+    setBulkImportCandidates(items);
+    setSelectedBulkImportIndex(safeIndex);
+    setBulkImportError('');
+    setBulkImportMessage(
+      items.length > 1
+        ? `Loaded item ${safeIndex + 1} of ${items.length} into the portal form.`
+        : 'Deal loaded into the portal form.',
+    );
+    setDealDraft(nextDraft);
+    setDropMode(nextDraft.businessType === 'online' ? 'online' : 'local');
+    setCurrentView('business-portal');
+    setIsCreating(true);
+  };
+
+  const handleLoadBulkImportIntoPortal = () => {
+    setBulkImportLoading(true);
+    setBulkImportError('');
+    setBulkImportMessage('');
+
+    try {
+      const parsedDeals = parseBulkImportDeals(bulkImportJson);
+      loadBulkImportCandidateIntoPortal(parsedDeals, 0);
+    } catch (error) {
+      console.error('[LiveDrop] Bulk import JSON parse failed', {
+        error,
+        input: bulkImportJson,
+      });
+      setBulkImportError(error instanceof Error ? error.message : 'Invalid JSON for portal import.');
+    } finally {
+      setBulkImportLoading(false);
+    }
+  };
+
+  const handleAdminLogout = () => {
+    console.info('[LiveDrop] Admin logout started', {
+      routePath,
+      adminSessionEmail,
+    });
+    setAdminSessionEmail(null);
+    resetAdminUiState();
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+    }
+    navigateToPath('/');
   };
 
   const upsertUserProfile = async (
@@ -434,6 +1079,67 @@ export default function App() {
     setCloudReady(true);
     setCloudSyncEnabled(true);
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handlePopState = () => {
+      setRoutePath(normalizeRoutePath(window.location.pathname));
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    console.info('[LiveDrop] Route changed', {
+      routePath,
+      currentView,
+      hasAdminAccess,
+    });
+  }, [currentView, hasAdminAccess, routePath]);
+
+  useEffect(() => {
+    console.info('[LiveDrop] Auth state changed', {
+      userEmail: authUser?.email ?? null,
+      hasSession: Boolean(session),
+      hasAdminAccess,
+      adminSessionEmail,
+    });
+  }, [adminSessionEmail, authUser?.email, hasAdminAccess, session]);
+
+  useEffect(() => {
+    console.info('[LiveDrop] Admin state changed', {
+      routePath,
+      adminSessionEmail,
+      hasAdminAccess,
+      isCreating,
+      editingDealId,
+    });
+  }, [adminSessionEmail, editingDealId, hasAdminAccess, isCreating, routePath]);
+
+  useEffect(() => {
+    const nextAdminEmail = readAdminSessionEmail();
+    if (nextAdminEmail !== adminSessionEmail) {
+      console.info('[LiveDrop] Recovering admin session state from storage', {
+        storedAdminEmail: nextAdminEmail,
+      });
+      setAdminSessionEmail(nextAdminEmail);
+    }
+  }, [adminSessionEmail]);
+
+  useEffect(() => {
+    if (isPublicRoute) {
+      resetAdminUiState();
+      setAdminAccessError('');
+    }
+  }, [isPublicRoute]);
+
+  useEffect(() => {
+    if (isDashboardRoute) {
+      setCurrentView('live-deals');
+    }
+  }, [isDashboardRoute]);
 
   // Load shared deals from the backend with bundled fallback data
   useEffect(() => {
@@ -750,6 +1456,53 @@ export default function App() {
   }, [authUser, claims, catalogCoupons, notifications, radius, role, selectedCategory, selectedFeedFilter, cloudSyncEnabled]);
 
   useEffect(() => {
+    if (!isAdminRoute || !hasAdminAccess) return;
+    void refreshSharedDeals();
+  }, [hasAdminAccess, isAdminRoute]);
+
+  useEffect(() => {
+    const normalizedEmail = authUser?.email?.toLowerCase();
+
+    if (normalizedEmail === APPROVED_ADMIN_EMAIL) {
+      setAdminSessionEmail(APPROVED_ADMIN_EMAIL);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        window.localStorage.setItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        window.localStorage.setItem(ADMIN_FLAG_STORAGE_KEY, 'true');
+      }
+      return;
+    }
+
+    if (authUser && normalizedEmail !== APPROVED_ADMIN_EMAIL && adminSessionEmail === APPROVED_ADMIN_EMAIL) {
+      setAdminSessionEmail(null);
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+        window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
+        window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+      }
+    }
+  }, [adminSessionEmail, authUser]);
+
+  useEffect(() => {
+    if (!isAdminRoute) return;
+
+    if (hasAdminAccess) {
+      setAuthModalOpen(false);
+      setAuthError('');
+      return;
+    }
+
+    if (authUser?.email && authUser.email.toLowerCase() !== APPROVED_ADMIN_EMAIL) {
+      setAuthError('That account does not have admin access.');
+      navigateToPath('/');
+      return;
+    }
+
+    setAuthInfo('Sign in with the approved admin account to continue.');
+    setAuthModalOpen(true);
+  }, [authUser?.email, hasAdminAccess, isAdminRoute]);
+
+  useEffect(() => {
     if (!supabase || !authUser) return;
 
     const params = new URLSearchParams(window.location.search);
@@ -857,21 +1610,26 @@ export default function App() {
     return newClaim;
   };
 
-  const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt' | 'currentClaims'>) => {
+  const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt'>) => {
+    const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
     const localDeal: Deal = {
       ...dealData,
-      id: Math.random().toString(36).substr(2, 9),
-      createdAt: Date.now(),
-      currentClaims: 0,
-      claimCount: 0,
+      id: editingDealId ?? Math.random().toString(36).substr(2, 9),
+      createdAt: existingDraft?.createdAt ?? Date.now(),
+      currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
+      claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
       status: 'active',
+      featured: dealData.featured ?? existingDraft?.featured ?? false,
+      adminTag: dealData.adminTag ?? existingDraft?.adminTag ?? null,
     };
 
     let publishedDeal = localDeal;
 
     if (supabase && hasSupabaseConfig) {
       try {
-        publishedDeal = await publishDealToBackend(localDeal);
+        publishedDeal = editingDealId
+          ? await updateDealInBackend(localDeal)
+          : await publishDealToBackend(localDeal);
         setDealsError('');
       } catch (error) {
         console.error('Failed to publish deal to shared backend:', error);
@@ -883,6 +1641,9 @@ export default function App() {
 
     setDeals(prev => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
     setDealDraft(null);
+    setEditingDealId(null);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
     if (publishedDeal.businessType !== 'online') {
       setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, publishedDeal)));
       setDropMode('local');
@@ -891,12 +1652,17 @@ export default function App() {
     }
     setPortalSuccessMessage('Your deal is live');
     setIsCreating(false);
-    setCurrentView('live-deals');
+    if (!isAdminRoute) {
+      setCurrentView('live-deals');
+    }
   };
 
   const handleOpenCreateDeal = () => {
     setPortalSuccessMessage('');
     setDealDraft(null);
+    setEditingDealId(null);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
     setIsCreating(true);
   };
 
@@ -906,7 +1672,7 @@ export default function App() {
       durationMinutes?: number;
       publishImmediately?: boolean;
     },
-  ): Omit<Deal, 'id' | 'createdAt' | 'currentClaims'> => {
+  ): Omit<Deal, 'id' | 'createdAt'> => {
     const durationMinutes = options?.durationMinutes ?? 30;
     const nextExpiry = Date.now() + durationMinutes * 60 * 1000;
 
@@ -926,6 +1692,7 @@ export default function App() {
       lng: sourceDeal.lng,
       expiresAt: nextExpiry,
       maxClaims: sourceDeal.maxClaims,
+      currentClaims: 0,
       claimCount: 0,
       category: sourceDeal.category,
     };
@@ -933,6 +1700,9 @@ export default function App() {
 
   const handleReuseDeal = (deal: Deal) => {
     setPortalSuccessMessage('');
+    setEditingDealId(null);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
     setDealDraft({
       ...deal,
       expiresAt: Date.now() + 30 * 60 * 1000,
@@ -950,6 +1720,81 @@ export default function App() {
 
   const handleCancelDeal = (dealId: string) => {
     setDeals(prev => prev.filter(d => d.id !== dealId));
+  };
+
+  const handleEditDeal = (deal: Deal) => {
+    setPortalSuccessMessage('');
+    setDealDraft(deal);
+    setEditingDealId(deal.id);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
+    setIsCreating(true);
+  };
+
+  const refreshSharedDeals = async () => {
+    setDealsLoading(true);
+    try {
+      const sharedDeals = await fetchSharedDeals();
+      const fallbackDeals = syncSharedOnlineDeals(readStoredDeals());
+      const nextDeals = sharedDeals.length > 0 ? syncSharedOnlineDeals(sharedDeals) : fallbackDeals;
+      applyDealsState(nextDeals);
+      setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
+      pushAdminLog('info', 'Force refreshed shared deals');
+    } catch (error) {
+      console.error('[LiveDrop] Force refresh failed', error);
+      setDealsError('Could not load shared deals. Showing fallback drops.');
+      pushAdminLog('error', 'Force refresh failed', error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      setDealsLoading(false);
+    }
+  };
+
+  const handleAdminDeleteDeal = async (deal: Deal) => {
+    try {
+      await deleteDealFromBackend(deal.id);
+      setDeals((prev) => prev.filter((item) => item.id !== deal.id));
+    } catch {
+      setDealsError('Could not delete the shared deal.');
+    }
+  };
+
+  const handleAdminSetDealStatus = async (deal: Deal, status: Deal['status']) => {
+    const nextDeal = { ...deal, status };
+    try {
+      const updatedDeal = await updateDealInBackend(nextDeal);
+      setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+    } catch {
+      setDealsError('Could not update deal status.');
+    }
+  };
+
+  const handleAdminToggleFeatured = async (deal: Deal) => {
+    const nextDeal: Deal = {
+      ...deal,
+      featured: !deal.featured,
+      adminTag: !deal.featured ? 'featured' : deal.adminTag === 'featured' ? null : deal.adminTag,
+    };
+
+    try {
+      const updatedDeal = await updateDealInBackend(nextDeal);
+      setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+    } catch {
+      setDealsError('Could not update featured status.');
+    }
+  };
+
+  const handleAdminToggleTrending = async (deal: Deal) => {
+    const nextDeal: Deal = {
+      ...deal,
+      adminTag: deal.adminTag === 'trending' ? null : 'trending' as const,
+    };
+
+    try {
+      const updatedDeal = await updateDealInBackend(nextDeal);
+      setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+    } catch {
+      setDealsError('Could not update trending status.');
+    }
   };
 
   const handleRedeemClaim = (claimId: string) => {
@@ -1019,7 +1864,7 @@ export default function App() {
 
   const handleContinueWithGoogle = async () => {
     if (!supabase) {
-      setAuthError('Supabase is not configured yet. Add your project URL and anon key first.');
+      setAuthError(supabaseConfigIssue || 'Supabase connection is unavailable.');
       return;
     }
 
@@ -1061,11 +1906,6 @@ export default function App() {
     password: string;
     fullName?: string;
   }) => {
-    if (!supabase) {
-      setAuthError('Supabase is not configured yet. Add your project URL and anon key first.');
-      return;
-    }
-
     if (!email.trim() || !password.trim()) {
       setAuthError('Email and password are required.');
       return;
@@ -1080,10 +1920,36 @@ export default function App() {
     setAuthError('');
     setAuthInfo('');
 
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (mode === 'signin' && normalizedEmail === APPROVED_ADMIN_EMAIL && password === APPROVED_ADMIN_PASSWORD) {
+      console.info('[LiveDrop] Admin sign-in granted', {
+        email: normalizedEmail,
+      });
+      setAdminSessionEmail(APPROVED_ADMIN_EMAIL);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        window.localStorage.setItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        window.localStorage.setItem(ADMIN_FLAG_STORAGE_KEY, 'true');
+      }
+      setAuthModalOpen(false);
+      setAuthLoading(false);
+      setAuthInfo('');
+      setAuthError('');
+      navigateToPath('/admin');
+      return;
+    }
+
+    if (!supabase) {
+      setAuthError(supabaseConfigIssue || 'Supabase connection is unavailable.');
+      setAuthLoading(false);
+      return;
+    }
+
     try {
       if (mode === 'signup') {
         const { error } = await supabase.auth.signUp({
-          email: email.trim(),
+          email: normalizedEmail,
           password,
           options: {
             emailRedirectTo: getAuthRedirectUrl(),
@@ -1105,7 +1971,7 @@ export default function App() {
       }
 
       const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: normalizedEmail,
         password,
       });
 
@@ -1114,6 +1980,12 @@ export default function App() {
         setAuthLoading(false);
         return;
       }
+
+      if (isAdminRoute) {
+        setAuthInfo('Signed in successfully. Redirecting to the main app.');
+        setAuthModalOpen(false);
+        navigateToPath('/');
+      }
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Email authentication failed.');
       setAuthLoading(false);
@@ -1121,9 +1993,23 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    if (!supabase) return;
-    await supabase.auth.signOut();
+    console.info('[LiveDrop] Public sign-out started', {
+      routePath,
+      adminSessionEmail,
+      userEmail: authUser?.email ?? null,
+    });
+    setAdminSessionEmail(null);
+    resetAdminUiState();
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+    }
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
     setAuthLoading(false);
+    navigateToPath('/');
   };
 
   const handleOpenBusinessPortal = () => {
@@ -1326,7 +2212,7 @@ export default function App() {
         ) : null}
 
         {/* Developer Debug Section */}
-        {showDebug && dropMode === 'local' && (
+        {isAdminRoute && showDebug && dropMode === 'local' && (
           <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-10">
               <AppIcon name="debug" size={60} />
@@ -1589,15 +2475,28 @@ export default function App() {
                       <p className="text-[1.02rem] font-black text-indigo-600">{deal.offerText}</p>
                     </div>
                     <p className="mb-3 text-[12px] leading-[1.55] text-slate-500">{deal.description}</p>
+                    {isAdminRoute && showDebug ? (
+                      <p className="mb-3 truncate rounded-[0.9rem] bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-400">
+                        Link: {getDealExternalUrl(deal) ?? 'No link saved'}
+                      </p>
+                    ) : null}
                     <button
                       onClick={() => {
-                        const externalUrl = deal.productUrl ?? deal.websiteUrl;
+                        const externalUrl = getDealExternalUrl(deal);
                         if (!externalUrl) return;
+                        console.info('[LiveDrop] Opening deal link', {
+                          dealId: deal.id,
+                          title: deal.title,
+                          affiliateUrl: deal.affiliateUrl ?? null,
+                          websiteUrl: deal.websiteUrl ?? null,
+                          productUrl: deal.productUrl ?? null,
+                          externalUrl,
+                        });
                         window.open(externalUrl, '_blank', 'noopener,noreferrer');
                       }}
-                      disabled={!deal.productUrl && !deal.websiteUrl}
+                      disabled={!getDealExternalUrl(deal)}
                       className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-black text-white transition-all shadow-lg shadow-slate-200/50 ${
-                        deal.productUrl || deal.websiteUrl
+                        getDealExternalUrl(deal)
                           ? 'bg-slate-900 hover:bg-slate-800'
                           : 'bg-slate-300 cursor-not-allowed shadow-none'
                       }`}
@@ -1889,19 +2788,330 @@ export default function App() {
     );
   };
 
+  const renderImportedDraftSwitcher = () => {
+    if (bulkImportCandidates.length <= 1 || !isCreating) {
+      return null;
+    }
+
+    return (
+      <div className="rounded-[1.75rem] border border-indigo-100 bg-white px-4 py-4 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Imported Deals</p>
+            <p className="mt-1 text-sm text-slate-500">Choose which pasted item to load into the Business Portal form.</p>
+          </div>
+          <span className="inline-flex h-8 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">
+            {selectedBulkImportIndex + 1} of {bulkImportCandidates.length}
+          </span>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {bulkImportCandidates.map((item, index) => (
+            <button
+              key={`${item.title}-${index}`}
+              type="button"
+              onClick={() => loadBulkImportCandidateIntoPortal(bulkImportCandidates, index)}
+              className={`inline-flex h-10 items-center justify-center rounded-xl border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                selectedBulkImportIndex === index
+                  ? 'border-indigo-200 bg-indigo-50 text-indigo-600'
+                  : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+              }`}
+            >
+              {index + 1}. {item.title}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderAIDealFinderPanel = () => {
+    const previewDeal = aiFinderResult?.normalizedDeal;
+    const priceText =
+      previewDeal?.price != null
+        ? `$${previewDeal.price.toFixed(2)}`
+        : null;
+    const originalPriceText =
+      previewDeal?.originalPrice != null
+        ? `$${previewDeal.originalPrice.toFixed(2)}`
+        : null;
+
+    return (
+      <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Affiliate Deal Finder</p>
+            <h3 className="mt-1 text-lg font-black text-slate-900">Search affiliate deals and generate portal-ready JSON</h3>
+            <p className="mt-1 text-sm text-slate-500">Start with a keyword search, then optionally add a product URL or filters before filling the portal.</p>
+          </div>
+          <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">
+            Admin Tool
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          <div className="grid gap-3 sm:grid-cols-[1.4fr_0.8fr]">
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Search Keywords</span>
+              <input
+                type="text"
+                value={aiFinderKeyword}
+                onChange={(event) => setAiFinderKeyword(event.target.value)}
+                placeholder="wireless earbuds, standing desk, gaming headset..."
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Merchant / Source</span>
+              <select
+                value={aiFinderMerchant}
+                onChange={(event) => setAiFinderMerchant(event.target.value)}
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+              >
+                {['Any', 'Amazon', 'Walmart', 'Target', 'Best Buy', 'Other'].map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <details className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <summary className="cursor-pointer list-none text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+              Advanced Filters
+            </summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-4">
+              <label className="block sm:col-span-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Optional Product URL</span>
+                <input
+                  type="url"
+                  value={aiFinderUrl}
+                  onChange={(event) => setAiFinderUrl(event.target.value)}
+                  placeholder="https://www.amazon.com/... or another product page"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Category</span>
+                <select
+                  value={aiFinderCategory}
+                  onChange={(event) => setAiFinderCategory(event.target.value)}
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                >
+                  {ONLINE_CATEGORY_OPTIONS.filter((option) => option !== 'All').map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Max Price</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={aiFinderMaxPrice}
+                  onChange={(event) => setAiFinderMaxPrice(event.target.value)}
+                  placeholder="199"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Min Discount</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={aiFinderMinDiscount}
+                  onChange={(event) => setAiFinderMinDiscount(event.target.value)}
+                  placeholder="20"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+              </label>
+            </div>
+          </details>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleSearchAIDeal}
+            disabled={aiFinderLoading}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {aiFinderLoading ? 'Searching...' : 'Search Deal'}
+          </button>
+          <button
+            type="button"
+            onClick={handleGenerateAIDealJson}
+            disabled={aiFinderLoading}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {aiFinderLoading ? 'Generating...' : 'Generate JSON'}
+          </button>
+          <button
+            type="button"
+            onClick={handleFillPortalFromAIDeal}
+            disabled={aiFinderLoading}
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {aiFinderLoading ? 'Loading...' : 'Fill Portal'}
+          </button>
+        </div>
+
+        {aiFinderMessage ? (
+          <p className="mt-3 text-sm font-semibold text-emerald-600">{aiFinderMessage}</p>
+        ) : null}
+        {aiFinderError ? (
+          <p className="mt-3 text-sm font-semibold text-rose-500">{aiFinderError}</p>
+        ) : null}
+
+        {aiFinderResult ? (
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="rounded-[1.5rem] border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-4">
+              <div className="flex items-start gap-4">
+                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white shadow-sm">
+                  {previewDeal?.imageUrl ? (
+                    <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
+                      <AppIcon name="spark" size={22} />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex h-7 items-center justify-center rounded-full bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600 shadow-sm">
+                      {previewDeal?.category}
+                    </span>
+                    {previewDeal?.discountPercent ? (
+                      <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white">
+                        {previewDeal.discountPercent}% OFF
+                      </span>
+                    ) : null}
+                    <span className="inline-flex h-7 items-center justify-center rounded-full bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500 shadow-sm">
+                      Score {aiFinderResult.dealScore}
+                    </span>
+                  </div>
+                  <h4 className="mt-3 text-base font-black text-slate-900">{previewDeal?.title}</h4>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{previewDeal?.businessName}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {aiFinderResult.summary ?? previewDeal?.summary ?? previewDeal?.description}
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+                    {priceText ? <span>Price: <span className="font-semibold text-slate-700">{priceText}</span></span> : null}
+                    {originalPriceText ? <span>List: <span className="font-semibold text-slate-700">{originalPriceText}</span></span> : null}
+                    {previewDeal?.rating ? <span>Rating: <span className="font-semibold text-slate-700">{previewDeal.rating.toFixed(1)}</span></span> : null}
+                    {previewDeal?.reviewCount ? <span>Reviews: <span className="font-semibold text-slate-700">{previewDeal.reviewCount.toLocaleString()}</span></span> : null}
+                    {previewDeal?.merchant ? <span>Merchant: <span className="font-semibold text-slate-700">{previewDeal.merchant}</span></span> : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Extraction Status</p>
+              <div className="mt-3 space-y-3 text-sm text-slate-600">
+                <p>
+                  Source: <span className="font-semibold text-slate-800">{previewDeal?.sourceType === 'url' ? 'Direct URL' : 'Keyword search'}</span>
+                </p>
+                {previewDeal?.sourceQuery ? (
+                  <p className="break-all text-xs text-slate-500">{previewDeal.sourceQuery}</p>
+                ) : null}
+                {previewDeal?.tags?.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {previewDeal.tags.map((tag) => (
+                      <span key={tag} className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Missing Fields</p>
+                  {aiFinderResult.missingFields.length ? (
+                    <ul className="mt-2 space-y-1 text-sm text-amber-700">
+                      {aiFinderResult.missingFields.map((field) => (
+                        <li key={field}>• {field}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-sm font-semibold text-emerald-600">All key fields extracted.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderBulkImportPanel = () => (
+    <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Portal Intake</p>
+          <h3 className="mt-1 text-lg font-black text-slate-900">Load deal JSON into the Business Portal</h3>
+          <p className="mt-1 text-sm text-slate-500">Paste one deal object or an array, then load it into the editor to review before publishing.</p>
+        </div>
+        <button
+          onClick={handleLoadBulkImportSample}
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+        >
+          Load Sample
+        </button>
+      </div>
+      <textarea
+        value={bulkImportJson}
+        onChange={(event) => setBulkImportJson(event.target.value)}
+        placeholder="Paste your deal JSON here..."
+        className="mt-4 min-h-[240px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 font-mono text-[12px] leading-6 text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+      />
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-xs text-slate-400">
+          Required fields: <span className="font-semibold text-slate-500">businessName, title, description, category, offerText</span>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            onClick={handleLoadBulkImportIntoPortal}
+            disabled={bulkImportLoading}
+            className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {bulkImportLoading ? 'Loading...' : 'Load Into Portal'}
+          </button>
+          <button
+            onClick={handleLoadBulkImportIntoPortal}
+            disabled={bulkImportLoading}
+            className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 px-4 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {bulkImportLoading ? 'Loading...' : 'Import and Open in Portal'}
+          </button>
+        </div>
+      </div>
+      {bulkImportMessage ? (
+        <p className="mt-3 text-sm font-semibold text-emerald-600">{bulkImportMessage}</p>
+      ) : null}
+      {bulkImportError ? (
+        <p className="mt-3 text-sm font-semibold text-rose-500">{bulkImportError}</p>
+      ) : null}
+    </div>
+  );
+
   const renderBusinessPortal = () => {
     if (LOCAL_ADMIN_MODE) {
       if (isCreating) {
         return (
-          <CreateDealForm
-            onSubmit={handleCreateDeal}
-            onCancel={() => {
-              setIsCreating(false);
-              setDealDraft(null);
-            }}
-            userLocation={userLocation}
-            initialData={dealDraft}
-          />
+          <div className="space-y-4">
+            {renderImportedDraftSwitcher()}
+            <CreateDealForm
+              onSubmit={handleCreateDeal}
+              onCancel={() => {
+                setIsCreating(false);
+                setDealDraft(null);
+                setBulkImportCandidates([]);
+                setSelectedBulkImportIndex(0);
+              }}
+              userLocation={userLocation}
+              initialData={dealDraft}
+            />
+          </div>
         );
       }
 
@@ -1940,6 +3150,11 @@ export default function App() {
                         <div className="min-w-0">
                           <h4 className="text-slate-900 font-bold">{deal.title}</h4>
                           <p className="text-slate-400 text-[10px] font-black uppercase tracking-wider">{deal.businessName}</p>
+                          {isAdminRoute && showDebug && deal.businessType === 'online' ? (
+                            <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
+                              {deal.websiteUrl ?? 'No websiteUrl saved'}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
                       <div className="flex flex-col items-end">
@@ -2038,15 +3253,20 @@ export default function App() {
 
     if (isCreating) {
       return (
-        <CreateDealForm 
-          onSubmit={handleCreateDeal} 
-          onCancel={() => {
-            setIsCreating(false);
-            setDealDraft(null);
-          }} 
-          userLocation={userLocation}
-          initialData={dealDraft}
-        />
+        <div className="space-y-4">
+          {renderImportedDraftSwitcher()}
+          <CreateDealForm 
+            onSubmit={handleCreateDeal} 
+            onCancel={() => {
+              setIsCreating(false);
+              setDealDraft(null);
+              setBulkImportCandidates([]);
+              setSelectedBulkImportIndex(0);
+            }} 
+            userLocation={userLocation}
+            initialData={dealDraft}
+          />
+        </div>
       );
     }
 
@@ -2085,6 +3305,11 @@ export default function App() {
                       <div className="min-w-0">
                         <h4 className="text-slate-900 font-bold">{deal.title}</h4>
                         <p className="text-slate-400 text-[10px] font-black uppercase tracking-wider">{deal.businessName}</p>
+                        {isAdminRoute && showDebug && deal.businessType === 'online' ? (
+                          <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
+                            {deal.websiteUrl ?? 'No websiteUrl saved'}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                     <div className="flex flex-col items-end">
@@ -2155,52 +3380,318 @@ export default function App() {
     );
   };
 
+  const renderAdminPage = () => {
+    if (!hasAdminAccess) {
+      return (
+        <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
+          <div className="mx-auto max-w-[430px] space-y-4 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Admin Access</p>
+              <h1 className="mt-1 text-2xl font-black text-slate-900">Sign in with the approved admin account</h1>
+              <p className="mt-2 text-sm text-slate-500">Use the normal LiveDrop sign-in modal with the approved admin email to open the admin dashboard.</p>
+            </div>
+            {adminAccessError ? (
+              <p className="text-sm font-semibold text-rose-500">{adminAccessError}</p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError('');
+                setAuthInfo('Sign in with the approved admin account to continue.');
+                setAuthModalOpen(true);
+              }}
+              className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+            >
+              Open Sign-In
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/')}
+              className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-[11px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              Back to App
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const managedDeals = [...deals].sort((a, b) => b.createdAt - a.createdAt);
+
+    if (isCreating) {
+      return (
+        <div className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900">
+          <div className="mx-auto max-w-[430px] space-y-4">
+            <div className="flex items-center justify-between rounded-[1.75rem] border border-slate-100 bg-white px-4 py-3 shadow-sm">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Admin</p>
+                <p className="text-sm font-semibold text-slate-500">Internal deal editor</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigateToPath('/')}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Public App
+                </button>
+                <button
+                  onClick={handleAdminLogout}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:text-rose-500"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+            {renderImportedDraftSwitcher()}
+            <CreateDealForm
+              onSubmit={handleCreateDeal}
+              onCancel={() => {
+                setIsCreating(false);
+                setDealDraft(null);
+                setEditingDealId(null);
+                setBulkImportCandidates([]);
+                setSelectedBulkImportIndex(0);
+              }}
+              userLocation={userLocation}
+              initialData={dealDraft}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900">
+        <div className="mx-auto max-w-[430px] space-y-4">
+          <div className="rounded-[1.75rem] border border-slate-100 bg-white px-4 py-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">LiveDrop Admin</p>
+                <h1 className="mt-1 text-2xl font-black text-slate-900">Content Control Center</h1>
+                <p className="mt-2 text-sm text-slate-500">Manage shared drops, backend state, and internal publishing tools.</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  onClick={() => navigateToPath('/')}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Public App
+                </button>
+                <button
+                  onClick={handleAdminLogout}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:text-rose-500"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {!dealsLoading && dealsError ? (
+            <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+              {dealsError}
+            </div>
+          ) : null}
+
+          {renderAIDealFinderPanel()}
+
+          {renderBulkImportPanel()}
+
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Manual Control</p>
+                <h2 className="mt-1 text-lg font-black text-slate-900">Create or refresh shared deals</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void refreshSharedDeals()}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Force Refresh
+                </button>
+                <button
+                  onClick={handleOpenCreateDeal}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+                >
+                  New Deal
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Backend Logs</p>
+                <h2 className="mt-1 text-lg font-black text-slate-900">Shared backend activity</h2>
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{adminLogs.length} entries</span>
+            </div>
+            <div className="mt-4 space-y-2">
+              {adminLogs.length > 0 ? adminLogs.map((entry) => (
+                <div key={entry.id} className={`rounded-xl border px-3 py-3 ${entry.level === 'error' ? 'border-rose-100 bg-rose-50' : 'border-slate-100 bg-slate-50'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className={`text-sm font-semibold ${entry.level === 'error' ? 'text-rose-600' : 'text-slate-700'}`}>{entry.message}</p>
+                    <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  {entry.detail ? (
+                    <p className="mt-1 text-xs text-slate-500">{entry.detail}</p>
+                  ) : null}
+                </div>
+              )) : (
+                <p className="text-sm text-slate-400">No backend logs yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {managedDeals.map((deal) => (
+              <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">{deal.businessName}</p>
+                    <h3 className="mt-1 text-base font-black text-slate-900">{deal.title}</h3>
+                    <p className="mt-1 text-xs text-slate-500">{deal.category} · {deal.businessType === 'online' ? 'Online' : deal.distance}</p>
+                    <p className="mt-2 truncate font-mono text-[10px] text-slate-400">{deal.websiteUrl ?? deal.productUrl ?? 'No external link saved'}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${
+                      deal.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {deal.status ?? 'active'}
+                    </span>
+                    {deal.adminTag ? (
+                      <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600">
+                        {deal.adminTag}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleEditDeal(deal)}
+                    className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleReuseDeal(deal)}
+                    className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    Reuse
+                  </button>
+                  <button
+                    onClick={() => handleReuseDealAndGoLive(deal)}
+                    className="inline-flex h-9 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-white transition-colors hover:bg-indigo-500"
+                  >
+                    Relaunch
+                  </button>
+                  <button
+                    onClick={() => void handleAdminSetDealStatus(deal, deal.status === 'active' ? 'draft' : 'active')}
+                    className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    {deal.status === 'active' ? 'Unpublish' : 'Publish'}
+                  </button>
+                  <button
+                    onClick={() => void handleAdminToggleFeatured(deal)}
+                    className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                      deal.featured ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+                    }`}
+                  >
+                    {deal.featured ? 'Featured' : 'Mark Featured'}
+                  </button>
+                  <button
+                    onClick={() => void handleAdminToggleTrending(deal)}
+                    className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                      deal.adminTag === 'trending' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+                    }`}
+                  >
+                    {deal.adminTag === 'trending' ? 'Trending' : 'Mark Trending'}
+                  </button>
+                  <button
+                    onClick={() => void handleAdminDeleteDeal(deal)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500"
+                    aria-label="Delete deal"
+                  >
+                    <AppIcon name="trash" size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPublicShell = () => (
+    <Layout
+      currentView={currentView}
+      onViewChange={(view) => {
+        if (view === 'catalog') {
+          handleOpenCatalog();
+          return;
+        }
+
+        if (view === 'business-portal') {
+          handleOpenBusinessPortal();
+          return;
+        }
+
+        setCurrentView(view);
+      }}
+      activeCatalogCount={catalogCoupons.filter(coupon => coupon.status === 'active').length}
+      notifications={notifications}
+      notificationsOpen={notificationsOpen}
+      unreadNotificationCount={notifications.filter((item) => !item.read).length}
+      onToggleNotifications={toggleNotifications}
+      role={role}
+      isAuthenticated={Boolean(session)}
+      userEmail={authUser?.email}
+      userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
+      onOpenAuth={() => {
+        setAuthError('');
+        setAuthInfo('');
+        setAuthModalOpen(true);
+      }}
+      onSignOut={handleSignOut}
+    >
+      {currentView === 'live-deals' && renderLiveDeals()}
+      {currentView === 'catalog' && renderCatalog()}
+      {currentView === 'my-claims' && renderMyClaims()}
+      {currentView === 'business-portal' && renderBusinessPortal()}
+
+      <ClaimModal 
+        deal={selectedDeal} 
+        onClose={() => setSelectedDeal(null)} 
+        onConfirm={confirmClaim}
+        onViewClaims={handleViewClaims}
+      />
+    </Layout>
+  );
+
+  const shellContent = isAdminRoute ? renderAdminPage() : renderPublicShell();
+
   return (
-    <>
+    <AppErrorBoundary>
       <ToastStack notifications={toastNotifications} />
-      <Layout
-        currentView={currentView}
-        onViewChange={(view) => {
-          if (view === 'catalog') {
-            handleOpenCatalog();
-            return;
-          }
-
-          if (view === 'business-portal') {
-            handleOpenBusinessPortal();
-            return;
-          }
-
-          setCurrentView(view);
-        }}
-        activeCatalogCount={catalogCoupons.filter(coupon => coupon.status === 'active').length}
-        notifications={notifications}
-        notificationsOpen={notificationsOpen}
-        unreadNotificationCount={notifications.filter((item) => !item.read).length}
-        onToggleNotifications={toggleNotifications}
-        role={role}
-        isAuthenticated={Boolean(session)}
-        userEmail={authUser?.email}
-        userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
-        onOpenAuth={() => {
-          setAuthError('');
-          setAuthInfo('');
-          setAuthModalOpen(true);
-        }}
-        onSignOut={handleSignOut}
-      >
-        {currentView === 'live-deals' && renderLiveDeals()}
-        {currentView === 'catalog' && renderCatalog()}
-        {currentView === 'my-claims' && renderMyClaims()}
-        {currentView === 'business-portal' && renderBusinessPortal()}
-
-        <ClaimModal 
-          deal={selectedDeal} 
-          onClose={() => setSelectedDeal(null)} 
-          onConfirm={confirmClaim}
-          onViewClaims={handleViewClaims}
-        />
-      </Layout>
+      {shellContent ?? (
+        <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
+          <div className="mx-auto max-w-[430px] rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-500">Navigation Error</p>
+            <h1 className="mt-1 text-2xl font-black text-slate-900">LiveDrop recovered safely</h1>
+            <p className="mt-2 text-sm text-slate-500">The app hit an unexpected route state. You can return to the public app below.</p>
+            <button
+              onClick={() => navigateToPath('/')}
+              className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+            >
+              Go to Home
+            </button>
+          </div>
+        </div>
+      )}
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => {
@@ -2214,6 +3705,6 @@ export default function App() {
         error={authError}
         info={authInfo}
       />
-    </>
+    </AppErrorBoundary>
   );
 }
