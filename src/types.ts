@@ -64,5 +64,14 @@ export interface AppNotification {
 }
 
 export type UserRole = 'customer' | 'business';
+export type SubscriptionStatus = 'inactive' | 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete';
+
+export interface UserProfileState {
+  role: UserRole;
+  subscriptionStatus: SubscriptionStatus;
+  subscriptionPlan: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+}
 
 export type View = 'live-deals' | 'my-claims' | 'catalog' | 'business-portal';

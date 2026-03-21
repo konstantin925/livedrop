@@ -4,11 +4,12 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import type { Session, User } from '@supabase/supabase-js';
 import { Layout } from './components/Layout';
 import { DealCard } from './components/DealCard';
 import { ClaimModal } from './components/ClaimModal';
 import { CreateDealForm } from './components/CreateDealForm';
-import { Deal, Claim, View, UserLocation, CatalogCoupon, AppNotification, UserRole } from './types';
+import { Deal, Claim, View, UserLocation, CatalogCoupon, AppNotification, UserRole, SubscriptionStatus } from './types';
 import { CATEGORY_OPTIONS, DEFAULT_LOCATION } from './constants';
 import { Timer } from './components/Timer';
 import { Ticket, CheckCircle, Trash2, Plus, AlertCircle, Navigation, RefreshCw, Terminal, Bookmark, Percent } from 'lucide-react';
@@ -20,6 +21,10 @@ import { getCategoryLabel } from './utils/categories';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
 import { ToastStack } from './components/ToastStack';
+import { AuthModal } from './components/AuthModal';
+import { BusinessPaywall } from './components/BusinessPaywall';
+import { getAuthRedirectUrl, hasSupabaseConfig, supabase } from './lib/supabase';
+import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
@@ -27,6 +32,10 @@ const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
+
+const USER_PROFILE_TABLE = 'profiles';
+const USER_STATE_TABLE = 'user_app_state';
+const BUSINESS_PLAN_ID = 'business_monthly';
 
 const readStoredDeals = (): Deal[] => {
   try {
@@ -120,6 +129,111 @@ export default function App() {
   const [toastNotifications, setToastNotifications] = useState<AppNotification[]>([]);
   const seenDealIdsRef = useRef<Set<string>>(new Set());
   const [portalSuccessMessage, setPortalSuccessMessage] = useState<string>('');
+  const [session, setSession] = useState<Session | null>(null);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authInfo, setAuthInfo] = useState('');
+  const [cloudReady, setCloudReady] = useState(false);
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>('inactive');
+  const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
+  const [subscriptionMessage, setSubscriptionMessage] = useState('');
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const cloudHydratedRef = useRef(false);
+  const isBusinessSubscribed = role === 'business' && subscriptionStatus === 'active';
+
+  const getLocalCloudState = () => ({
+    claims: readStoredClaims(),
+    catalog_coupons: readStoredCatalog(),
+    notifications: readStoredNotifications(),
+    preferences: {
+      radius,
+      selectedCategory,
+      selectedFeedFilter,
+      role,
+    },
+  });
+
+  const upsertUserProfile = async (
+    user: User,
+    updates: Partial<{
+      role: UserRole;
+      subscription_status: SubscriptionStatus;
+      subscription_plan: string | null;
+      stripe_customer_id: string | null;
+      stripe_subscription_id: string | null;
+    }> = {}
+  ) => {
+    if (!supabase) return;
+
+    await supabase.from(USER_PROFILE_TABLE).upsert(
+      {
+        id: user.id,
+        email: user.email,
+        display_name: user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email ?? 'LiveDrop User',
+        avatar_url: user.user_metadata?.avatar_url ?? null,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: 'id',
+      }
+    );
+  };
+
+  const loadCloudStateForUser = async (user: User) => {
+    if (!supabase) return;
+
+    const [{ data: profile }, { data: appState }] = await Promise.all([
+      supabase
+        .from(USER_PROFILE_TABLE)
+        .select('role, subscription_status, subscription_plan, stripe_customer_id, stripe_subscription_id')
+        .eq('id', user.id)
+        .maybeSingle(),
+      supabase
+        .from(USER_STATE_TABLE)
+        .select('claims, catalog_coupons, notifications, preferences')
+        .eq('user_id', user.id)
+        .maybeSingle(),
+    ]);
+
+    const remoteState = appState
+      ? {
+          claims: appState.claims ?? [],
+          catalog_coupons: appState.catalog_coupons ?? [],
+          notifications: appState.notifications ?? [],
+          preferences: appState.preferences ?? {},
+        }
+      : null;
+
+    const mergedState = mergeCloudState(getLocalCloudState(), remoteState ?? emptyCloudAppState);
+
+    setClaims(mergedState.claims);
+    setCatalogCoupons(refreshCatalogCoupons(mergedState.catalog_coupons).coupons);
+    setNotifications(mergedState.notifications);
+    setRadius(mergedState.preferences.radius ?? radius);
+    setSelectedCategory(mergedState.preferences.selectedCategory ?? 'All');
+    setSelectedFeedFilter(mergedState.preferences.selectedFeedFilter ?? 'all');
+    setRole((profile?.role as UserRole | undefined) ?? mergedState.preferences.role ?? 'customer');
+    setSubscriptionStatus((profile?.subscription_status as SubscriptionStatus | undefined) ?? 'inactive');
+    setSubscriptionPlan(profile?.subscription_plan ?? null);
+    setSubscriptionMessage('');
+
+    await supabase.from(USER_STATE_TABLE).upsert({
+      user_id: user.id,
+      claims: mergedState.claims,
+      catalog_coupons: mergedState.catalog_coupons,
+      notifications: mergedState.notifications,
+      preferences: mergedState.preferences,
+      updated_at: new Date().toISOString(),
+    });
+
+    cloudHydratedRef.current = true;
+    setCloudReady(true);
+    setCloudSyncEnabled(true);
+  };
 
   // Load data from localStorage or use seeded data
   useEffect(() => {
@@ -140,6 +254,61 @@ export default function App() {
     const refreshedCatalog = refreshCatalogCoupons(savedCatalog);
     setCatalogCoupons(refreshedCatalog.coupons);
     setCatalogDropWarnings(refreshedCatalog.droppedIds);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !hasSupabaseConfig) return;
+
+    let mounted = true;
+
+    supabase.auth.getSession().then(async ({ data, error }) => {
+      if (!mounted) return;
+      if (error) {
+        setAuthError(error.message);
+        setCloudReady(true);
+        setAuthLoading(false);
+        return;
+      }
+
+      setSession(data.session);
+      setAuthUser(data.session?.user ?? null);
+
+      if (data.session?.user) {
+        await upsertUserProfile(data.session.user);
+        await loadCloudStateForUser(data.session.user);
+      } else {
+        setCloudReady(true);
+      }
+      setAuthLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      if (!mounted) return;
+
+      setSession(nextSession);
+      setAuthUser(nextSession?.user ?? null);
+
+      if (nextSession?.user) {
+        setAuthModalOpen(false);
+        setAuthError('');
+        setAuthInfo('');
+        await upsertUserProfile(nextSession.user);
+        await loadCloudStateForUser(nextSession.user);
+      } else {
+        setCloudSyncEnabled(false);
+        setCloudReady(true);
+        cloudHydratedRef.current = false;
+        setSubscriptionStatus('inactive');
+        setSubscriptionPlan(null);
+        setSubscriptionMessage('');
+      }
+      setAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   // Geolocation fetching
@@ -300,6 +469,86 @@ export default function App() {
     localStorage.setItem(ROLE_STORAGE_KEY, role);
   }, [role]);
 
+  useEffect(() => {
+    if (!supabase || !authUser || !cloudSyncEnabled || !cloudHydratedRef.current) return;
+
+    void supabase.from(USER_STATE_TABLE).upsert({
+      user_id: authUser.id,
+      claims,
+      catalog_coupons: catalogCoupons,
+      notifications,
+      preferences: {
+        radius,
+        selectedCategory,
+        selectedFeedFilter,
+        role,
+      },
+      updated_at: new Date().toISOString(),
+    });
+  }, [authUser, claims, catalogCoupons, notifications, radius, role, selectedCategory, selectedFeedFilter, cloudSyncEnabled]);
+
+  useEffect(() => {
+    if (!supabase || !authUser) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const checkoutState = params.get('checkout');
+    const sessionId = params.get('session_id');
+
+    if (!checkoutState) return;
+
+    const clearCheckoutParams = () => {
+      const nextUrl = `${window.location.pathname}${window.location.hash}`;
+      window.history.replaceState({}, document.title, nextUrl);
+    };
+
+    if (checkoutState === 'cancel') {
+      setSubscriptionMessage('Subscription was not completed');
+      setCurrentView('business-portal');
+      clearCheckoutParams();
+      return;
+    }
+
+    if (checkoutState !== 'success' || !sessionId) {
+      clearCheckoutParams();
+      return;
+    }
+
+    let cancelled = false;
+
+    const verifyCheckout = async () => {
+      setSubscriptionLoading(true);
+      setSubscriptionMessage('');
+
+      const { data, error } = await supabase.functions.invoke('verify-business-checkout', {
+        body: { sessionId },
+      });
+
+      if (cancelled) return;
+
+      if (error || !data?.success) {
+        setSubscriptionMessage(error?.message ?? 'We could not verify your subscription yet. Please try again.');
+        setCurrentView('business-portal');
+        setSubscriptionLoading(false);
+        clearCheckoutParams();
+        return;
+      }
+
+      setRole('business');
+      setSubscriptionStatus('active');
+      setSubscriptionPlan(data.subscriptionPlan ?? BUSINESS_PLAN_ID);
+      setSubscriptionMessage('Business access is now active');
+      setCurrentView('business-portal');
+      setSubscriptionLoading(false);
+      clearCheckoutParams();
+    };
+
+    void verifyCheckout();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
+
   const handleClaimDeal = (deal: Deal) => {
     // Check if already claimed
     if (claims.some(c => c.dealId === deal.id)) return;
@@ -429,6 +678,156 @@ export default function App() {
     });
   };
 
+  const handleContinueWithGoogle = async () => {
+    if (!supabase) {
+      setAuthError('Supabase is not configured yet. Add your project URL and anon key first.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+    setAuthInfo('');
+
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: getAuthRedirectUrl(),
+        },
+      });
+
+      if (error) {
+        if (error.message.toLowerCase().includes('provider is not enabled') || error.message.toLowerCase().includes('unsupported provider')) {
+          setAuthError('Google sign-in is not enabled in Supabase yet. You can use email sign-in below for now.');
+        } else {
+          setAuthError(error.message);
+        }
+        setAuthLoading(false);
+        return;
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Google sign-in could not be started.');
+      setAuthLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async ({
+    mode,
+    email,
+    password,
+    fullName,
+  }: {
+    mode: 'signin' | 'signup';
+    email: string;
+    password: string;
+    fullName?: string;
+  }) => {
+    if (!supabase) {
+      setAuthError('Supabase is not configured yet. Add your project URL and anon key first.');
+      return;
+    }
+
+    if (!email.trim() || !password.trim()) {
+      setAuthError('Email and password are required.');
+      return;
+    }
+
+    if (mode === 'signup' && !fullName?.trim()) {
+      setAuthError('Full name is required to create an account.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+    setAuthInfo('');
+
+    try {
+      if (mode === 'signup') {
+        const { error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            emailRedirectTo: getAuthRedirectUrl(),
+            data: {
+              full_name: fullName?.trim(),
+            },
+          },
+        });
+
+        if (error) {
+          setAuthError(error.message);
+          setAuthLoading(false);
+          return;
+        }
+
+        setAuthInfo('Account created. Check your email to confirm your sign-up if confirmation is enabled.');
+        setAuthLoading(false);
+        return;
+      }
+
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        setAuthError(error.message);
+        setAuthLoading(false);
+        return;
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Email authentication failed.');
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setAuthLoading(false);
+  };
+
+  const handleOpenBusinessPortal = () => {
+    if (!session) {
+      setAuthError('Sign in with Google to start business access.');
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setSubscriptionMessage('');
+    setCurrentView('business-portal');
+  };
+
+  const handleSubscribeNow = async () => {
+    if (!supabase || !authUser) {
+      setAuthError('Sign in with Google to start business access.');
+      setAuthModalOpen(true);
+      return;
+    }
+
+    if (isBusinessSubscribed) {
+      setCurrentView('business-portal');
+      return;
+    }
+
+    setSubscriptionLoading(true);
+    setSubscriptionMessage('');
+
+    const { data, error } = await supabase.functions.invoke('create-business-checkout', {
+      body: {
+        planId: BUSINESS_PLAN_ID,
+      },
+    });
+
+    if (error || !data?.url) {
+      setSubscriptionMessage(error?.message ?? 'We could not start checkout right now. Please try again.');
+      setSubscriptionLoading(false);
+      return;
+    }
+
+    window.location.href = data.url;
+  };
+
   const handleSaveToCatalog = (deal: Deal) => {
     if (!canSaveDealToCatalog(deal)) return;
 
@@ -453,11 +852,6 @@ export default function App() {
   const handleOpenCatalog = () => {
     refreshCatalogState();
     setCurrentView('catalog');
-  };
-
-  const handleStartBusinessAccount = () => {
-    setRole('business');
-    setCurrentView('business-portal');
   };
 
   const renderLiveDeals = () => {
@@ -945,25 +1339,29 @@ export default function App() {
   };
 
   const renderBusinessPortal = () => {
-    if (role !== 'business') {
+    if (!session) {
       return (
-        <div className="space-y-8">
-          <div className="bg-white border border-slate-100 rounded-[2.5rem] p-8 shadow-sm text-center">
-            <div className="mx-auto w-16 h-16 rounded-3xl bg-indigo-50 flex items-center justify-center mb-6">
-              <Plus className="text-indigo-600" size={28} />
-            </div>
-            <h2 className="text-2xl font-black text-slate-900 mb-3">Own a business?</h2>
-            <p className="text-slate-500 leading-relaxed mb-8">
-              Create live deals and attract customers instantly.
-            </p>
-            <button
-              onClick={handleStartBusinessAccount}
-              className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black text-lg shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all"
-            >
-              Start Business Account
-            </button>
-          </div>
-        </div>
+        <BusinessPaywall
+          isAuthenticated={false}
+          message="Sign in with Google to start business access."
+          onSubscribe={handleSubscribeNow}
+          onSignIn={() => {
+            setAuthError('Sign in with Google to start business access.');
+            setAuthModalOpen(true);
+          }}
+        />
+      );
+    }
+
+    if (!isBusinessSubscribed) {
+      return (
+        <BusinessPaywall
+          isAuthenticated
+          loading={subscriptionLoading}
+          message={subscriptionMessage}
+          onSubscribe={handleSubscribeNow}
+          onSignIn={() => setAuthModalOpen(true)}
+        />
       );
     }
 
@@ -1078,6 +1476,11 @@ export default function App() {
             return;
           }
 
+          if (view === 'business-portal') {
+            handleOpenBusinessPortal();
+            return;
+          }
+
           setCurrentView(view);
         }}
         activeCatalogCount={catalogCoupons.filter(coupon => coupon.status === 'active').length}
@@ -1086,6 +1489,15 @@ export default function App() {
         unreadNotificationCount={notifications.filter((item) => !item.read).length}
         onToggleNotifications={toggleNotifications}
         role={role}
+        isAuthenticated={Boolean(session)}
+        userEmail={authUser?.email}
+        userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
+        onOpenAuth={() => {
+          setAuthError('');
+          setAuthInfo('');
+          setAuthModalOpen(true);
+        }}
+        onSignOut={handleSignOut}
       >
         {currentView === 'live-deals' && renderLiveDeals()}
         {currentView === 'catalog' && renderCatalog()}
@@ -1099,6 +1511,19 @@ export default function App() {
           onViewClaims={handleViewClaims}
         />
       </Layout>
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => {
+          setAuthModalOpen(false);
+          setAuthError('');
+          setAuthInfo('');
+        }}
+        onContinueWithGoogle={handleContinueWithGoogle}
+        onEmailAuth={handleEmailAuth}
+        loading={authLoading}
+        error={authError}
+        info={authInfo}
+      />
     </>
   );
 }

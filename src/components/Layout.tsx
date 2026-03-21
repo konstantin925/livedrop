@@ -1,7 +1,6 @@
 import React from 'react';
 import { AppNotification, UserRole, View } from '../types';
-import { Ticket, Briefcase, MapPin, Bookmark, Bell } from 'lucide-react';
-import logo from '../assets/livedrop-logo.svg';
+import { Ticket, Briefcase, MapPin, Bookmark, Bell, LogOut, Zap } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,6 +12,11 @@ interface LayoutProps {
   unreadNotificationCount?: number;
   onToggleNotifications?: () => void;
   role?: UserRole;
+  isAuthenticated?: boolean;
+  userEmail?: string;
+  userAvatarUrl?: string | null;
+  onOpenAuth?: () => void;
+  onSignOut?: () => void;
 }
 
 export const Layout: React.FC<LayoutProps> = ({
@@ -25,19 +29,49 @@ export const Layout: React.FC<LayoutProps> = ({
   unreadNotificationCount = 0,
   onToggleNotifications,
   role = 'customer',
+  isAuthenticated = false,
+  userEmail,
+  userAvatarUrl,
+  onOpenAuth,
+  onSignOut,
 }) => {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden border-x border-slate-200">
       {/* Header */}
-      <header className="p-6 pt-8 flex justify-between items-center border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <img src={logo} alt="LiveDrop icon" className="h-8 w-8 object-contain shrink-0 rounded-xl" />
-          <div className="leading-none">
-            <h1 className="text-[1.2rem] font-bold tracking-[-0.035em] text-slate-950">LiveDrop</h1>
-            <p className="mt-1 text-[9px] text-slate-400 font-semibold uppercase tracking-[0.2em]">DEALS DROP LIVE.</p>
+      <header className="p-5 pt-7 flex justify-between items-center border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-50">
+        <div className="flex flex-col justify-center items-start">
+          <div className="flex items-baseline gap-1.5 leading-none">
+            <h1 className="text-[1.48rem] font-black tracking-[-0.06em] text-slate-800">LIVE</h1>
+            <h1 className="text-[1.48rem] font-black tracking-[-0.06em] text-indigo-600">DROP</h1>
+            <Zap size={28} className="text-indigo-600 shrink-0 translate-y-[2px]" fill="currentColor" strokeWidth={1.75} />
           </div>
+          <p className="mt-1 text-[0.64rem] font-medium tracking-[0.14em] text-slate-400">
+            don&apos;t miss the drop
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          {isAuthenticated ? (
+            <div className="hidden sm:flex items-center gap-2 rounded-full bg-slate-100 pl-2 pr-3 py-1.5">
+              {userAvatarUrl ? (
+                <img src={userAvatarUrl} alt="Profile" className="w-7 h-7 rounded-full object-cover" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center">
+                  {(userEmail ?? 'U').slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <span className="text-[10px] font-bold text-slate-600 max-w-[110px] truncate">{userEmail}</span>
+              <button onClick={onSignOut} className="text-slate-400 hover:text-slate-700">
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onOpenAuth}
+              className="hidden sm:inline-flex rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider px-3 py-2 shadow-lg shadow-indigo-100"
+            >
+              Sign In
+            </button>
+          )}
           <button onClick={onToggleNotifications} className="relative bg-slate-100 p-2 rounded-full text-slate-500">
             <Bell size={18} />
             {unreadNotificationCount > 0 ? (
@@ -49,6 +83,15 @@ export const Layout: React.FC<LayoutProps> = ({
           <div className="bg-slate-100 p-2 rounded-full text-slate-500">
             <MapPin size={18} />
           </div>
+          {isAuthenticated ? (
+            <button onClick={onSignOut} className="sm:hidden bg-slate-100 p-2 rounded-full text-slate-500">
+              <LogOut size={18} />
+            </button>
+          ) : (
+            <button onClick={onOpenAuth} className="sm:hidden bg-indigo-600 px-2.5 py-2 rounded-full text-white text-[10px] font-black uppercase tracking-[0.16em]">
+              Sign In
+            </button>
+          )}
         </div>
       </header>
 
@@ -92,7 +135,7 @@ export const Layout: React.FC<LayoutProps> = ({
         <NavButton 
           active={currentView === 'live-deals'} 
           onClick={() => onViewChange('live-deals')}
-          icon={<img src={logo} alt="" className="h-6 w-6 object-cover object-left" />}
+          icon={<Zap size={22} className="text-current" />}
           label="Live"
         />
         <NavButton 
