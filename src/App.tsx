@@ -176,14 +176,12 @@ const getEffectiveLocalDealDistance = (location: UserLocation, deal: Deal): numb
   return fallbackDistance ?? Number.POSITIVE_INFINITY;
 };
 
-const mergeMissingSeededOnlineDeals = (existingDeals: Deal[]): Deal[] => {
+const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
   const seededOnlineDeals = generateSeededOnlineDeals();
-  const existingIds = new Set(existingDeals.map((deal) => deal.id));
-  const missingSeededOnlineDeals = seededOnlineDeals.filter((deal) => !existingIds.has(deal.id));
+  const seededOnlineDealIds = new Set(seededOnlineDeals.map((deal) => deal.id));
+  const nonSeededDeals = existingDeals.filter((deal) => !seededOnlineDealIds.has(deal.id));
 
-  return missingSeededOnlineDeals.length > 0
-    ? [...missingSeededOnlineDeals, ...existingDeals]
-    : existingDeals;
+  return [...seededOnlineDeals, ...nonSeededDeals];
 };
 
 export default function App() {
@@ -326,12 +324,9 @@ export default function App() {
     const savedNotifications = readStoredNotifications();
     const savedRole = readStoredRole();
 
-    if (savedDeals.length > 0) {
-      const hydratedDeals = mergeMissingSeededOnlineDeals(savedDeals);
-
-      setDeals(hydratedDeals);
-      seenDealIdsRef.current = new Set(hydratedDeals.map((deal) => deal.id));
-    }
+    const hydratedDeals = syncSharedOnlineDeals(savedDeals);
+    setDeals(hydratedDeals);
+    seenDealIdsRef.current = new Set(hydratedDeals.map((deal) => deal.id));
 
     setRole(savedRole);
     if (LOCAL_ADMIN_MODE) {
@@ -422,8 +417,9 @@ export default function App() {
         // If no deals exist yet, seed them near this location
         const savedDeals = readStoredDeals();
         if (savedDeals.length === 0) {
-          const seeded = [...generateSeededDeals(newLocation), ...generateSeededOnlineDeals()];
+          const seeded = syncSharedOnlineDeals(generateSeededDeals(newLocation));
           setDeals(seeded);
+          seenDealIdsRef.current = new Set(seeded.map((deal) => deal.id));
         }
       },
       (error) => {
@@ -442,8 +438,8 @@ export default function App() {
     const refreshedLocalDeals = generateSeededDeals(nextLocation);
 
     setDeals((prevDeals) => {
-      const preservedOnlineDeals = prevDeals.filter((deal) => deal.businessType === 'online');
-      const nextDeals = [...refreshedLocalDeals, ...preservedOnlineDeals];
+      const nonLocalDeals = prevDeals.filter((deal) => deal.businessType !== 'local');
+      const nextDeals = syncSharedOnlineDeals([...refreshedLocalDeals, ...nonLocalDeals]);
       seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
       return nextDeals;
     });
