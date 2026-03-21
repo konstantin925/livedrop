@@ -14,3 +14,13 @@ export const CATEGORY_OPTIONS = [
   'Pet',
   'Home'
 ] as const;
+
+export const ONLINE_CATEGORY_OPTIONS = [
+  'All',
+  'Tech',
+  'Fashion',
+  'Gaming',
+  'Digital',
+  'Home',
+  'Freebies',
+] as const;

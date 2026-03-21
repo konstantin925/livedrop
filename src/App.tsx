@@ -10,14 +10,13 @@ import { DealCard } from './components/DealCard';
 import { ClaimModal } from './components/ClaimModal';
 import { CreateDealForm } from './components/CreateDealForm';
 import { Deal, Claim, View, UserLocation, CatalogCoupon, AppNotification, UserRole, SubscriptionStatus } from './types';
-import { CATEGORY_OPTIONS, DEFAULT_LOCATION } from './constants';
+import { CATEGORY_OPTIONS, DEFAULT_LOCATION, ONLINE_CATEGORY_OPTIONS } from './constants';
 import { Timer } from './components/Timer';
-import { Ticket, CheckCircle, Trash2, Plus, AlertCircle, Navigation, RefreshCw, Terminal, Bookmark, Percent } from 'lucide-react';
 import { calculateDistance, formatDistance } from './utils/distance';
-import { generateSeededDeals } from './utils/seed';
+import { generateSeededDeals, generateSeededOnlineDeals } from './utils/seed';
 import { formatDateTime } from './utils/time';
 import { copyTextToClipboard, ClipboardCopyResult } from './utils/clipboard';
-import { getCategoryLabel } from './utils/categories';
+import { getCategoryIconName, getCategoryLabel } from './utils/categories';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
 import { ToastStack } from './components/ToastStack';
@@ -25,6 +24,7 @@ import { AuthModal } from './components/AuthModal';
 import { BusinessPaywall } from './components/BusinessPaywall';
 import { getAuthRedirectUrl, hasSupabaseConfig, supabase } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
+import { AppIcon } from './components/AppIcon';
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
@@ -37,6 +37,40 @@ const USER_PROFILE_TABLE = 'profiles';
 const USER_STATE_TABLE = 'user_app_state';
 const BUSINESS_PLAN_ID = 'business_monthly';
 
+const getNotificationMessage = (
+  type: 'new_deal' | 'ending_soon' | 'catalog_drop',
+  title?: string,
+) => {
+  if (type === 'new_deal') return `New deal nearby: ${title}`;
+  if (type === 'ending_soon') return `Hurry! ${title} is ending soon`;
+  return 'Your saved deal dropped in value';
+};
+
+const getNotificationIconName = (type: AppNotification['type']) => {
+  if (type === 'new_deal') return 'live' as const;
+  if (type === 'ending_soon') return 'ending' as const;
+  return 'percent' as const;
+};
+
+const normalizeNotificationMessage = (message: string) =>
+  message
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getFeedFilterIconName = (filter: 'all' | 'trending' | 'ending-soon' | 'just-dropped') => {
+  if (filter === 'trending') return 'trending' as const;
+  if (filter === 'ending-soon') return 'ending' as const;
+  if (filter === 'just-dropped') return 'dropped' as const;
+  return 'deal' as const;
+};
+
+const getFeedTagIconName = (tag: 'Trending' | 'Ending Soon' | 'Just Dropped') => {
+  if (tag === 'Trending') return 'trending' as const;
+  if (tag === 'Ending Soon') return 'ending' as const;
+  return 'dropped' as const;
+};
+
 const readStoredDeals = (): Deal[] => {
   try {
     const raw = localStorage.getItem(DEALS_STORAGE_KEY);
@@ -45,10 +79,12 @@ const readStoredDeals = (): Deal[] => {
     return Array.isArray(parsed)
       ? parsed.map((deal) => ({
           ...deal,
+          businessType: deal.businessType ?? 'local',
           currentClaims: deal.currentClaims ?? deal.claimCount ?? 0,
           claimCount: deal.claimCount ?? deal.currentClaims ?? 0,
           createdAt: deal.createdAt ?? Date.now(),
           expiresAt: deal.expiresAt ?? Date.now(),
+          hasTimer: deal.hasTimer ?? true,
         }))
       : [];
   } catch {
@@ -83,7 +119,12 @@ const readStoredNotifications = (): AppNotification[] => {
     const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.map((notification) => ({
+          ...notification,
+          message: normalizeNotificationMessage(notification.message ?? ''),
+        }))
+      : [];
   } catch {
     return [];
   }
@@ -116,6 +157,7 @@ export default function App() {
   const [isCreating, setIsCreating] = useState(false);
   const [userLocation, setUserLocation] = useState<UserLocation>(DEFAULT_LOCATION);
   const [radius, setRadius] = useState<number>(5);
+  const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
@@ -244,8 +286,12 @@ export default function App() {
     const savedRole = readStoredRole();
 
     if (savedDeals.length > 0) {
-      setDeals(savedDeals);
-      seenDealIdsRef.current = new Set(savedDeals.map((deal) => deal.id));
+      const seededOnlineDeals = savedDeals.some((deal) => deal.businessType === 'online')
+        ? savedDeals
+        : [...savedDeals, ...generateSeededOnlineDeals()];
+
+      setDeals(seededOnlineDeals);
+      seenDealIdsRef.current = new Set(seededOnlineDeals.map((deal) => deal.id));
     }
 
     setRole(savedRole);
@@ -333,7 +379,7 @@ export default function App() {
         // If no deals exist yet, seed them near this location
         const savedDeals = readStoredDeals();
         if (savedDeals.length === 0) {
-          const seeded = generateSeededDeals(newLocation);
+          const seeded = [...generateSeededDeals(newLocation), ...generateSeededOnlineDeals()];
           setDeals(seeded);
         }
       },
@@ -404,7 +450,7 @@ export default function App() {
   useEffect(() => {
     if (catalogDropWarnings.length > 0) {
       pushNotification({
-        message: '📉 Your saved deal dropped in value',
+        message: getNotificationMessage('catalog_drop'),
         type: 'catalog_drop',
       });
     }
@@ -419,10 +465,14 @@ export default function App() {
     newDeals.forEach((deal) => {
       nextSeenIds.add(deal.id);
 
+      if (deal.businessType === 'online') {
+        return;
+      }
+
       const distance = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
       if (deal.expiresAt > Date.now() && distance <= radius) {
         pushNotification({
-          message: `🔥 New deal nearby: ${deal.title}`,
+          message: getNotificationMessage('new_deal', deal.title),
           type: 'new_deal',
           dealId: deal.id,
         });
@@ -434,13 +484,15 @@ export default function App() {
 
   useEffect(() => {
     deals.forEach((deal) => {
+      if (deal.businessType === 'online') return;
+
       const distance = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
       const isVisible = deal.expiresAt > Date.now() && distance <= radius;
       const isEndingSoon = isVisible && deal.expiresAt - Date.now() <= 5 * 60 * 1000;
 
       if (isEndingSoon) {
         pushNotification({
-          message: `⏳ Hurry! ${deal.title} is ending soon`,
+          message: getNotificationMessage('ending_soon', deal.title),
           type: 'ending_soon',
           dealId: deal.id,
         });
@@ -605,7 +657,12 @@ export default function App() {
     };
 
     setDeals(prev => [newDeal, ...prev]);
-    setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, newDeal)));
+    if (newDeal.businessType !== 'online') {
+      setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, newDeal)));
+      setDropMode('local');
+    } else {
+      setDropMode('online');
+    }
     setPortalSuccessMessage('Your deal is live');
     setIsCreating(false);
     setCurrentView('live-deals');
@@ -639,11 +696,12 @@ export default function App() {
 
   const pushNotification = (payload: Omit<AppNotification, 'id' | 'timestamp' | 'read'>) => {
     let created: AppNotification | null = null;
+    const normalizedMessage = normalizeNotificationMessage(payload.message);
 
     setNotifications((prev) => {
       const exists = prev.some((item) =>
         item.type === payload.type &&
-        item.message === payload.message &&
+        normalizeNotificationMessage(item.message) === normalizedMessage &&
         item.dealId === payload.dealId &&
         item.couponId === payload.couponId
       );
@@ -652,6 +710,7 @@ export default function App() {
 
       created = {
         ...payload,
+        message: normalizedMessage,
         id: Math.random().toString(36).slice(2, 11),
         timestamp: Date.now(),
         read: false,
@@ -855,13 +914,14 @@ export default function App() {
   };
 
   const renderLiveDeals = () => {
-    // Calculate distances and filter by radius
-    const dealsWithDistance = deals.map(deal => {
+    const localDeals = deals.filter((deal) => deal.businessType !== 'online');
+    const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
+    const dealsWithDistance = localDeals.map(deal => {
       const dist = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
       return { ...deal, computedDistanceValue: dist, computedDistanceLabel: formatDistance(dist) };
     });
 
-    const activeDeals = dealsWithDistance
+    const activeLocalDeals = dealsWithDistance
       .filter(d =>
         d.expiresAt > Date.now() &&
         d.computedDistanceValue <= radius &&
@@ -869,19 +929,19 @@ export default function App() {
       )
       .sort((a, b) => a.computedDistanceValue - b.computedDistanceValue);
 
-    const trendingDeals = [...activeDeals]
+    const trendingDeals = [...activeLocalDeals]
       .sort((a, b) => (b.claimCount ?? b.currentClaims) - (a.claimCount ?? a.currentClaims))
       .slice(0, 5);
 
-    const endingSoonDeals = activeDeals
+    const endingSoonDeals = activeLocalDeals
       .filter(d => d.expiresAt - Date.now() <= 10 * 60 * 1000)
       .sort((a, b) => a.expiresAt - b.expiresAt);
 
-    const justDroppedDeals = activeDeals
+    const justDroppedDeals = activeLocalDeals
       .filter(d => Date.now() - d.createdAt <= 45 * 60 * 1000)
       .sort((a, b) => b.createdAt - a.createdAt);
 
-    const expiredDeals = dealsWithDistance.filter(d => d.expiresAt <= Date.now());
+    const expiredLocalDeals = dealsWithDistance.filter(d => d.expiresAt <= Date.now());
     const trendingIds = new Set(trendingDeals.map(deal => deal.id));
     const endingSoonIds = new Set(endingSoonDeals.map(deal => deal.id));
     const justDroppedIds = new Set(justDroppedDeals.map(deal => deal.id));
@@ -893,7 +953,7 @@ export default function App() {
       return null;
     };
 
-    const filteredActiveDeals = activeDeals.filter((deal) => {
+    const filteredActiveLocalDeals = activeLocalDeals.filter((deal) => {
       const dealTag = getDealFeedTag(deal.id);
       if (selectedFeedFilter === 'trending') return dealTag === 'Trending';
       if (selectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
@@ -901,35 +961,76 @@ export default function App() {
       return true;
     });
 
+    const filteredOnlineDeals = onlineDeals
+      .filter((deal) => deal.expiresAt > Date.now() && (selectedCategory === 'All' || deal.category === selectedCategory))
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    const trendingOnlineDeals = [...filteredOnlineDeals]
+      .sort((a, b) => (b.claimCount ?? b.currentClaims) - (a.claimCount ?? a.currentClaims))
+      .slice(0, 5);
+
+    const endingSoonOnlineDeals = filteredOnlineDeals
+      .filter((deal) => deal.hasTimer !== false && deal.expiresAt - Date.now() <= 10 * 60 * 1000)
+      .sort((a, b) => a.expiresAt - b.expiresAt);
+
+    const justDroppedOnlineDeals = filteredOnlineDeals
+      .filter((deal) => Date.now() - deal.createdAt <= 60 * 60 * 1000)
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    const trendingOnlineIds = new Set(trendingOnlineDeals.map((deal) => deal.id));
+    const endingSoonOnlineIds = new Set(endingSoonOnlineDeals.map((deal) => deal.id));
+    const justDroppedOnlineIds = new Set(justDroppedOnlineDeals.map((deal) => deal.id));
+
+    const getOnlineDropTag = (dealId: string): 'Trending' | 'Ending Soon' | 'Just Dropped' | null => {
+      if (trendingOnlineIds.has(dealId)) return 'Trending';
+      if (endingSoonOnlineIds.has(dealId)) return 'Ending Soon';
+      if (justDroppedOnlineIds.has(dealId)) return 'Just Dropped';
+      return null;
+    };
+
+    const filteredOnlineDealsByTab = filteredOnlineDeals.filter((deal) => {
+      const dealTag = getOnlineDropTag(deal.id);
+      if (selectedFeedFilter === 'trending') return dealTag === 'Trending';
+      if (selectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
+      if (selectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
+      return true;
+    });
+
+    const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
+    const controlHeightClass = 'h-9.5';
+    const controlRadiusClass = 'rounded-xl';
+    const controlPaddingClass = 'px-3';
+    const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.12em]';
+
     return (
-      <div className="space-y-6">
+      <div className="space-y-4.5">
         {/* Developer Debug Section */}
-        {showDebug && (
-          <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-2xl mb-6 relative overflow-hidden">
+        {showDebug && dropMode === 'local' && (
+          <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-10">
-              <Terminal size={60} />
+              <AppIcon name="debug" size={60} />
             </div>
             <div className="relative z-10">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400">Developer Debug</h3>
                 <button onClick={() => setShowDebug(false)} className="text-[10px] font-black uppercase text-white/40 hover:text-white">Hide</button>
               </div>
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-2 gap-3 mb-3">
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">User Lat/Lng</p>
                   <p className="font-mono text-[10px] font-bold">{userLocation.lat.toFixed(6)}, {userLocation.lng.toFixed(6)}</p>
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Total Deals</p>
-                  <p className="font-mono text-xs font-bold">{deals.length}</p>
+                  <p className="font-mono text-xs font-bold">{localDeals.length}</p>
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Active Deals</p>
-                  <p className="font-mono text-xs font-bold">{deals.filter(d => d.expiresAt > Date.now()).length}</p>
+                  <p className="font-mono text-xs font-bold">{localDeals.filter(d => d.expiresAt > Date.now()).length}</p>
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Visible (in {radius}mi)</p>
-                  <p className="font-mono text-xs font-bold text-indigo-400">{activeDeals.length}</p>
+                  <p className="font-mono text-xs font-bold text-indigo-400">{activeLocalDeals.length}</p>
                 </div>
               </div>
               
@@ -937,12 +1038,12 @@ export default function App() {
                 <button 
                   onClick={() => {
                     localStorage.removeItem(DEALS_STORAGE_KEY);
-                    const seeded = generateSeededDeals(userLocation);
+                    const seeded = [...generateSeededDeals(userLocation), ...generateSeededOnlineDeals()];
                     setDeals(seeded);
                   }}
                   className="flex-1 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl font-black text-[8px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                 >
-                  <RefreshCw size={12} />
+                  <AppIcon name="refresh" size={12} />
                   Reset & Re-seed Near Me
                 </button>
               </div>
@@ -952,71 +1053,116 @@ export default function App() {
           </div>
         )}
 
-        {/* Location & Radius Header */}
-        <div className="bg-white border border-slate-100 rounded-[2rem] p-5 shadow-sm mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <div className={`p-2 rounded-xl ${locationStatus === 'success' ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
-                <Navigation size={18} className={locationStatus === 'loading' ? 'animate-spin' : ''} />
-              </div>
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your Location</p>
-                <p className="text-xs font-bold text-slate-700">
-                  {locationStatus === 'loading' ? 'Locating...' : (cityName || 'San Francisco')}
-                </p>
-              </div>
-            </div>
-            <button 
-              onClick={fetchLocation}
-              className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
-              title="Refresh Location"
+        <div className="grid grid-cols-2 gap-1.5 rounded-[1.4rem] bg-slate-100/90 p-1">
+          {[
+            { id: 'local', label: 'Local' },
+            { id: 'online', label: 'Online' },
+          ].map(option => (
+            <button
+              key={option.id}
+              onClick={() => {
+                setDropMode(option.id as typeof dropMode);
+                setSelectedCategory('All');
+                setSelectedFeedFilter('all');
+              }}
+              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1.1rem] ${controlPaddingClass} text-[10px] font-black transition-all ${
+                dropMode === option.id
+                  ? 'bg-white text-indigo-600 shadow-sm shadow-slate-200/50'
+                  : 'bg-transparent text-slate-500'
+              }`}
             >
-              <RefreshCw size={18} />
+              <AppIcon name={option.id === 'local' ? 'pin' : 'online'} size={16} />
+              {option.label}
             </button>
-          </div>
-
-          <div className="flex items-center justify-between pt-4 border-t border-slate-50">
-            <span className="text-xs font-black uppercase tracking-widest text-slate-400">Search Radius</span>
-            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl">
-              {RADIUS_OPTIONS.map(r => (
-                <button
-                  key={r}
-                  onClick={() => setRadius(r)}
-                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${radius === r ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                >
-                  {r}mi
-                </button>
-              ))}
-            </div>
-          </div>
+          ))}
         </div>
 
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-2xl font-black text-slate-900">Live Near You</h2>
-          <span className="bg-indigo-100 text-indigo-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider animate-pulse">
-            {activeDeals.length} Drops
+        {/* Location & Radius Header */}
+        {dropMode === 'local' ? (
+          <div className="bg-white border border-slate-100 rounded-[1.55rem] p-3.5 shadow-sm shadow-slate-200/40 mb-3.5">
+            <div className="flex items-center justify-between mb-2.5">
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl ${locationStatus === 'success' ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
+                  <AppIcon name="pin" size={18} className={locationStatus === 'loading' ? 'animate-spin' : ''} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Your Location</p>
+                  <p className="text-[13px] font-semibold text-slate-700">
+                    {locationStatus === 'loading' ? 'Locating...' : (cityName || 'San Francisco')}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={fetchLocation}
+                className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                title="Refresh Location"
+              >
+                <AppIcon name="refresh" size={18} />
+              </button>
+            </div>
+
+              <div className="flex items-center justify-between pt-2.5 border-t border-slate-50">
+              <span className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">Search Radius</span>
+              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl">
+                {RADIUS_OPTIONS.map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setRadius(r)}
+                    className={`inline-flex ${controlHeightClass} min-w-[38px] items-center justify-center rounded-lg border ${controlTextClass} transition-all ${
+                      radius === r
+                        ? 'border-white bg-white text-indigo-600 shadow-sm shadow-slate-200/40'
+                        : 'border-transparent bg-transparent text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    {r}mi
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white border border-slate-100 rounded-[1.55rem] p-3.5 shadow-sm shadow-slate-200/40 mb-3.5">
+            <div className="flex items-center gap-2.5">
+              <div className="rounded-[1rem] bg-indigo-50 p-2.5 text-indigo-600">
+                <AppIcon name="online" size={18} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Online Drops</p>
+                <p className="text-[13px] font-semibold text-slate-700">Discover limited-time online offers from digital stores.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-[1.45rem] font-black tracking-[-0.035em] text-slate-900">{dropMode === 'local' ? 'Live Near You' : 'Online Drops'}</h2>
+          <span className="bg-indigo-100/80 text-indigo-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-[0.14em]">
+            {dropMode === 'local' ? activeLocalDeals.length : filteredOnlineDeals.length} Drops
           </span>
         </div>
 
-        <div className="overflow-x-auto pb-1 -mx-1">
+        <div className="overflow-x-auto pb-0.5 -mx-0.5">
           <div className="flex min-w-max items-center gap-2 px-1">
-            {CATEGORY_OPTIONS.map(category => (
+            {activeCategoryOptions.map(category => (
               <button
                 key={category}
                 onClick={() => setSelectedCategory(category)}
-                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition-all ${
+                className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
                   selectedCategory === category
-                    ? 'bg-white text-indigo-600 shadow-sm border border-indigo-100'
-                    : 'bg-slate-50 text-slate-400 hover:text-slate-600'
+                    ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/40'
+                    : 'border-transparent bg-slate-50 text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {category === 'All' ? category : getCategoryLabel(category)}
+                <span className="inline-flex items-center gap-1.5">
+                  {category === 'All' ? <AppIcon name="deal" size={12} /> : <AppIcon name={getCategoryIconName(category)} size={12} />}
+                  {category === 'All' ? category : getCategoryLabel(category)}
+                </span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="overflow-x-auto pb-1 -mx-1">
+        <div className="overflow-x-auto pb-0.5 -mx-0.5">
           <div className="flex min-w-max items-center gap-2 px-1">
             {[
               { id: 'all', label: 'All' },
@@ -1027,65 +1173,130 @@ export default function App() {
               <button
                 key={filter.id}
                 onClick={() => setSelectedFeedFilter(filter.id as typeof selectedFeedFilter)}
-                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition-all ${
+                className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
                   selectedFeedFilter === filter.id
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-slate-50 text-slate-500 hover:text-slate-700'
+                    ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
+                    : 'border-transparent bg-slate-50 text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {filter.label}
+                <span className="inline-flex items-center gap-1.5">
+                  <AppIcon name={getFeedFilterIconName(filter.id as typeof selectedFeedFilter)} size={12} />
+                  {filter.label}
+                </span>
               </button>
             ))}
           </div>
         </div>
 
-        <section className="space-y-4">
-          {filteredActiveDeals.length > 0 ? (
-            filteredActiveDeals.map(deal => (
-              <DealCard 
-                key={deal.id} 
-                deal={deal} 
-                onClaim={handleClaimDeal} 
-                isClaimed={claims.some(c => c.dealId === deal.id)}
-                computedDistance={deal.computedDistanceLabel}
-                onSaveToCatalog={handleSaveToCatalog}
-                canSaveToCatalog={canSaveDealToCatalog(deal)}
-                isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
-                saveFeedback={catalogSaveFeedback[deal.id]}
-                badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
-              />
-            ))
+        <section className="space-y-2.5">
+          {dropMode === 'local' ? (
+            filteredActiveLocalDeals.length > 0 ? (
+              filteredActiveLocalDeals.map(deal => (
+                <DealCard 
+                  key={deal.id} 
+                  deal={deal} 
+                  onClaim={handleClaimDeal} 
+                  isClaimed={claims.some(c => c.dealId === deal.id)}
+                  computedDistance={deal.computedDistanceLabel}
+                  onSaveToCatalog={handleSaveToCatalog}
+                  canSaveToCatalog={canSaveDealToCatalog(deal)}
+                  isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
+                  saveFeedback={catalogSaveFeedback[deal.id]}
+                  badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
+                />
+              ))
+            ) : (
+              <div className="text-center py-10 bg-white rounded-[1.7rem] border border-dashed border-slate-200 shadow-sm shadow-slate-200/30">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
+                  <AppIcon name="alert" size={28} />
+                </div>
+                <p className="text-slate-500 font-semibold">
+                  {selectedFeedFilter === 'all'
+                    ? `No live deals within ${radius} miles.`
+                    : `No ${selectedFeedFilter.replace('-', ' ')} deals within ${radius} miles.`}
+                </p>
+                <p className="text-slate-300 text-xs mt-1.5">Try changing filters or check back later.</p>
+                <button 
+                  onClick={() => {
+                    if (selectedFeedFilter !== 'all') {
+                      setSelectedFeedFilter('all');
+                      return;
+                    }
+                    const nextRadius = RADIUS_OPTIONS.find(option => option > radius) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
+                    setRadius(nextRadius);
+                  }}
+                  className="mt-5 text-indigo-600 font-black text-xs uppercase tracking-[0.2em] hover:tracking-[0.3em] transition-all"
+                >
+                  {selectedFeedFilter === 'all' ? 'Expand Search' : 'Show All Deals'}
+                </button>
+              </div>
+            )
           ) : (
-            <div className="text-center py-16 bg-white rounded-[2.5rem] border border-dashed border-slate-200">
-              <AlertCircle className="mx-auto text-slate-200 mb-4" size={56} />
-              <p className="text-slate-400 font-bold">
-                {selectedFeedFilter === 'all'
-                  ? `No live deals within ${radius} miles.`
-                  : `No ${selectedFeedFilter.replace('-', ' ')} deals within ${radius} miles.`}
-              </p>
-              <p className="text-slate-300 text-xs mt-1">Try changing filters or check back later!</p>
-              <button 
-                onClick={() => {
-                  if (selectedFeedFilter !== 'all') {
-                    setSelectedFeedFilter('all');
-                    return;
-                  }
-                  const nextRadius = RADIUS_OPTIONS.find(option => option > radius) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
-                  setRadius(nextRadius);
-                }}
-                className="mt-6 text-indigo-600 font-black text-xs uppercase tracking-[0.2em] hover:tracking-[0.3em] transition-all"
-              >
-                {selectedFeedFilter === 'all' ? 'Expand Search' : 'Show All Deals'}
-              </button>
-            </div>
+            filteredOnlineDealsByTab.length > 0 ? (
+              filteredOnlineDealsByTab.map((deal) => (
+                <div key={deal.id} className="overflow-hidden rounded-[1.55rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40">
+                  <div className="aspect-[16/10] overflow-hidden bg-slate-100">
+                    {deal.imageUrl ? (
+                      <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100 text-slate-300">
+                        <AppIcon name="online" size={28} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-3.5">
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        {getOnlineDropTag(deal.id) ? (
+                          <span className="mb-1.5 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
+                            <AppIcon name={getFeedTagIconName(getOnlineDropTag(deal.id)!)} size={11} />
+                            {getOnlineDropTag(deal.id)}
+                          </span>
+                        ) : null}
+                        <p className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-indigo-500">
+                          <AppIcon name={getCategoryIconName(deal.category)} size={12} />
+                          {getCategoryLabel(deal.category)}
+                        </p>
+                        <h3 className="mt-1 text-[1.02rem] font-extrabold leading-[1.2] text-slate-900">{deal.title}</h3>
+                        <p className="mt-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">{deal.businessName}</p>
+                      </div>
+                      {deal.hasTimer ? <Timer expiresAt={deal.expiresAt} className="text-sm" /> : null}
+                    </div>
+                    <div className="mb-2.5 rounded-[1rem] border border-indigo-100 bg-indigo-50/80 px-3.5 py-2">
+                      <p className="text-[1.02rem] font-black text-indigo-600">{deal.offerText}</p>
+                    </div>
+                    <p className="mb-3.5 text-[13px] leading-[1.6] text-slate-500">{deal.description}</p>
+                    <button
+                      onClick={() => window.open(deal.productUrl ?? deal.websiteUrl ?? '#', '_blank', 'noopener,noreferrer')}
+                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-black text-white transition-all hover:bg-slate-800 shadow-lg shadow-slate-200/50"
+                    >
+                      <AppIcon name="external" size={16} />
+                      View Deal
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-10 bg-white rounded-[1.7rem] border border-dashed border-slate-200 shadow-sm shadow-slate-200/30">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
+                  <AppIcon name="alert" size={28} />
+                </div>
+                <p className="text-slate-500 font-semibold">
+                  {selectedFeedFilter === 'all'
+                    ? 'No online drops in this category right now.'
+                    : `No ${selectedFeedFilter.replace('-', ' ')} online drops right now.`}
+                </p>
+                <p className="text-slate-300 text-xs mt-1.5">Try another tab or category and check back soon.</p>
+              </div>
+            )
           )}
         </section>
 
-        {expiredDeals.length > 0 && (
+        {dropMode === 'local' && expiredLocalDeals.length > 0 && (
           <div className="pt-8">
             <h3 className="text-slate-300 text-[10px] font-black uppercase tracking-[0.2em] mb-6 text-center">Recently Expired</h3>
             <div className="opacity-40 grayscale pointer-events-none space-y-4">
-              {expiredDeals.slice(0, 2).map(deal => (
+              {expiredLocalDeals.slice(0, 2).map(deal => (
                 <DealCard key={deal.id} deal={deal} onClaim={() => {}} computedDistance={deal.computedDistanceLabel} />
               ))}
             </div>
@@ -1166,6 +1377,7 @@ export default function App() {
                       onClick={() => void handleCopyClaimCode(claim.id, claim.claimCode)}
                       className="mt-2 inline-flex items-center gap-2 rounded-xl bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-600 transition-colors hover:bg-indigo-100"
                     >
+                      <AppIcon name="deal" size={16} />
                       Copy Code
                     </button>
                   </div>
@@ -1175,7 +1387,7 @@ export default function App() {
                       onClick={() => handleRedeemClaim(claim.id)}
                       className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-slate-200"
                     >
-                      <CheckCircle size={18} />
+                      <AppIcon name="check" size={18} />
                       MARK AS REDEEMED
                     </button>
                   )}
@@ -1185,7 +1397,9 @@ export default function App() {
           </div>
         ) : (
           <div className="text-center py-24">
-            <Ticket className="mx-auto text-slate-100 mb-6" size={80} />
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-slate-50 text-slate-200">
+              <AppIcon name="claims" size={36} />
+            </div>
             <p className="text-slate-400 font-bold">You haven't claimed any deals yet.</p>
             <button 
               onClick={() => setCurrentView('live-deals')}
@@ -1218,7 +1432,7 @@ export default function App() {
             className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
             title="Refresh Catalog"
           >
-            <RefreshCw size={18} />
+            <AppIcon name="refresh" size={18} />
           </button>
         </div>
 
@@ -1231,7 +1445,10 @@ export default function App() {
                     <CompanyLogo businessName={coupon.businessName} logoUrl={coupon.logoUrl} category={coupon.category} size={42} />
                     <div className="min-w-0">
                       <p className="text-indigo-500 text-[10px] font-black uppercase tracking-widest mb-1">
-                        {getCategoryLabel(coupon.category)}
+                        <span className="inline-flex items-center gap-1.5">
+                          <AppIcon name={getCategoryIconName(coupon.category)} size={12} />
+                          {getCategoryLabel(coupon.category)}
+                        </span>
                       </p>
                       <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-1">{coupon.businessName}</p>
                       <h3 className="text-slate-900 text-lg font-bold leading-tight">{coupon.title}</h3>
@@ -1292,7 +1509,7 @@ export default function App() {
                   onClick={() => handleRedeemCatalogCoupon(coupon.id)}
                   className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-slate-200"
                 >
-                  <Percent size={18} />
+                  <AppIcon name="percent" size={18} />
                   REDEEM FROM CATALOG
                 </button>
               </div>
@@ -1300,7 +1517,9 @@ export default function App() {
           </div>
         ) : (
           <div className="text-center py-20 bg-white rounded-[2.5rem] border border-dashed border-slate-200">
-            <Bookmark className="mx-auto text-slate-200 mb-4" size={56} />
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
+              <AppIcon name="catalog" size={28} />
+            </div>
             <p className="text-slate-400 font-bold">No saved coupons in your Catalog yet.</p>
             <p className="text-slate-300 text-xs mt-1">Save eligible deals to keep them for later.</p>
           </div>
@@ -1391,7 +1610,7 @@ export default function App() {
             }}
             className="bg-indigo-600 p-3 rounded-2xl text-white shadow-xl shadow-indigo-200 hover:scale-105 transition-transform"
           >
-            <Plus size={24} />
+            <AppIcon name="plus" size={24} />
           </button>
         </div>
 
@@ -1429,7 +1648,7 @@ export default function App() {
                       onClick={() => handleCancelDeal(deal.id)}
                       className="text-slate-300 hover:text-rose-500 transition-colors p-2"
                     >
-                      <Trash2 size={20} />
+                      <AppIcon name="trash" size={20} />
                     </button>
                   </div>
                 </div>
@@ -1458,7 +1677,7 @@ export default function App() {
           }}
           className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-lg flex items-center justify-center gap-3 shadow-2xl shadow-slate-200 hover:bg-slate-800 transition-all"
         >
-          <Plus size={24} />
+          <AppIcon name="plus" size={24} />
           CREATE NEW DROP
         </button>
       </div>

@@ -1,10 +1,15 @@
 export interface Deal {
   id: string;
+  businessType?: 'local' | 'online';
   businessName: string;
   logoUrl?: string;
+  imageUrl?: string;
   title: string;
   description: string;
   offerText: string;
+  websiteUrl?: string;
+  productUrl?: string;
+  hasTimer?: boolean;
   distance: string; // This will now be a label, but we'll compute actual distance
   lat: number;
   lng: number;

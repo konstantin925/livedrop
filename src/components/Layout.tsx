@@ -1,6 +1,7 @@
 import React from 'react';
 import { AppNotification, UserRole, View } from '../types';
-import { Ticket, Briefcase, MapPin, Bookmark, Bell, LogOut, Zap } from 'lucide-react';
+import { Zap } from 'lucide-react';
+import { AppIcon } from './AppIcon';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -35,21 +36,27 @@ export const Layout: React.FC<LayoutProps> = ({
   onOpenAuth,
   onSignOut,
 }) => {
+  const getNotificationIcon = (type: AppNotification['type']) => {
+    if (type === 'new_deal') return 'live' as const;
+    if (type === 'ending_soon') return 'ending' as const;
+    return 'percent' as const;
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden border-x border-slate-200">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col max-w-[390px] mx-auto shadow-[0_24px_70px_rgba(15,23,42,0.12)] overflow-hidden border-x border-slate-200/80">
       {/* Header */}
-      <header className="p-5 pt-7 flex justify-between items-center border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-50">
+      <header className="px-4 py-3.5 pt-5.5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex flex-col justify-center items-start">
           <div className="flex items-baseline gap-1.5 leading-none">
-            <h1 className="text-[1.48rem] font-black tracking-[-0.06em] text-slate-800">LIVE</h1>
-            <h1 className="text-[1.48rem] font-black tracking-[-0.06em] text-indigo-600">DROP</h1>
+            <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-slate-800">LIVE</h1>
+            <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-indigo-600">DROP</h1>
             <Zap size={28} className="text-indigo-600 shrink-0 translate-y-[2px]" fill="currentColor" strokeWidth={1.75} />
           </div>
-          <p className="mt-1 text-[0.64rem] font-medium tracking-[0.14em] text-slate-400">
+          <p className="mt-0.5 text-[0.6rem] font-medium tracking-[0.12em] text-slate-400">
             don&apos;t miss the drop
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {isAuthenticated ? (
             <div className="hidden sm:flex items-center gap-2 rounded-full bg-slate-100 pl-2 pr-3 py-1.5">
               {userAvatarUrl ? (
@@ -61,34 +68,34 @@ export const Layout: React.FC<LayoutProps> = ({
               )}
               <span className="text-[10px] font-bold text-slate-600 max-w-[110px] truncate">{userEmail}</span>
               <button onClick={onSignOut} className="text-slate-400 hover:text-slate-700">
-                <LogOut size={14} />
+                <AppIcon name="logout" size={14} />
               </button>
             </div>
           ) : (
             <button
               onClick={onOpenAuth}
-              className="hidden sm:inline-flex rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider px-3 py-2 shadow-lg shadow-indigo-100"
+              className="hidden sm:inline-flex rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-[0.14em] px-3 py-2 shadow-lg shadow-indigo-100/70"
             >
               Sign In
             </button>
           )}
-          <button onClick={onToggleNotifications} className="relative bg-slate-100 p-2 rounded-full text-slate-500">
-            <Bell size={18} />
+          <button onClick={onToggleNotifications} className="relative bg-slate-100/90 hover:bg-slate-100 p-2 rounded-full text-slate-500 transition-colors">
+            <AppIcon name="bell" size={18} />
             {unreadNotificationCount > 0 ? (
               <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-indigo-600 text-white text-[9px] font-black flex items-center justify-center">
                 {unreadNotificationCount}
               </span>
             ) : null}
           </button>
-          <div className="bg-slate-100 p-2 rounded-full text-slate-500">
-            <MapPin size={18} />
+          <div className="bg-slate-100/90 p-2 rounded-full text-slate-500">
+            <AppIcon name="pin" size={18} />
           </div>
           {isAuthenticated ? (
-            <button onClick={onSignOut} className="sm:hidden bg-slate-100 p-2 rounded-full text-slate-500">
-              <LogOut size={18} />
+            <button onClick={onSignOut} className="sm:hidden bg-slate-100/90 p-2 rounded-full text-slate-500">
+              <AppIcon name="logout" size={18} />
             </button>
           ) : (
-            <button onClick={onOpenAuth} className="sm:hidden bg-indigo-600 px-2.5 py-2 rounded-full text-white text-[10px] font-black uppercase tracking-[0.16em]">
+            <button onClick={onOpenAuth} className="sm:hidden bg-indigo-600 px-2.5 py-2 rounded-full text-white text-[10px] font-black uppercase tracking-[0.14em] shadow-lg shadow-indigo-100/70">
               Sign In
             </button>
           )}
@@ -96,65 +103,77 @@ export const Layout: React.FC<LayoutProps> = ({
       </header>
 
       {notificationsOpen ? (
-        <div className="absolute top-[88px] right-4 left-4 z-[90]">
-          <div className="rounded-3xl border border-slate-100 bg-white shadow-2xl shadow-slate-200 p-4 max-h-[50vh] overflow-y-auto">
+        <div className="absolute top-[82px] right-3 left-3 z-[90]">
+          <div className="rounded-[1.75rem] border border-slate-100 bg-white shadow-2xl shadow-slate-200/70 p-3.5 max-h-[50vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-black uppercase tracking-[0.18em] text-slate-900">Notifications</h2>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <h2 className="text-[13px] font-black uppercase tracking-[0.16em] text-slate-900">Notifications</h2>
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                 {notifications.length}
               </span>
             </div>
             {notifications.length > 0 ? (
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {notifications.map((notification) => (
                   <div
                     key={notification.id}
-                    className={`rounded-2xl border px-4 py-3 ${notification.read ? 'border-slate-100 bg-slate-50' : 'border-indigo-100 bg-indigo-50/60'}`}
+                    className={`rounded-[1.25rem] border px-3.5 py-3 ${notification.read ? 'border-slate-100 bg-slate-50' : 'border-indigo-100 bg-indigo-50/60'}`}
                   >
-                    <p className="text-sm font-semibold text-slate-800">{notification.message}</p>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-1">
-                      {new Date(notification.timestamp).toLocaleString()}
-                    </p>
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${notification.read ? 'bg-white text-slate-400' : 'bg-white text-indigo-600'}`}>
+                        <AppIcon name={getNotificationIcon(notification.type)} size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">{notification.message}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-1">
+                          {new Date(notification.timestamp).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-400 text-center py-6">No notifications yet.</p>
+              <div className="py-6 text-center">
+                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-[1.5rem] bg-slate-50 text-slate-300">
+                  <AppIcon name="bell" size={24} />
+                </div>
+                <p className="text-sm text-slate-400">No notifications yet.</p>
+              </div>
             )}
           </div>
         </div>
       ) : null}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto p-4 pb-24">
+      <main className="flex-1 overflow-y-auto px-3 py-2.5 pb-[4.5rem]">
         {children}
       </main>
 
       {/* Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-slate-100 px-6 py-4 flex justify-between items-center z-50">
+      <nav className="fixed bottom-0 left-0 right-0 max-w-[390px] mx-auto bg-white/94 backdrop-blur-xl border-t border-slate-100 px-4 py-1.5 flex justify-between items-center z-50">
         <NavButton 
           active={currentView === 'live-deals'} 
           onClick={() => onViewChange('live-deals')}
-          icon={<Zap size={22} className="text-current" />}
+          icon={<AppIcon name="play" size={18} className="text-current" />}
           label="Live"
         />
         <NavButton 
           active={currentView === 'catalog'} 
           onClick={() => onViewChange('catalog')}
-          icon={<Bookmark size={24} />}
+          icon={<AppIcon name="catalog" size={18} />}
           label="Catalog"
           badge={activeCatalogCount > 0 ? activeCatalogCount : undefined}
         />
         <NavButton 
           active={currentView === 'my-claims'} 
           onClick={() => onViewChange('my-claims')}
-          icon={<Ticket size={24} />}
+          icon={<AppIcon name="claims" size={18} />}
           label="Claims"
         />
         <NavButton 
           active={currentView === 'business-portal'} 
           onClick={() => onViewChange('business-portal')}
-          icon={<Briefcase size={24} />}
+          icon={<AppIcon name="portal" size={18} />}
           label={role === 'business' ? 'Portal' : 'Upgrade'}
         />
       </nav>
@@ -173,7 +192,7 @@ interface NavButtonProps {
 const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, badge }) => (
   <button 
     onClick={onClick}
-    className={`relative flex flex-col items-center gap-1 transition-all ${active ? 'text-indigo-600 scale-110' : 'text-slate-400'}`}
+    className={`relative flex min-w-[58px] flex-col items-center gap-0.5 rounded-2xl px-2 py-1 transition-all ${active ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-500'}`}
   >
     {icon}
     {badge ? (
@@ -181,6 +200,6 @@ const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, bad
         {badge}
       </span>
     ) : null}
-    <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
+    <span className={`text-[9px] font-bold uppercase tracking-[0.1em] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
   </button>
 );

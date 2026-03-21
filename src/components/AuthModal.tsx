@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Chrome, ShieldCheck, Mail } from 'lucide-react';
+import { AppIcon } from './AppIcon';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -32,12 +32,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-sm rounded-[2rem] border border-slate-100 bg-white p-8 shadow-2xl shadow-slate-300">
         <button onClick={onClose} className="absolute top-5 right-5 text-slate-300 hover:text-slate-600">
-          <X size={22} />
+          <AppIcon name="close" size={22} />
         </button>
 
         <div className="mb-6">
           <div className="w-14 h-14 rounded-3xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-5">
-            <ShieldCheck size={26} />
+            <AppIcon name="shield" size={26} />
           </div>
           <h2 className="text-2xl font-black text-slate-900">Sign in to LiveDrop</h2>
           <p className="text-sm text-slate-500 mt-2 leading-relaxed">
@@ -50,7 +50,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           disabled={loading}
           className="w-full py-4 rounded-2xl bg-white border border-slate-200 text-slate-900 font-black text-sm flex items-center justify-center gap-3 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
         >
-          <Chrome size={18} />
+          <AppIcon name="google" size={18} />
           {loading ? 'Connecting...' : 'Continue with Google'}
         </button>
 
@@ -120,7 +120,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             disabled={loading}
             className="w-full py-4 rounded-2xl bg-slate-950 text-white font-black text-sm flex items-center justify-center gap-3 hover:bg-slate-800 transition-all disabled:opacity-60"
           >
-            <Mail size={18} />
+            <AppIcon name="mail" size={18} />
             {loading ? 'Saving...' : mode === 'signin' ? 'Continue with Email' : 'Create Account'}
           </button>
         </form>

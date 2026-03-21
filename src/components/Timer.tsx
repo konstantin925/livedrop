@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AppIcon } from './AppIcon';
 
 interface TimerProps {
   expiresAt: number;
@@ -35,7 +36,8 @@ export const Timer: React.FC<TimerProps> = ({ expiresAt, onExpire, className = "
   const isUrgent = timeLeft < 5 * 60000; // Less than 5 mins
 
   return (
-    <div className={`font-mono font-bold tabular-nums ${isUrgent ? 'text-rose-500 animate-pulse' : 'text-indigo-600'} ${className}`}>
+    <div className={`inline-flex items-center gap-1.5 font-mono font-bold tabular-nums ${isUrgent ? 'text-rose-500 animate-pulse' : 'text-indigo-600'} ${className}`}>
+      <AppIcon name="clock" size={14} className="shrink-0" />
       {timeLeft > 0 ? (
         `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
       ) : (

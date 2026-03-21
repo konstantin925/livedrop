@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Deal, Claim } from '../types';
-import { X, CheckCircle2, Ticket, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyTextToClipboard, ClipboardCopyResult } from '../utils/clipboard';
+import { AppIcon } from './AppIcon';
 
 interface ClaimModalProps {
   deal: Deal | null;
@@ -54,7 +54,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
             onClick={onClose}
             className="absolute top-6 right-6 text-slate-300 hover:text-slate-600 transition-colors"
           >
-            <X size={24} />
+            <AppIcon name="close" size={24} />
           </button>
 
           {!claim ? (
@@ -82,7 +82,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
             <div className="text-center py-4">
               <div className="flex justify-center mb-6">
                 <div className="bg-emerald-50 p-6 rounded-full">
-                  <CheckCircle2 size={56} className="text-emerald-500" />
+                  <AppIcon name="check" size={56} className="text-emerald-500" strokeWidth={2.2} />
                 </div>
               </div>
               <h2 className="text-2xl font-black mb-2 text-emerald-600">Success!</h2>
@@ -115,7 +115,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
                   onClick={() => void handleCopyCode(claim.claimCode)}
                   className="mt-2 inline-flex items-center gap-2 rounded-xl bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-600 transition-colors hover:bg-indigo-100"
                 >
-                  <Copy size={16} />
+                  <AppIcon name="deal" size={16} />
                   Copy Code
                 </button>
               </div>
@@ -125,7 +125,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
                   onClick={onViewClaims}
                   className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
                 >
-                  <Ticket size={18} />
+                  <AppIcon name="claims" size={18} />
                   VIEW MY CLAIMS
                 </button>
                 <button

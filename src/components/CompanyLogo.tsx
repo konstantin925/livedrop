@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Store } from 'lucide-react';
+import { AppIcon } from './AppIcon';
 
 interface CompanyLogoProps {
   businessName: string;
@@ -128,7 +128,7 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl,
         <>
           <div className={`absolute inset-[1px] rounded-[1rem] bg-gradient-to-br from-white/35 via-transparent ${palette.overlay} pointer-events-none`} />
           <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] pointer-events-none" />
-          <Store size={Math.floor(size * 0.38)} className={`relative ${palette.icon}`} />
+          <AppIcon name="store" size={Math.floor(size * 0.38)} className={`relative ${palette.icon}`} />
         </>
       )}
     </div>

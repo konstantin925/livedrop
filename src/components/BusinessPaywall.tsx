@@ -1,5 +1,5 @@
 import React from 'react';
-import { BriefcaseBusiness, CheckCircle2, Sparkles } from 'lucide-react';
+import { AppIcon } from './AppIcon';
 
 interface BusinessPaywallProps {
   isAuthenticated: boolean;
@@ -20,7 +20,7 @@ export const BusinessPaywall: React.FC<BusinessPaywallProps> = ({
     <div className="space-y-6">
       <div className="bg-white border border-slate-100 rounded-[2.5rem] p-8 shadow-sm">
         <div className="w-16 h-16 rounded-[1.5rem] bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-500 text-white flex items-center justify-center shadow-xl shadow-indigo-100 mb-6">
-          <BriefcaseBusiness size={28} />
+          <AppIcon name="portal" size={28} />
         </div>
         <h2 className="text-2xl font-black text-slate-950">Start Business Access</h2>
         <p className="mt-3 text-sm leading-relaxed text-slate-500">
@@ -41,15 +41,15 @@ export const BusinessPaywall: React.FC<BusinessPaywallProps> = ({
 
           <div className="mt-5 space-y-3">
             <div className="flex items-center gap-3 text-sm font-semibold text-slate-700">
-              <CheckCircle2 size={16} className="text-indigo-500 shrink-0" />
+              <AppIcon name="check" size={16} className="text-indigo-500 shrink-0" />
               Create and manage live local deals
             </div>
             <div className="flex items-center gap-3 text-sm font-semibold text-slate-700">
-              <CheckCircle2 size={16} className="text-indigo-500 shrink-0" />
+              <AppIcon name="check" size={16} className="text-indigo-500 shrink-0" />
               Reach nearby customers instantly
             </div>
             <div className="flex items-center gap-3 text-sm font-semibold text-slate-700">
-              <CheckCircle2 size={16} className="text-indigo-500 shrink-0" />
+              <AppIcon name="check" size={16} className="text-indigo-500 shrink-0" />
               Ready for more plans and upgrades later
             </div>
           </div>
@@ -79,7 +79,7 @@ export const BusinessPaywall: React.FC<BusinessPaywallProps> = ({
         )}
 
         <div className="mt-4 flex items-center gap-2 text-[11px] font-semibold text-slate-400 uppercase tracking-[0.18em]">
-          <Sparkles size={14} className="text-indigo-400" />
+          <AppIcon name="spark" size={14} className="text-indigo-400" />
           Clean setup, one app, business tools unlocked after subscription
         </div>
       </div>
