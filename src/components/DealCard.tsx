@@ -49,10 +49,10 @@ export const DealCard: React.FC<DealCardProps> = ({
 
   if (compact) {
     return (
-      <div className={`bg-white border ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100'} rounded-[1.35rem] p-3 shadow-sm shadow-slate-200/40`}>
+      <div className={`bg-white border ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100'} rounded-[1.28rem] p-2.5 shadow-sm shadow-slate-200/40`}>
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={34} />
+          <div className="flex items-start gap-2 min-w-0">
+            <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={32} />
             <div className="min-w-0">
               <p className={`text-[9px] font-black uppercase tracking-[0.16em] mb-1 ${isExpired ? 'text-slate-300' : 'text-indigo-500'}`}>
                 <span className="inline-flex items-center gap-1.5">
@@ -61,7 +61,7 @@ export const DealCard: React.FC<DealCardProps> = ({
                 </span>
               </p>
               <p className="text-slate-400 text-[9px] font-black uppercase tracking-[0.14em] mb-1">{deal.businessName}</p>
-              <h3 className="text-slate-900 text-[14px] font-extrabold leading-tight">{deal.title}</h3>
+              <h3 className="text-slate-900 text-[13px] font-extrabold leading-tight">{deal.title}</h3>
               <p className={`mt-1.5 text-sm font-black italic tracking-tight ${isExpired ? 'text-slate-300' : 'text-indigo-600'}`}>
                 {deal.offerText}
               </p>
@@ -70,7 +70,7 @@ export const DealCard: React.FC<DealCardProps> = ({
           <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="text-sm" />
         </div>
 
-        <div className="mt-2.5 flex items-center justify-between gap-2.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex items-center gap-1.5">
               <AppIcon name="pin" size={13} className={isExpired ? 'text-slate-200' : 'text-indigo-400'} />
@@ -84,7 +84,7 @@ export const DealCard: React.FC<DealCardProps> = ({
           <button
             onClick={() => canClaim && onClaim(deal)}
             disabled={!canClaim}
-            className={`inline-flex h-10 shrink-0 items-center justify-center px-3.5 rounded-[0.95rem] font-black text-[10px] uppercase tracking-[0.12em] transition-all ${
+            className={`inline-flex h-9 shrink-0 items-center justify-center px-3 rounded-[0.9rem] font-black text-[10px] uppercase tracking-[0.1em] transition-all ${
               canClaim
                 ? 'bg-indigo-600 text-white'
                 : isClaimed
@@ -100,13 +100,13 @@ export const DealCard: React.FC<DealCardProps> = ({
   }
 
   return (
-      <div className={`bg-white border ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100'} rounded-[1.55rem] p-4 mb-2.5 shadow-sm shadow-slate-200/50 hover:shadow-md hover:shadow-slate-200/60 transition-all active:scale-[0.985]`}>
+      <div className={`bg-white border ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100'} rounded-[1.45rem] p-3.5 mb-2.5 shadow-sm shadow-slate-200/50 hover:shadow-md hover:shadow-slate-200/60 transition-all active:scale-[0.985]`}>
       <div className="flex justify-between items-start mb-2">
         <div className="flex items-start gap-2.5 min-w-0">
-          <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={38} />
+          <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={36} />
           <div className="min-w-0">
             {badges.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <div className="flex flex-wrap gap-1.5 mb-1">
                 {badges.map((badge) => (
                   <span
                     key={badge}
@@ -125,23 +125,23 @@ export const DealCard: React.FC<DealCardProps> = ({
               </span>
             </p>
             <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-[0.14em] mb-1">{deal.businessName}</h3>
-            <h2 className="text-slate-900 text-[1rem] font-extrabold leading-[1.15]">{deal.title}</h2>
+            <h2 className="text-slate-900 text-[0.98rem] font-extrabold leading-[1.15]">{deal.title}</h2>
           </div>
         </div>
         <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="text-lg" />
       </div>
 
-      <div className={`rounded-[1rem] p-3 mb-2.5 border transition-colors ${isExpired ? 'bg-slate-50 border-slate-100' : 'bg-indigo-50/80 border-indigo-100'}`}>
+      <div className={`rounded-[0.95rem] p-2.5 mb-2 border transition-colors ${isExpired ? 'bg-slate-50 border-slate-100' : 'bg-indigo-50/80 border-indigo-100'}`}>
         <span className={`font-black text-[1.35rem] italic tracking-tighter ${isExpired ? 'text-slate-300' : 'text-indigo-600'}`}>
           {deal.offerText}
         </span>
       </div>
 
-      <p className={`text-[12px] mb-2.5 leading-[1.55] ${isExpired ? 'text-slate-300' : 'text-slate-500'}`}>
+      <p className={`text-[12px] mb-2 leading-[1.5] ${isExpired ? 'text-slate-300' : 'text-slate-500'}`}>
         {deal.description}
       </p>
 
-      <div className="flex items-center gap-3.5 mb-3 text-slate-400 text-[10px] font-bold uppercase tracking-[0.12em]">
+      <div className="flex items-center gap-3 mb-2.5 text-slate-400 text-[10px] font-bold uppercase tracking-[0.1em]">
         <div className="flex items-center gap-1.5">
           <AppIcon name="pin" size={14} className={isExpired ? 'text-slate-200' : 'text-indigo-400'} />
           {computedDistance || deal.distance}
@@ -152,11 +152,11 @@ export const DealCard: React.FC<DealCardProps> = ({
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <button
           onClick={() => canClaim && onClaim(deal)}
           disabled={!canClaim}
-          className={`inline-flex h-10 w-full items-center justify-center rounded-[1rem] px-3.5 font-black text-[12px] uppercase tracking-[0.12em] transition-all shadow-lg ${
+          className={`inline-flex h-9.5 w-full items-center justify-center rounded-[0.95rem] px-3 font-black text-[11px] uppercase tracking-[0.1em] transition-all shadow-lg ${
             canClaim 
               ? 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 shadow-indigo-200/80' 
               : isClaimed 
@@ -171,7 +171,7 @@ export const DealCard: React.FC<DealCardProps> = ({
           <button
             onClick={() => !isSavedToCatalog && onSaveToCatalog(deal)}
             disabled={isSavedToCatalog}
-            className={`inline-flex h-10 w-full items-center justify-center rounded-[1rem] px-3.5 font-black text-[12px] uppercase tracking-[0.12em] transition-all ${
+            className={`inline-flex h-9.5 w-full items-center justify-center rounded-[0.95rem] px-3 font-black text-[11px] uppercase tracking-[0.1em] transition-all ${
               isSavedToCatalog
                 ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
                 : 'bg-white border border-indigo-100 text-indigo-600 hover:bg-indigo-50/80'

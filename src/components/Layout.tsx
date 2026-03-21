@@ -45,7 +45,7 @@ export const Layout: React.FC<LayoutProps> = ({
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col max-w-[390px] mx-auto shadow-[0_24px_70px_rgba(15,23,42,0.12)] overflow-hidden border-x border-slate-200/80">
       {/* Header */}
-      <header className="px-4 py-3.5 pt-5.5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
+      <header className="px-4 py-3 pt-5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex flex-col justify-center items-start">
           <div className="flex items-baseline gap-1.5 leading-none">
             <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-slate-800">LIVE</h1>
@@ -103,7 +103,7 @@ export const Layout: React.FC<LayoutProps> = ({
       </header>
 
       {notificationsOpen ? (
-        <div className="absolute top-[82px] right-3 left-3 z-[90]">
+        <div className="absolute top-[78px] right-3 left-3 z-[90]">
           <div className="rounded-[1.75rem] border border-slate-100 bg-white shadow-2xl shadow-slate-200/70 p-3.5 max-h-[50vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-[13px] font-black uppercase tracking-[0.16em] text-slate-900">Notifications</h2>
@@ -145,7 +145,7 @@ export const Layout: React.FC<LayoutProps> = ({
       ) : null}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto px-3 py-2.5 pb-[4.5rem]">
+      <main className="flex-1 overflow-y-auto px-3 py-2 pb-[4.35rem]">
         {children}
       </main>
 
@@ -192,7 +192,7 @@ interface NavButtonProps {
 const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, badge }) => (
   <button 
     onClick={onClick}
-    className={`relative flex min-w-[58px] flex-col items-center gap-0.5 rounded-2xl px-2 py-1 transition-all ${active ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-500'}`}
+    className={`relative flex min-w-[56px] flex-col items-center gap-0.5 rounded-2xl px-1.5 py-0.5 transition-all ${active ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-500'}`}
   >
     {icon}
     {badge ? (
@@ -200,6 +200,6 @@ const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, bad
         {badge}
       </span>
     ) : null}
-    <span className={`text-[9px] font-bold uppercase tracking-[0.1em] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
+    <span className={`text-[8px] font-bold uppercase tracking-[0.08em] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
   </button>
 );

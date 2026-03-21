@@ -32,6 +32,7 @@ const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
+const LOCAL_ADMIN_MODE = true;
 
 const USER_PROFILE_TABLE = 'profiles';
 const USER_STATE_TABLE = 'user_app_state';
@@ -133,9 +134,11 @@ const readStoredNotifications = (): AppNotification[] => {
 const readStoredRole = (): UserRole => {
   try {
     const raw = localStorage.getItem(ROLE_STORAGE_KEY);
-    return raw === 'business' ? 'business' : 'customer';
+    if (raw === 'business') return 'business';
+    if (raw === 'customer') return LOCAL_ADMIN_MODE ? 'business' : 'customer';
+    return LOCAL_ADMIN_MODE ? 'business' : 'customer';
   } catch {
-    return 'customer';
+    return LOCAL_ADMIN_MODE ? 'business' : 'customer';
   }
 };
 
@@ -145,6 +148,42 @@ const getDistanceForDeal = (location: UserLocation, deal: Deal) =>
 const getRadiusForDeal = (location: UserLocation, deal: Deal) => {
   const distance = getDistanceForDeal(location, deal);
   return RADIUS_OPTIONS.find(option => distance <= option) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
+};
+
+const parseDistanceLabel = (distanceLabel: string): number | null => {
+  const normalized = distanceLabel.trim().toLowerCase();
+
+  if (normalized.startsWith('<')) {
+    const value = Number.parseFloat(normalized.replace(/[^0-9.]/g, ''));
+    return Number.isFinite(value) ? value : 0.1;
+  }
+
+  const value = Number.parseFloat(normalized.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(value) ? value : null;
+};
+
+const getEffectiveLocalDealDistance = (location: UserLocation, deal: Deal): number => {
+  const hasUsableCoordinates =
+    Number.isFinite(deal.lat) &&
+    Number.isFinite(deal.lng) &&
+    !(deal.lat === 0 && deal.lng === 0);
+
+  if (hasUsableCoordinates) {
+    return calculateDistance(location.lat, location.lng, deal.lat, deal.lng);
+  }
+
+  const fallbackDistance = parseDistanceLabel(deal.distance);
+  return fallbackDistance ?? Number.POSITIVE_INFINITY;
+};
+
+const mergeMissingSeededOnlineDeals = (existingDeals: Deal[]): Deal[] => {
+  const seededOnlineDeals = generateSeededOnlineDeals();
+  const existingIds = new Set(existingDeals.map((deal) => deal.id));
+  const missingSeededOnlineDeals = seededOnlineDeals.filter((deal) => !existingIds.has(deal.id));
+
+  return missingSeededOnlineDeals.length > 0
+    ? [...missingSeededOnlineDeals, ...existingDeals]
+    : existingDeals;
 };
 
 export default function App() {
@@ -179,12 +218,13 @@ export default function App() {
   const [authInfo, setAuthInfo] = useState('');
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
-  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>('inactive');
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
   const cloudHydratedRef = useRef(false);
   const isBusinessSubscribed = role === 'business' && subscriptionStatus === 'active';
+  const hasPortalAccess = LOCAL_ADMIN_MODE || isBusinessSubscribed;
 
   const getLocalCloudState = () => ({
     claims: readStoredClaims(),
@@ -286,15 +326,17 @@ export default function App() {
     const savedRole = readStoredRole();
 
     if (savedDeals.length > 0) {
-      const seededOnlineDeals = savedDeals.some((deal) => deal.businessType === 'online')
-        ? savedDeals
-        : [...savedDeals, ...generateSeededOnlineDeals()];
+      const hydratedDeals = mergeMissingSeededOnlineDeals(savedDeals);
 
-      setDeals(seededOnlineDeals);
-      seenDealIdsRef.current = new Set(seededOnlineDeals.map((deal) => deal.id));
+      setDeals(hydratedDeals);
+      seenDealIdsRef.current = new Set(hydratedDeals.map((deal) => deal.id));
     }
 
     setRole(savedRole);
+    if (LOCAL_ADMIN_MODE) {
+      setSubscriptionStatus('active');
+      setSubscriptionPlan(BUSINESS_PLAN_ID);
+    }
     setClaims(savedClaims);
     setNotifications(savedNotifications);
     const refreshedCatalog = refreshCatalogCoupons(savedCatalog);
@@ -392,6 +434,21 @@ export default function App() {
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
+  };
+
+  const restartLocalDeals = (locationOverride?: UserLocation) => {
+    const nextLocation = locationOverride ?? userLocation;
+    const refreshedLocalDeals = generateSeededDeals(nextLocation);
+
+    setDeals((prevDeals) => {
+      const preservedOnlineDeals = prevDeals.filter((deal) => deal.businessType === 'online');
+      const nextDeals = [...refreshedLocalDeals, ...preservedOnlineDeals];
+      seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
+      return nextDeals;
+    });
+
+    setSelectedFeedFilter('all');
+    setCurrentView('live-deals');
   };
 
   useEffect(() => {
@@ -847,6 +904,15 @@ export default function App() {
   };
 
   const handleOpenBusinessPortal = () => {
+    if (LOCAL_ADMIN_MODE) {
+      setRole('business');
+      setSubscriptionStatus('active');
+      setSubscriptionPlan(BUSINESS_PLAN_ID);
+      setSubscriptionMessage('');
+      setCurrentView('business-portal');
+      return;
+    }
+
     if (!session) {
       setAuthError('Sign in with Google to start business access.');
       setAuthModalOpen(true);
@@ -864,7 +930,7 @@ export default function App() {
       return;
     }
 
-    if (isBusinessSubscribed) {
+    if (hasPortalAccess) {
       setCurrentView('business-portal');
       return;
     }
@@ -917,7 +983,7 @@ export default function App() {
     const localDeals = deals.filter((deal) => deal.businessType !== 'online');
     const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
     const dealsWithDistance = localDeals.map(deal => {
-      const dist = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
+      const dist = getEffectiveLocalDealDistance(userLocation, deal);
       return { ...deal, computedDistanceValue: dist, computedDistanceLabel: formatDistance(dist) };
     });
 
@@ -997,13 +1063,13 @@ export default function App() {
     });
 
     const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
-    const controlHeightClass = 'h-9.5';
+    const controlHeightClass = 'h-9';
     const controlRadiusClass = 'rounded-xl';
-    const controlPaddingClass = 'px-3';
+    const controlPaddingClass = 'px-2.5';
     const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.12em]';
 
     return (
-      <div className="space-y-4.5">
+      <div className="space-y-4">
         {/* Developer Debug Section */}
         {showDebug && dropMode === 'local' && (
           <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
@@ -1037,9 +1103,7 @@ export default function App() {
               <div className="flex gap-2">
                 <button 
                   onClick={() => {
-                    localStorage.removeItem(DEALS_STORAGE_KEY);
-                    const seeded = [...generateSeededDeals(userLocation), ...generateSeededOnlineDeals()];
-                    setDeals(seeded);
+                    restartLocalDeals();
                   }}
                   className="flex-1 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl font-black text-[8px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                 >
@@ -1053,7 +1117,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-1.5 rounded-[1.4rem] bg-slate-100/90 p-1">
+        <div className="grid grid-cols-2 gap-1.5 rounded-[1.25rem] bg-slate-100/90 p-1">
           {[
             { id: 'local', label: 'Local' },
             { id: 'online', label: 'Online' },
@@ -1065,7 +1129,7 @@ export default function App() {
                 setSelectedCategory('All');
                 setSelectedFeedFilter('all');
               }}
-              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1.1rem] ${controlPaddingClass} text-[10px] font-black transition-all ${
+              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1rem] ${controlPaddingClass} text-[10px] font-black transition-all ${
                 dropMode === option.id
                   ? 'bg-white text-indigo-600 shadow-sm shadow-slate-200/50'
                   : 'bg-transparent text-slate-500'
@@ -1079,8 +1143,8 @@ export default function App() {
 
         {/* Location & Radius Header */}
         {dropMode === 'local' ? (
-          <div className="bg-white border border-slate-100 rounded-[1.55rem] p-3.5 shadow-sm shadow-slate-200/40 mb-3.5">
-            <div className="flex items-center justify-between mb-2.5">
+          <div className="bg-white border border-slate-100 rounded-[1.45rem] p-3 shadow-sm shadow-slate-200/40 mb-3">
+            <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <div className={`p-2 rounded-xl ${locationStatus === 'success' ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
                   <AppIcon name="pin" size={18} className={locationStatus === 'loading' ? 'animate-spin' : ''} />
@@ -1101,9 +1165,9 @@ export default function App() {
               </button>
             </div>
 
-              <div className="flex items-center justify-between pt-2.5 border-t border-slate-50">
+              <div className="flex items-center justify-between pt-2 border-t border-slate-50">
               <span className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">Search Radius</span>
-              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl">
+              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-[0.9rem]">
                 {RADIUS_OPTIONS.map(r => (
                   <button
                     key={r}
@@ -1121,7 +1185,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="bg-white border border-slate-100 rounded-[1.55rem] p-3.5 shadow-sm shadow-slate-200/40 mb-3.5">
+          <div className="bg-white border border-slate-100 rounded-[1.45rem] p-3 shadow-sm shadow-slate-200/40 mb-3">
             <div className="flex items-center gap-2.5">
               <div className="rounded-[1rem] bg-indigo-50 p-2.5 text-indigo-600">
                 <AppIcon name="online" size={18} />
@@ -1134,15 +1198,15 @@ export default function App() {
           </div>
         )}
 
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-0.5">
           <h2 className="text-[1.45rem] font-black tracking-[-0.035em] text-slate-900">{dropMode === 'local' ? 'Live Near You' : 'Online Drops'}</h2>
           <span className="bg-indigo-100/80 text-indigo-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-[0.14em]">
-            {dropMode === 'local' ? activeLocalDeals.length : filteredOnlineDeals.length} Drops
+            {dropMode === 'local' ? filteredActiveLocalDeals.length : filteredOnlineDealsByTab.length} Drops
           </span>
         </div>
 
         <div className="overflow-x-auto pb-0.5 -mx-0.5">
-          <div className="flex min-w-max items-center gap-2 px-1">
+          <div className="flex min-w-max items-center gap-1.5 px-1">
             {activeCategoryOptions.map(category => (
               <button
                 key={category}
@@ -1163,7 +1227,7 @@ export default function App() {
         </div>
 
         <div className="overflow-x-auto pb-0.5 -mx-0.5">
-          <div className="flex min-w-max items-center gap-2 px-1">
+          <div className="flex min-w-max items-center gap-1.5 px-1">
             {[
               { id: 'all', label: 'All' },
               { id: 'trending', label: 'Trending' },
@@ -1188,7 +1252,7 @@ export default function App() {
           </div>
         </div>
 
-        <section className="space-y-2.5">
+        <section className="space-y-2">
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               filteredActiveLocalDeals.map(deal => (
@@ -1222,19 +1286,18 @@ export default function App() {
                       setSelectedFeedFilter('all');
                       return;
                     }
-                    const nextRadius = RADIUS_OPTIONS.find(option => option > radius) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
-                    setRadius(nextRadius);
+                    restartLocalDeals();
                   }}
                   className="mt-5 text-indigo-600 font-black text-xs uppercase tracking-[0.2em] hover:tracking-[0.3em] transition-all"
                 >
-                  {selectedFeedFilter === 'all' ? 'Expand Search' : 'Show All Deals'}
+                  {selectedFeedFilter === 'all' ? 'Restart Local Deals' : 'Show All Deals'}
                 </button>
               </div>
             )
           ) : (
             filteredOnlineDealsByTab.length > 0 ? (
               filteredOnlineDealsByTab.map((deal) => (
-                <div key={deal.id} className="overflow-hidden rounded-[1.55rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40">
+                <div key={deal.id} className="overflow-hidden rounded-[1.45rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40">
                   <div className="aspect-[16/10] overflow-hidden bg-slate-100">
                     {deal.imageUrl ? (
                       <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover" />
@@ -1244,8 +1307,8 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <div className="p-3.5">
-                    <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="p-3">
+                    <div className="mb-2 flex items-start justify-between gap-2.5">
                       <div>
                         {getOnlineDropTag(deal.id) ? (
                           <span className="mb-1.5 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
@@ -1262,13 +1325,22 @@ export default function App() {
                       </div>
                       {deal.hasTimer ? <Timer expiresAt={deal.expiresAt} className="text-sm" /> : null}
                     </div>
-                    <div className="mb-2.5 rounded-[1rem] border border-indigo-100 bg-indigo-50/80 px-3.5 py-2">
+                    <div className="mb-2 rounded-[0.95rem] border border-indigo-100 bg-indigo-50/80 px-3 py-2">
                       <p className="text-[1.02rem] font-black text-indigo-600">{deal.offerText}</p>
                     </div>
-                    <p className="mb-3.5 text-[13px] leading-[1.6] text-slate-500">{deal.description}</p>
+                    <p className="mb-3 text-[12px] leading-[1.55] text-slate-500">{deal.description}</p>
                     <button
-                      onClick={() => window.open(deal.productUrl ?? deal.websiteUrl ?? '#', '_blank', 'noopener,noreferrer')}
-                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-black text-white transition-all hover:bg-slate-800 shadow-lg shadow-slate-200/50"
+                      onClick={() => {
+                        const externalUrl = deal.productUrl ?? deal.websiteUrl;
+                        if (!externalUrl) return;
+                        window.open(externalUrl, '_blank', 'noopener,noreferrer');
+                      }}
+                      disabled={!deal.productUrl && !deal.websiteUrl}
+                      className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-black text-white transition-all shadow-lg shadow-slate-200/50 ${
+                        deal.productUrl || deal.websiteUrl
+                          ? 'bg-slate-900 hover:bg-slate-800'
+                          : 'bg-slate-300 cursor-not-allowed shadow-none'
+                      }`}
                     >
                       <AppIcon name="external" size={16} />
                       View Deal
@@ -1558,6 +1630,107 @@ export default function App() {
   };
 
   const renderBusinessPortal = () => {
+    if (LOCAL_ADMIN_MODE) {
+      if (isCreating) {
+        return (
+          <CreateDealForm
+            onSubmit={handleCreateDeal}
+            onCancel={() => setIsCreating(false)}
+            userLocation={userLocation}
+          />
+        );
+      }
+
+      return (
+        <div className="space-y-8">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-black text-slate-900">Business Portal</h2>
+              {portalSuccessMessage ? (
+                <p className="text-sm font-semibold text-emerald-600 mt-2">{portalSuccessMessage}</p>
+              ) : null}
+            </div>
+            <button
+              onClick={() => {
+                setPortalSuccessMessage('');
+                setIsCreating(true);
+              }}
+              className="bg-indigo-600 p-3 rounded-2xl text-white shadow-xl shadow-indigo-200 hover:scale-105 transition-transform"
+            >
+              <AppIcon name="plus" size={24} />
+            </button>
+          </div>
+
+          <div className="bg-white border border-slate-100 rounded-[2.5rem] p-8 shadow-sm">
+            <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-6">Active Drops</h3>
+
+            <div className="space-y-4">
+              {deals.length > 0 ? (
+                deals.map(deal => (
+                  <div key={deal.id} className="bg-slate-50 border border-slate-100 rounded-3xl p-5">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <CompanyLogo businessName={deal.businessName} logoUrl={deal.logoUrl} category={deal.category} size={40} />
+                        <div className="min-w-0">
+                          <h4 className="text-slate-900 font-bold">{deal.title}</h4>
+                          <p className="text-slate-400 text-[10px] font-black uppercase tracking-wider">{deal.businessName}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <Timer expiresAt={deal.expiresAt} className="text-xs" />
+                        <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full mt-2 ${deal.expiresAt > Date.now() ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
+                          {deal.expiresAt > Date.now() ? 'Active' : 'Expired'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-5 pt-5 border-t border-slate-200/50">
+                      <div className="flex items-center gap-6">
+                        <div className="flex flex-col">
+                          <span className="text-[8px] text-slate-400 font-black uppercase tracking-widest">Claims</span>
+                          <span className="text-lg font-mono font-black text-slate-900">{deal.claimCount ?? deal.currentClaims}/{deal.maxClaims}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleCancelDeal(deal.id)}
+                        className="text-slate-300 hover:text-rose-500 transition-colors p-2"
+                      >
+                        <AppIcon name="trash" size={20} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-slate-400 text-center py-6 text-sm italic">No deals created yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white border border-slate-100 rounded-3xl p-6 flex flex-col items-center justify-center gap-1 shadow-sm">
+              <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Drops</span>
+              <span className="text-3xl font-black text-slate-900">{deals.length}</span>
+            </div>
+            <div className="bg-white border border-slate-100 rounded-3xl p-6 flex flex-col items-center justify-center gap-1 shadow-sm">
+              <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Claims</span>
+              <span className="text-3xl font-black text-slate-900">{deals.reduce((acc, d) => acc + (d.claimCount ?? d.currentClaims), 0)}</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => {
+              setPortalSuccessMessage('');
+              setIsCreating(true);
+            }}
+            className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-lg flex items-center justify-center gap-3 shadow-2xl shadow-slate-200 hover:bg-slate-800 transition-all"
+          >
+            <AppIcon name="plus" size={24} />
+            CREATE NEW DROP
+          </button>
+        </div>
+      );
+    }
+
     if (!session) {
       return (
         <BusinessPaywall
@@ -1572,7 +1745,7 @@ export default function App() {
       );
     }
 
-    if (!isBusinessSubscribed) {
+    if (!hasPortalAccess) {
       return (
         <BusinessPaywall
           isAuthenticated
