@@ -17,7 +17,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 20 * 60 * 1000,
       maxClaims: 15,
       currentClaims: 4,
-      category: 'Food & Drink'
+      claimCount: 4,
+      category: 'Coffee'
     },
     {
       id: 'seed-2',
@@ -31,7 +32,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 35 * 60 * 1000,
       maxClaims: 20,
       currentClaims: 18, // Almost sold out
-      category: 'Food & Drink'
+      claimCount: 18,
+      category: 'Fast Food'
     },
     {
       id: 'seed-3',
@@ -45,7 +47,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 45 * 60 * 1000,
       maxClaims: 3,
       currentClaims: 0,
-      category: 'Health & Fitness'
+      claimCount: 0,
+      category: 'Fitness'
     },
     {
       id: 'seed-4',
@@ -59,7 +62,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 60 * 60 * 1000,
       maxClaims: 30,
       currentClaims: 12,
-      category: 'Food & Drink'
+      claimCount: 12,
+      category: 'Fast Food'
     },
     {
       id: 'seed-5',
@@ -73,7 +77,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 90 * 60 * 1000,
       maxClaims: 10,
       currentClaims: 10, // SOLD OUT
-      category: 'Services'
+      claimCount: 10,
+      category: 'Home'
     },
     {
       id: 'seed-6',
@@ -87,7 +92,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 120 * 60 * 1000,
       maxClaims: 12,
       currentClaims: 5,
-      category: 'Shopping'
+      claimCount: 5,
+      category: 'Home'
     },
     {
       id: 'seed-7',
@@ -101,7 +107,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 40 * 60 * 1000,
       maxClaims: 25,
       currentClaims: 2,
-      category: 'Food & Drink'
+      claimCount: 2,
+      category: 'Fitness'
     },
     {
       id: 'seed-8',
@@ -115,7 +122,8 @@ export function generateSeededDeals(center: UserLocation): Deal[] {
       expiresAt: Date.now() + 180 * 60 * 1000,
       maxClaims: 15,
       currentClaims: 15, // SOLD OUT
-      category: 'Shopping'
+      claimCount: 15,
+      category: 'Pet'
     }
   ];
 

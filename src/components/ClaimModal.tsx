@@ -1,22 +1,36 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Deal, Claim } from '../types';
-import { X, CheckCircle2 } from 'lucide-react';
+import { X, CheckCircle2, Ticket, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { copyTextToClipboard, ClipboardCopyResult } from '../utils/clipboard';
 
 interface ClaimModalProps {
   deal: Deal | null;
   onClose: () => void;
   onConfirm: (deal: Deal) => Claim;
+  onViewClaims: () => void;
 }
 
-export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm }) => {
+export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm, onViewClaims }) => {
   const [claim, setClaim] = useState<Claim | null>(null);
+  const [copyStatus, setCopyStatus] = useState<ClipboardCopyResult | null>(null);
+
+  useEffect(() => {
+    setClaim(null);
+    setCopyStatus(null);
+  }, [deal]);
 
   if (!deal) return null;
+
+  const handleCopyCode = async (claimCode: string) => {
+    const result = await copyTextToClipboard(claimCode);
+    setCopyStatus(result);
+  };
 
   const handleConfirm = () => {
     const newClaim = onConfirm(deal);
     setClaim(newClaim);
+    void handleCopyCode(newClaim.claimCode);
   };
 
   return (
@@ -53,7 +67,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
               <div className="bg-indigo-50 rounded-3xl p-6 mb-8 border border-indigo-100/50">
                 <p className="text-[10px] text-indigo-400 uppercase font-black tracking-widest mb-1">Expires in</p>
                 <p className="text-indigo-600 font-mono text-2xl font-black">
-                  {Math.floor((deal.expiresAt - Date.now()) / 60000)} minutes
+                  {Math.max(0, Math.floor((deal.expiresAt - Date.now()) / 60000))} minutes
                 </p>
               </div>
 
@@ -73,7 +87,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
               </div>
               <h2 className="text-2xl font-black mb-2 text-emerald-600">Success!</h2>
               <p className="text-slate-500 text-sm mb-6">
-                Your deal is claimed. Show this code to the business to redeem.
+                Your deal is claimed.
               </p>
               
               <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 flex flex-col items-center justify-center gap-2 mb-8">
@@ -81,14 +95,46 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
                 <p className="text-3xl font-mono font-black tracking-[0.4em] text-indigo-600">
                   {claim.claimCode}
                 </p>
+                {copyStatus === 'success' ? (
+                  <>
+                    <p className="text-sm font-semibold text-emerald-600 text-center">Claim code copied</p>
+                    <p className="text-xs text-slate-500 text-center">
+                      Your claim code has been copied to your clipboard.
+                      Show this code at the business to redeem your deal.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    {copyStatus === 'error' && (
+                      <p className="text-xs font-semibold text-amber-600 text-center">Could not copy automatically. Tap to copy.</p>
+                    )}
+                    <p className="text-xs text-slate-500 text-center">Show this code at the business to redeem your deal.</p>
+                  </>
+                )}
+                <button
+                  onClick={() => void handleCopyCode(claim.claimCode)}
+                  className="mt-2 inline-flex items-center gap-2 rounded-xl bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-600 transition-colors hover:bg-indigo-100"
+                >
+                  <Copy size={16} />
+                  Copy Code
+                </button>
               </div>
 
-              <button
-                onClick={onClose}
-                className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
-              >
-                AWESOME
-              </button>
+              <div className="space-y-3">
+                <button
+                  onClick={onViewClaims}
+                  className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
+                >
+                  <Ticket size={18} />
+                  VIEW MY CLAIMS
+                </button>
+                <button
+                  onClick={onClose}
+                  className="w-full py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm hover:bg-slate-200 transition-all"
+                >
+                  CLOSE
+                </button>
+              </div>
             </div>
           )}
         </motion.div>

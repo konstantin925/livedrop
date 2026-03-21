@@ -1,6 +1,7 @@
 export interface Deal {
   id: string;
   businessName: string;
+  logoUrl?: string;
   title: string;
   description: string;
   offerText: string;
@@ -11,7 +12,8 @@ export interface Deal {
   expiresAt: number;
   maxClaims: number;
   currentClaims: number;
-  category?: string;
+  claimCount: number;
+  category: string;
 }
 
 export interface UserLocation {
@@ -25,10 +27,42 @@ export interface Claim {
   dealId: string;
   dealTitle: string;
   businessName: string;
+  logoUrl?: string;
+  category: string;
   claimCode: string;
   claimedAt: number;
   expiresAt: number;
   status: 'active' | 'redeemed' | 'expired';
 }
 
-export type View = 'live-deals' | 'my-claims' | 'business-portal';
+export interface CatalogCoupon {
+  id: string;
+  dealId: string;
+  businessName: string;
+  logoUrl?: string;
+  title: string;
+  description: string;
+  category: string;
+  offerText: string;
+  originalDiscount: number | null;
+  currentDiscount: number | null;
+  savedAt: number;
+  lastDiscountUpdateAt: number;
+  lastViewedDiscount: number | null;
+  expiresAt?: number;
+  status: 'active' | 'redeemed' | 'expired';
+}
+
+export interface AppNotification {
+  id: string;
+  message: string;
+  type: 'new_deal' | 'ending_soon' | 'catalog_drop';
+  timestamp: number;
+  read: boolean;
+  dealId?: string;
+  couponId?: string;
+}
+
+export type UserRole = 'customer' | 'business';
+
+export type View = 'live-deals' | 'my-claims' | 'catalog' | 'business-portal';

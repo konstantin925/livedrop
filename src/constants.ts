@@ -5,3 +5,12 @@ export const DEFAULT_LOCATION: UserLocation = {
   lat: 37.7879,
   lng: -122.4075
 };
+
+export const CATEGORY_OPTIONS = [
+  'All',
+  'Fast Food',
+  'Coffee',
+  'Fitness',
+  'Pet',
+  'Home'
+] as const;
