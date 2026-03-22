@@ -10,6 +10,9 @@ export interface Deal {
   title: string;
   description: string;
   offerText: string;
+  likeCount?: number;
+  dislikeCount?: number;
+  shareCount?: number;
   originalPrice?: number | null;
   discountPercent?: number | null;
   affiliateUrl?: string;
@@ -69,7 +72,7 @@ export interface CatalogCoupon {
 export interface AppNotification {
   id: string;
   message: string;
-  type: 'new_deal' | 'ending_soon' | 'catalog_drop';
+  type: 'new_deal' | 'ending_soon' | 'catalog_drop' | 'share';
   timestamp: number;
   read: boolean;
   dealId?: string;

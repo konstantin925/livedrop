@@ -20,6 +20,9 @@ type IconName =
   | 'external'
   | 'percent'
   | 'plus'
+  | 'like'
+  | 'dislike'
+  | 'share'
   | 'trash'
   | 'check'
   | 'shield'
@@ -179,6 +182,29 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M12 6V18" />
       <path d="M6 12H18" />
+    </>
+  ),
+  like: (
+    <>
+      <path d="M9 11.5V18.5" />
+      <path d="M9 11.5L11.2 6.8C11.5 6.1 12.1 5.6 12.8 5.6H13.2C14.3 5.6 15.2 6.5 15.2 7.6V10H17.1C18.3 10 19.1 11.2 18.7 12.3L17.2 17.1C16.9 18 16.1 18.5 15.2 18.5H9" />
+      <path d="M6 11.5H9V18.5H6.8C6 18.5 5.3 17.8 5.3 17V13C5.3 12.2 6 11.5 6.8 11.5H9Z" />
+    </>
+  ),
+  dislike: (
+    <>
+      <path d="M15 12.5V5.5" />
+      <path d="M15 12.5L12.8 17.2C12.5 17.9 11.9 18.4 11.2 18.4H10.8C9.7 18.4 8.8 17.5 8.8 16.4V14H6.9C5.7 14 4.9 12.8 5.3 11.7L6.8 6.9C7.1 6 7.9 5.5 8.8 5.5H15" />
+      <path d="M18 12.5H15V5.5H17.2C18 5.5 18.7 6.2 18.7 7V11C18.7 11.8 18 12.5 17.2 12.5H15Z" />
+    </>
+  ),
+  share: (
+    <>
+      <circle cx="7" cy="12" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="16.8" cy="7" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="16.8" cy="17" r="1.6" fill="currentColor" stroke="none" />
+      <path d="M8.5 11.2L15 7.8" />
+      <path d="M8.5 12.8L15 16.2" />
     </>
   ),
   trash: (

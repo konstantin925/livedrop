@@ -1,9 +1,9 @@
 import { Deal, UserLocation } from './types';
 
-// Default location: San Francisco (Union Square)
+// Neutral fallback only. Never treat this as a real user location.
 export const DEFAULT_LOCATION: UserLocation = {
-  lat: 37.7879,
-  lng: -122.4075
+  lat: 0,
+  lng: 0,
 };
 
 export const CATEGORY_OPTIONS = [

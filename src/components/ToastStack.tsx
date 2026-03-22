@@ -12,6 +12,7 @@ export const ToastStack: React.FC<ToastStackProps> = ({ notifications }) => {
   const getIconName = (type: AppNotification['type']) => {
     if (type === 'new_deal') return 'live';
     if (type === 'ending_soon') return 'ending';
+    if (type === 'share') return 'share';
     return 'percent';
   };
 

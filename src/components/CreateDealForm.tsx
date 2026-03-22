@@ -9,6 +9,7 @@ interface CreateDealFormProps {
   onSubmit: (deal: Omit<Deal, 'id' | 'createdAt'>) => void;
   onCancel: () => void;
   userLocation: UserLocation;
+  hasPreciseUserLocation?: boolean;
   initialData?: Deal | null;
   onDraftChange?: (draft: Deal) => void;
   autofillRequest?: {
@@ -163,10 +164,11 @@ const getInitialFormData = (
   };
 };
 
-export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, initialData, onDraftChange, autofillRequest }) => {
+export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, hasPreciseUserLocation = false, initialData, onDraftChange, autofillRequest }) => {
   const savedDefaults = readBusinessDefaults();
   const [formData, setFormData] = useState(() => getInitialFormData(savedDefaults, initialData));
   const [submitError, setSubmitError] = useState<string>('');
+  const safeLocalLocation = hasPreciseUserLocation ? userLocation : { lat: 0, lng: 0 };
 
   useEffect(() => {
     const nextFormData = getInitialFormData(readBusinessDefaults(), initialData);
@@ -249,8 +251,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
       hasTimer: formData.durationPreset !== 'none',
       distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
-      lat: isOnline ? 0 : userLocation.lat + latOffset / 4,
-      lng: isOnline ? 0 : userLocation.lng,
+      lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
+      lng: isOnline ? 0 : safeLocalLocation.lng,
       createdAt,
       expiresAt: createdAt + Math.max(durationMinutes, 1) * 60 * 1000,
       maxClaims: Math.max(Number(formData.quantity || 0), 0),
@@ -280,8 +282,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     initialData?.stockStatus,
     offerText,
     radiusMiles,
-    userLocation.lat,
-    userLocation.lng,
+    safeLocalLocation.lat,
+    safeLocalLocation.lng,
   ]);
 
   useEffect(() => {
@@ -301,8 +303,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       description: normalizeTextValue(formData.description) || 'Your deal description will appear here in the preview.',
       offerText: offerText || 'SPECIAL OFFER',
       distance: isOnline ? 'Online' : `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi`,
-      lat: isOnline ? 0 : userLocation.lat + latOffset / 4,
-      lng: isOnline ? 0 : userLocation.lng,
+      lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
+      lng: isOnline ? 0 : safeLocalLocation.lng,
       imageUrl: normalizeTextValue(formData.imageUrl) || undefined,
       websiteUrl: normalizeTextValue(formData.websiteUrl).trim() || undefined,
       productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
@@ -329,8 +331,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     formData.websiteUrl,
     offerText,
     radiusMiles,
-    userLocation.lat,
-    userLocation.lng,
+    safeLocalLocation.lat,
+    safeLocalLocation.lng,
   ]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -365,6 +367,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
         setSubmitError('Please upload a product image for online drops.');
         return;
       }
+    }
+
+    if (formData.businessMode === 'local' && !hasPreciseUserLocation) {
+      setSubmitError('Enable location access before publishing a local drop so nearby users get the correct location.');
+      return;
     }
 
     if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
@@ -402,8 +409,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
       hasTimer: formData.durationPreset !== 'none',
       distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
-      lat: isOnline ? 0 : userLocation.lat + latOffset / 4,
-      lng: isOnline ? 0 : userLocation.lng,
+      lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
+      lng: isOnline ? 0 : safeLocalLocation.lng,
       expiresAt: Date.now() + durationMinutes * 60 * 1000,
       maxClaims: Number(formData.quantity),
       currentClaims: Number(formData.currentClaims),
@@ -483,6 +490,12 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
           })}
         </div>
       </div>
+
+      {formData.businessMode === 'local' && !hasPreciseUserLocation ? (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+          Enable location access to publish an accurate local deal.
+        </div>
+      ) : null}
 
       <div className="bg-white border border-slate-100 rounded-[2rem] p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-4">

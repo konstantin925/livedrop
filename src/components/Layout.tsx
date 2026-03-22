@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppNotification, UserRole, View } from '../types';
-import { Zap } from 'lucide-react';
 import { AppIcon } from './AppIcon';
+import brandBoltLogo from '../assets/logo-bolt.svg';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -18,6 +18,7 @@ interface LayoutProps {
   userAvatarUrl?: string | null;
   onOpenAuth?: () => void;
   onSignOut?: () => void;
+  isDropModeHighlighted?: boolean;
 }
 
 export const Layout: React.FC<LayoutProps> = ({
@@ -35,6 +36,7 @@ export const Layout: React.FC<LayoutProps> = ({
   userAvatarUrl,
   onOpenAuth,
   onSignOut,
+  isDropModeHighlighted = false,
 }) => {
   const mainContentStyle: React.CSSProperties = {
     paddingBottom: 'calc(4.75rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
@@ -48,6 +50,7 @@ export const Layout: React.FC<LayoutProps> = ({
   const getNotificationIcon = (type: AppNotification['type']) => {
     if (type === 'new_deal') return 'live' as const;
     if (type === 'ending_soon') return 'ending' as const;
+    if (type === 'share') return 'share' as const;
     return 'percent' as const;
   };
 
@@ -56,12 +59,26 @@ export const Layout: React.FC<LayoutProps> = ({
       {/* Header */}
       <header className="px-4 py-3 pt-5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex flex-col justify-center items-start">
-          <div className="flex items-baseline gap-1.5 leading-none">
-            <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-slate-800">LIVE</h1>
-            <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-indigo-600">DROP</h1>
-            <Zap size={28} className="text-indigo-600 shrink-0 translate-y-[2px]" fill="currentColor" strokeWidth={1.75} />
+          <div className="flex items-center leading-none">
+            <div className="flex items-baseline gap-1 leading-none">
+              <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-slate-800">LIVE</h1>
+              <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-indigo-600">DROP</h1>
+            </div>
+            <span
+              className={`-ml-1 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-all ${
+                isDropModeHighlighted
+                  ? 'bg-indigo-950/95 shadow-[0_0_0_1px_rgba(129,140,248,0.32),0_12px_30px_rgba(79,70,229,0.28)]'
+                  : ''
+              }`}
+            >
+              <img
+                src={brandBoltLogo}
+                alt="LiveDrop logo"
+                className={`h-10 w-10 object-contain transition-all ${isDropModeHighlighted ? 'drop-shadow-[0_0_12px_rgba(129,140,248,0.72)]' : ''}`}
+              />
+            </span>
           </div>
-          <p className="mt-0.5 text-[0.6rem] font-medium tracking-[0.12em] text-slate-400">
+          <p className="-mt-0.5 text-[0.6rem] font-medium leading-none tracking-[0.12em] text-slate-400">
             don&apos;t miss the drop
           </p>
         </div>

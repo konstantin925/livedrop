@@ -5,6 +5,7 @@ import { isUrgent } from '../utils/time';
 import { getCategoryIconName, getCategoryLabel } from '../utils/categories';
 import { CompanyLogo } from './CompanyLogo';
 import { AppIcon } from './AppIcon';
+import { DealEngagementAction, DealEngagementBar } from './DealEngagementBar';
 
 interface DealCardProps {
   deal: Deal;
@@ -17,6 +18,10 @@ interface DealCardProps {
   saveFeedback?: string | null;
   compact?: boolean;
   badges?: string[];
+  pendingEngagementAction?: DealEngagementAction | null;
+  onLike?: (deal: Deal) => void;
+  onDislike?: (deal: Deal) => void;
+  onShare?: (deal: Deal) => void;
 }
 
 export const DealCard: React.FC<DealCardProps> = ({
@@ -30,6 +35,10 @@ export const DealCard: React.FC<DealCardProps> = ({
   saveFeedback,
   compact = false,
   badges = [],
+  pendingEngagementAction = null,
+  onLike,
+  onDislike,
+  onShare,
 }) => {
   const [isExpired, setIsExpired] = useState(deal.expiresAt <= Date.now());
   const getBadgeIcon = (badge: string) => {
@@ -41,6 +50,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   const claimCount = deal.claimCount ?? deal.currentClaims;
   const isSoldOut = claimCount >= deal.maxClaims;
   const canClaim = !isExpired && !isSoldOut && !isClaimed;
+  const canEngage = Boolean(onLike && onDislike && onShare);
 
   // Handle expiration in real-time
   const handleExpire = () => {
@@ -95,6 +105,17 @@ export const DealCard: React.FC<DealCardProps> = ({
             {isClaimed ? 'Claimed' : isExpired ? 'Expired' : isSoldOut ? 'Sold Out' : 'Claim'}
           </button>
         </div>
+
+        {canEngage ? (
+          <DealEngagementBar
+            deal={deal}
+            compact
+            pendingAction={pendingEngagementAction}
+            onLike={onLike!}
+            onDislike={onDislike!}
+            onShare={onShare!}
+          />
+        ) : null}
       </div>
     );
   }
@@ -151,6 +172,16 @@ export const DealCard: React.FC<DealCardProps> = ({
           {isSoldOut ? 'Sold Out' : `${deal.maxClaims - claimCount} left`}
         </div>
       </div>
+
+      {canEngage ? (
+        <DealEngagementBar
+          deal={deal}
+          pendingAction={pendingEngagementAction}
+          onLike={onLike!}
+          onDislike={onDislike!}
+          onShare={onShare!}
+        />
+      ) : null}
 
       <div className="space-y-1.5">
         <button
