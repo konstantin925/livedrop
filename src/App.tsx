@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { Layout } from './components/Layout';
 import { DealCard } from './components/DealCard';
@@ -23,7 +23,7 @@ import { ToastStack } from './components/ToastStack';
 import { AuthModal } from './components/AuthModal';
 import { BusinessPaywall } from './components/BusinessPaywall';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
-import { getAuthRedirectUrl, hasSupabaseConfig, supabase, supabaseConfigIssue } from './lib/supabase';
+import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupabaseUrl, supabase, supabaseConfigIssue, supabaseEdgeClient } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
 
@@ -43,7 +43,9 @@ const APPROVED_ADMIN_PASSWORD = 'konstantin';
 const USER_PROFILE_TABLE = 'profiles';
 const USER_STATE_TABLE = 'user_app_state';
 const DEALS_TABLE = 'deals';
+const DEALS_SCHEMA = 'public';
 const BUSINESS_PLAN_ID = 'business_monthly';
+const AI_DEAL_FINDER_FUNCTION = 'ai-deal-finder';
 const BULK_IMPORT_SAMPLE = JSON.stringify(
   [
     {
@@ -273,6 +275,7 @@ type BulkImportDealInput = {
   maxPriceMatched?: boolean;
   stockStatus?: string;
   imageUrl?: string;
+  productLink?: string;
   productUrl?: string;
   websiteUrl?: string;
   durationMinutes?: number;
@@ -281,18 +284,284 @@ type BulkImportDealInput = {
   isOnline?: boolean;
 };
 
+type AIDealFinderStage = 'idle' | 'searching' | 'results-loaded' | 'result-selected' | 'coupon-generated';
+type AIDealFinderRankLabel = 'Best Overall' | 'Best Budget' | 'Best Trusted' | 'Best Discount';
+
+type AIDealFinderCandidate = {
+  title: string;
+  url: string;
+  snippet: string;
+  merchant: string;
+  domain: string;
+  productConfidence: number;
+  resultType: 'Product Page' | 'Possible Product' | 'Blog/Article' | 'Review/Listicle' | 'Rejected';
+  patterns: string[];
+  isKnownEcommerceDomain: boolean;
+  rejectionReasons: string[];
+  imageUrl?: string | null;
+  price?: number | null;
+  originalPrice?: number | null;
+  websiteUrl?: string | null;
+  productLink?: string | null;
+  affiliateUrl?: string | null;
+  discountPercent?: number | null;
+  rating?: number | null;
+  reviewCount?: number | null;
+  category?: string | null;
+  merchantTrust?: number;
+  dataCompleteness?: number;
+  dealScore?: number;
+  rankLabels?: AIDealFinderRankLabel[];
+  extractionStatus?: 'Raw candidate' | 'Partial extraction' | 'Enriched';
+};
+
 type AIDealFinderResult = {
+  rawResults?: Array<{
+    title?: string;
+    url?: string;
+    content?: string;
+    raw_content?: string;
+    score?: number;
+  }>;
   normalizedDeal: BulkImportDealInput;
   generatedJson: string;
   missingFields: string[];
   dealScore: number;
   summary?: string;
+  resultQuality?: 'basic' | 'enriched';
+  partialData?: boolean;
+  enrichmentError?: string | null;
+  completionPercent?: number;
+  missingGroups?: {
+    required?: string[];
+    optional?: string[];
+    filled?: string[];
+  };
+  sourceAssets?: {
+    websiteUrl?: string | null;
+    productUrl?: string | null;
+    imageUrl?: string | null;
+  };
+  extractionStatus?: string;
+  extractionDebug?: {
+    sourceUrl: string;
+    cleanedProductUrl: string | null;
+    fetchAttempted: boolean;
+    fetchSucceeded: boolean;
+    responseStatus: number | null;
+    finalUrl: string | null;
+    contentType: string | null;
+    htmlLength: number;
+    extractedFlags: {
+      title: boolean;
+      image: boolean;
+      price: boolean;
+      canonicalUrl: boolean;
+    };
+    matchedSelectors: {
+      title: string | null;
+      image: string | null;
+      price: string | null;
+      canonicalUrl: string | null;
+    };
+    failedFields: string[];
+    failureReason: string | null;
+  };
+  searchCandidates?: AIDealFinderCandidate[];
+  validProductCandidates?: AIDealFinderCandidate[];
+  rejectedCandidates?: AIDealFinderCandidate[];
+  searchStats?: {
+    totalResults: number;
+    validProductPages: number;
+    rejectedNonProductPages: number;
+    selectedSource: string | null;
+  };
+  searchStatus?: 'Search not run' | 'Search running' | 'Search succeeded' | 'Search returned 0 results' | 'Search failed' | string;
+  searchQuery?: string;
+  requestPayload?: {
+    query: string;
+    merchant: string | null;
+    category: string | null;
+    maxPrice: number | null;
+    minDiscount: number | null;
+  };
+  responseMeta?: {
+    responseStatus: number;
+    rawResultCount: number;
+    filteredResultCount: number;
+  };
+  queryAttempts?: Array<{
+    label: string;
+    query: string;
+    responseStatus: number;
+    rawResultCount: number;
+  }>;
   appliedFilters?: {
+    merchant?: string | null;
     category?: string | null;
     maxPrice?: number | null;
     minDiscount?: number | null;
   };
+  message?: string;
 };
+
+type AIDealFinderRuntimeState = {
+  requestSent: boolean;
+  responseReceived: boolean;
+  actualQuery: string;
+  currentAction: 'idle' | 'validating' | 'building query' | 'invoking edge function' | 'response received' | 'filtering results' | 'completed';
+  lastError: string;
+};
+
+type PortalCoverageField = {
+  key: string;
+  label: string;
+  value: string;
+  filled: boolean;
+};
+
+type PortalAutofillPayload = {
+  storeName: string;
+  websiteUrl: string;
+  productLink: string;
+  imageUrl: string;
+  dealTitle: string;
+  description: string;
+  category: string;
+  offerText: string;
+};
+
+type PortalAutofillStatus = {
+  state: 'idle' | 'pending' | 'success' | 'failure';
+  attempted: boolean;
+  message: string;
+  failureReason: string;
+};
+
+type PortalAutofillRequest = {
+  id: number;
+  payload: PortalAutofillPayload;
+};
+
+const normalizePortalFieldValue = (value: string | number | null | undefined) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : '';
+  }
+
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  return '';
+};
+
+const buildPortalFieldCoverage = (portalState: Deal | null) => {
+  const required: PortalCoverageField[] = [
+    { key: 'businessName', label: 'Store Name', value: normalizePortalFieldValue(portalState?.businessName) },
+    { key: 'title', label: 'Deal Title', value: normalizePortalFieldValue(portalState?.title) },
+    { key: 'description', label: 'Description', value: normalizePortalFieldValue(portalState?.description) },
+    { key: 'category', label: 'Category', value: normalizePortalFieldValue(portalState?.category) },
+    { key: 'offerText', label: 'Deal / Discount Text', value: normalizePortalFieldValue(portalState?.offerText) },
+  ].map((field) => ({
+    ...field,
+    filled: Boolean(field.value),
+  }));
+
+  const optional: PortalCoverageField[] = [
+    { key: 'websiteUrl', label: 'Website URL', value: normalizePortalFieldValue(portalState?.websiteUrl) },
+    { key: 'productUrl', label: 'Product Link', value: normalizePortalFieldValue(portalState?.productUrl) },
+    { key: 'imageUrl', label: 'Upload Image', value: normalizePortalFieldValue(portalState?.imageUrl) },
+  ].map((field) => ({
+    ...field,
+    filled: Boolean(field.value),
+  }));
+
+  const allFields = [...required, ...optional];
+  const filled = allFields.filter((field) => field.filled);
+
+  return {
+    required,
+    optional,
+    filled,
+    missingRequired: required.filter((field) => !field.filled),
+    missingOptional: optional.filter((field) => !field.filled),
+    completionPercent: allFields.length ? Math.round((filled.length / allFields.length) * 100) : 0,
+  };
+};
+
+  const buildPortalAutofillPayload = (
+  source:
+    | {
+        businessName?: string;
+        websiteUrl?: string;
+        productUrl?: string;
+        productLink?: string;
+        affiliateUrl?: string;
+        imageUrl?: string;
+        title?: string;
+        description?: string;
+        category?: string;
+        offerText?: string;
+      }
+    | null
+    | undefined,
+): PortalAutofillPayload => ({
+  storeName: normalizePortalFieldValue(source?.businessName),
+  websiteUrl: normalizePortalFieldValue(source?.websiteUrl),
+  productLink: normalizePortalFieldValue(source?.productLink ?? source?.productUrl ?? source?.affiliateUrl),
+  imageUrl: normalizePortalFieldValue(source?.imageUrl),
+  dealTitle: normalizePortalFieldValue(source?.title),
+  description: normalizePortalFieldValue(source?.description),
+  category: normalizePortalFieldValue(source?.category),
+  offerText: normalizePortalFieldValue(source?.offerText),
+});
+
+const TEST_COUPON_AUTOFILL: PortalAutofillPayload = {
+  storeName: 'Amazon',
+  websiteUrl: 'https://www.amazon.com',
+  productLink: 'https://www.amazon.com/dp/test',
+  imageUrl: '',
+  dealTitle: 'Test Deal',
+  description: 'Test description',
+  category: 'Tech',
+  offerText: 'Limited-time deal',
+};
+
+const formatFinderPrice = (value?: number | null) =>
+  value != null ? `$${value.toFixed(2)}` : null;
+
+const getFinderScoreTone = (score?: number | null) => {
+  if ((score ?? 0) >= 80) return 'bg-emerald-100 text-emerald-700';
+  if ((score ?? 0) >= 60) return 'bg-indigo-100 text-indigo-700';
+  if ((score ?? 0) >= 40) return 'bg-amber-100 text-amber-700';
+  return 'bg-slate-100 text-slate-600';
+};
+
+const getFinderRankTone = (label: AIDealFinderRankLabel) => {
+  if (label === 'Best Overall') return 'bg-indigo-600 text-white';
+  if (label === 'Best Budget') return 'bg-emerald-100 text-emerald-700';
+  if (label === 'Best Trusted') return 'bg-sky-100 text-sky-700';
+  return 'bg-fuchsia-100 text-fuchsia-700';
+};
+
+type AppShellRouteProps = {
+  routePath: string;
+  renderAdminPage: () => React.ReactNode;
+  renderPublicShell: () => React.ReactNode;
+  fallback: React.ReactNode;
+};
+
+function AppShellRoute({ routePath, renderAdminPage, renderPublicShell, fallback }: AppShellRouteProps) {
+  if (routePath === '/admin') {
+    return <>{renderAdminPage()}</>;
+  }
+
+  if (routePath === '/' || routePath === '/dashboard') {
+    return <>{renderPublicShell()}</>;
+  }
+
+  return <>{fallback}</>;
+}
 
 type DealRow = {
   id: string;
@@ -300,9 +569,11 @@ type DealRow = {
   status: 'active' | 'expired' | 'draft';
   featured: boolean | null;
   admin_tag: 'featured' | 'trending' | null;
-  business_name: string;
+  business_name: string | null;
+  merchant: string | null;
   logo_url: string | null;
   image_url: string | null;
+  image: string | null;
   title: string;
   description: string;
   offer_text: string;
@@ -312,6 +583,7 @@ type DealRow = {
   review_count: number | null;
   stock_status: string | null;
   website_url: string | null;
+  product_link: string | null;
   product_url: string | null;
   has_timer: boolean;
   distance: string;
@@ -326,25 +598,86 @@ type DealRow = {
   owner_id: string | null;
 };
 
+type SharedPublishFailure = {
+  deal: Deal;
+  mode: 'insert' | 'update';
+  payload: DealRow;
+  projectUrl: string;
+  schema: string;
+  table: string;
+  reason: string;
+  errorCode: string | null;
+  errorDetails: string | null;
+  errorHint: string | null;
+  missingColumns: string[];
+  occurredAt: number;
+};
+
+type DealsSchemaPreflightResult = {
+  schemaColumns: string[];
+  schemaSource: 'rpc' | 'local-fallback';
+  payloadKeys: string[];
+  missingColumns: string[];
+  extraFieldsRemoved: string[];
+  payload: DealRow;
+};
+
+const PUBLIC_DEALS_SCHEMA_FIELDS = [
+  'id',
+  'business_type',
+  'status',
+  'featured',
+  'admin_tag',
+  'business_name',
+  'merchant',
+  'logo_url',
+  'image_url',
+  'image',
+  'title',
+  'description',
+  'offer_text',
+  'original_price',
+  'discount_percent',
+  'affiliate_url',
+  'review_count',
+  'stock_status',
+  'website_url',
+  'product_link',
+  'product_url',
+  'has_timer',
+  'distance',
+  'lat',
+  'lng',
+  'created_at',
+  'expires_at',
+  'max_claims',
+  'current_claims',
+  'claim_count',
+  'category',
+  'owner_id',
+] as const satisfies ReadonlyArray<keyof DealRow>;
+
+const PUBLIC_DEALS_SCHEMA_FIELD_SET = new Set<string>(PUBLIC_DEALS_SCHEMA_FIELDS);
+
 const mapDealRowToDeal = (row: DealRow): Deal => ({
   id: row.id,
   businessType: row.business_type,
   status: row.status,
   featured: row.featured ?? false,
   adminTag: row.admin_tag ?? null,
-  businessName: row.business_name,
+  businessName: row.business_name ?? row.merchant ?? 'Unknown Merchant',
   logoUrl: row.logo_url ?? undefined,
-  imageUrl: row.image_url ?? undefined,
+  imageUrl: row.image_url ?? row.image ?? undefined,
   title: row.title,
   description: row.description,
   offerText: row.offer_text,
   originalPrice: row.original_price,
   discountPercent: row.discount_percent,
-  affiliateUrl: row.affiliate_url ?? undefined,
+  affiliateUrl: row.affiliate_url ?? row.product_link ?? undefined,
   reviewCount: row.review_count,
   stockStatus: row.stock_status ?? undefined,
   websiteUrl: row.website_url ?? undefined,
-  productUrl: row.product_url ?? undefined,
+  productUrl: row.product_link ?? row.product_url ?? row.affiliate_url ?? undefined,
   hasTimer: row.has_timer,
   distance: row.distance,
   lat: row.lat,
@@ -357,37 +690,171 @@ const mapDealRowToDeal = (row: DealRow): Deal => ({
   category: row.category,
 });
 
-const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => ({
-  id: deal.id,
-  business_type: deal.businessType ?? 'local',
-  status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
-  featured: deal.featured ?? false,
-  admin_tag: deal.adminTag ?? null,
-  business_name: deal.businessName,
-  logo_url: deal.logoUrl ?? null,
-  image_url: deal.imageUrl ?? null,
-  title: deal.title,
-  description: deal.description,
-  offer_text: deal.offerText,
-  original_price: deal.originalPrice ?? null,
-  discount_percent: deal.discountPercent ?? null,
-  affiliate_url: deal.affiliateUrl ?? null,
-  review_count: deal.reviewCount ?? null,
-  stock_status: deal.stockStatus ?? null,
-  website_url: deal.websiteUrl ?? null,
-  product_url: deal.productUrl ?? null,
-  has_timer: deal.hasTimer ?? true,
-  distance: deal.distance,
-  lat: deal.lat,
-  lng: deal.lng,
-  created_at: new Date(deal.createdAt).toISOString(),
-  expires_at: new Date(deal.expiresAt).toISOString(),
-  max_claims: deal.maxClaims,
-  current_claims: deal.currentClaims,
-  claim_count: deal.claimCount ?? deal.currentClaims,
-  category: deal.category,
-  owner_id: ownerId ?? null,
-});
+const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
+  const productLink = deal.affiliateUrl ?? deal.productUrl ?? null;
+
+  return {
+    id: deal.id,
+    business_type: deal.businessType ?? 'local',
+    status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
+    featured: deal.featured ?? false,
+    admin_tag: deal.adminTag ?? null,
+    business_name: deal.businessName,
+    merchant: deal.businessName,
+    logo_url: deal.logoUrl ?? null,
+    image_url: deal.imageUrl ?? null,
+    image: deal.imageUrl ?? null,
+    title: deal.title,
+    description: deal.description,
+    offer_text: deal.offerText,
+    original_price: deal.originalPrice ?? null,
+    discount_percent: deal.discountPercent ?? null,
+    affiliate_url: productLink,
+    review_count: deal.reviewCount ?? null,
+    stock_status: deal.stockStatus ?? null,
+    website_url: deal.websiteUrl ?? null,
+    product_link: productLink,
+    product_url: deal.productUrl ?? productLink,
+    has_timer: deal.hasTimer ?? true,
+    distance: deal.distance,
+    lat: deal.lat,
+    lng: deal.lng,
+    created_at: new Date(deal.createdAt).toISOString(),
+    expires_at: new Date(deal.expiresAt).toISOString(),
+    max_claims: deal.maxClaims,
+    current_claims: deal.currentClaims,
+    claim_count: deal.claimCount ?? deal.currentClaims,
+    category: deal.category,
+    owner_id: ownerId ?? null,
+  };
+};
+
+const formatAdminLogDetail = (value: unknown) => {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (error) {
+    console.warn('[LiveDrop] Failed to stringify admin log detail', error);
+    return String(value);
+  }
+};
+
+const sanitizeDealRowForPublish = (row: DealRow) => {
+  const sanitized = Object.fromEntries(
+    PUBLIC_DEALS_SCHEMA_FIELDS.map((field) => [field, row[field]]),
+  ) as DealRow;
+  const extraFieldsRemoved = Object.keys(row).filter((field) => !PUBLIC_DEALS_SCHEMA_FIELD_SET.has(field));
+
+  return {
+    payload: sanitized,
+    extraFieldsRemoved,
+  };
+};
+
+const extractMissingDealColumns = (error: unknown) => {
+  const haystacks: string[] = [];
+
+  if (error instanceof Error) {
+    haystacks.push(error.message);
+  }
+
+  if (error && typeof error === 'object') {
+    const errorRecord = error as Record<string, unknown>;
+    if (typeof errorRecord.message === 'string') haystacks.push(errorRecord.message);
+    if (typeof errorRecord.details === 'string') haystacks.push(errorRecord.details);
+    if (typeof errorRecord.hint === 'string') haystacks.push(errorRecord.hint);
+  }
+
+  const patterns = [
+    /column ['"]?([a-z0-9_]+)['"]? of relation ['"]?[a-z0-9_]+['"]? does not exist/gi,
+    /Could not find the ['"]([a-z0-9_]+)['"] column of ['"][a-z0-9_]+['"] in the schema cache/gi,
+    /schema cache.*column ['"]([a-z0-9_]+)['"]/gi,
+  ];
+
+  const matches = new Set<string>();
+  haystacks.forEach((value) => {
+    patterns.forEach((pattern) => {
+      for (const match of value.matchAll(pattern)) {
+        if (match[1]) {
+          matches.add(match[1]);
+        }
+      }
+    });
+  });
+
+  return Array.from(matches);
+};
+
+const getSupabaseErrorContext = (error: unknown) => {
+  const baseMessage =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown backend error';
+  const errorRecord = error && typeof error === 'object'
+    ? (error as Record<string, unknown>)
+    : null;
+  const explicitMissingColumns =
+    errorRecord && Array.isArray(errorRecord.missingColumns)
+      ? errorRecord.missingColumns.filter((value): value is string => typeof value === 'string')
+      : [];
+  const missingColumns = explicitMissingColumns.length > 0
+    ? explicitMissingColumns
+    : extractMissingDealColumns(error);
+
+  if (!error || typeof error !== 'object') {
+    return {
+      code: null,
+      message: baseMessage,
+      details: null,
+      hint: null,
+      missingColumns,
+      reason: missingColumns.length
+        ? `${baseMessage} | Missing columns: ${missingColumns.join(', ')}`
+        : baseMessage,
+    };
+  }
+
+  const code = typeof errorRecord?.code === 'string' ? errorRecord.code : null;
+  const message = typeof errorRecord?.message === 'string' ? errorRecord.message : baseMessage;
+  const details = typeof errorRecord?.details === 'string' ? errorRecord.details : null;
+  const hint = typeof errorRecord?.hint === 'string' ? errorRecord.hint : null;
+
+  return {
+    code,
+    message,
+    details,
+    hint,
+    missingColumns,
+    reason: [
+      code ? `Code ${code}` : null,
+      message,
+      details,
+      hint,
+      missingColumns.length ? `Missing columns: ${missingColumns.join(', ')}` : null,
+    ].filter(Boolean).join(' | '),
+  };
+};
+
+const buildSharedWriteLogDetail = (options: {
+  operation: 'insert' | 'update' | 'delete' | 'select' | 'bulk-upsert';
+  payload?: DealRow | DealRow[];
+  extraFieldsRemoved?: string[];
+  schemaColumns?: string[];
+  schemaSource?: 'rpc' | 'local-fallback';
+  payloadKeys?: string[];
+  missingColumns?: string[];
+  error?: unknown;
+}) =>
+  formatAdminLogDetail({
+    projectUrl: resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)',
+    schema: DEALS_SCHEMA,
+    table: DEALS_TABLE,
+    operation: options.operation,
+    extraFieldsRemoved: options.extraFieldsRemoved ?? [],
+    schemaColumns: options.schemaColumns ?? [],
+    schemaSource: options.schemaSource ?? 'rpc',
+    payloadKeys: options.payloadKeys ?? [],
+    missingColumns: options.missingColumns ?? [],
+    payload: options.payload,
+    error: options.error ? getSupabaseErrorContext(options.error) : null,
+  });
 
 const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
   const candidate = JSON.parse(input);
@@ -455,6 +922,7 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
       maxPriceMatched: typeof item.maxPriceMatched === 'boolean' ? item.maxPriceMatched : undefined,
       stockStatus: typeof item.stockStatus === 'string' ? item.stockStatus.trim() : undefined,
       imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl.trim() : undefined,
+      productLink: typeof item.productLink === 'string' ? item.productLink.trim() : undefined,
       productUrl: typeof item.productUrl === 'string' ? item.productUrl.trim() : undefined,
       websiteUrl: typeof item.websiteUrl === 'string' ? item.websiteUrl.trim() : undefined,
       durationMinutes:
@@ -486,6 +954,19 @@ export default function App() {
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [dealDraft, setDealDraft] = useState<Deal | null>(null);
+  const [portalFieldSnapshot, setPortalFieldSnapshot] = useState<Deal | null>(null);
+  const [pendingPortalAutofill, setPendingPortalAutofill] = useState<{
+    requestId: number;
+    normalizedDeal: BulkImportDealInput;
+    mappedPayload: PortalAutofillPayload;
+  } | null>(null);
+  const [portalAutofillRequest, setPortalAutofillRequest] = useState<PortalAutofillRequest | null>(null);
+  const [portalAutofillStatus, setPortalAutofillStatus] = useState<PortalAutofillStatus>({
+    state: 'idle',
+    attempted: false,
+    message: '',
+    failureReason: '',
+  });
   const [userLocation, setUserLocation] = useState<UserLocation>(DEFAULT_LOCATION);
   const [radius, setRadius] = useState<number>(5);
   const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
@@ -512,6 +993,8 @@ export default function App() {
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [dealsLoading, setDealsLoading] = useState(true);
   const [dealsError, setDealsError] = useState('');
+  const [lastSharedPublishFailure, setLastSharedPublishFailure] = useState<SharedPublishFailure | null>(null);
+  const [retryingSharedPublish, setRetryingSharedPublish] = useState(false);
   const [bulkImportJson, setBulkImportJson] = useState('');
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkImportMessage, setBulkImportMessage] = useState('');
@@ -527,7 +1010,20 @@ export default function App() {
   const [aiFinderLoading, setAiFinderLoading] = useState(false);
   const [aiFinderError, setAiFinderError] = useState('');
   const [aiFinderMessage, setAiFinderMessage] = useState('');
+  const [aiFinderStage, setAiFinderStage] = useState<AIDealFinderStage>('idle');
   const [aiFinderResult, setAiFinderResult] = useState<AIDealFinderResult | null>(null);
+  const [aiFinderCandidates, setAiFinderCandidates] = useState<AIDealFinderCandidate[]>([]);
+  const [aiFinderSearchSnapshot, setAiFinderSearchSnapshot] = useState<AIDealFinderResult | null>(null);
+  const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
+  const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
+  const [showSearchMeter, setShowSearchMeter] = useState(false);
+  const [aiFinderRuntime, setAiFinderRuntime] = useState<AIDealFinderRuntimeState>({
+    requestSent: false,
+    responseReceived: false,
+    actualQuery: '',
+    currentAction: 'idle',
+    lastError: '',
+  });
   const [adminAccessError, setAdminAccessError] = useState('');
   const [adminLogs, setAdminLogs] = useState<Array<{ id: string; level: 'info' | 'error'; message: string; detail?: string; timestamp: number }>>([]);
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
@@ -536,14 +1032,27 @@ export default function App() {
   const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const aiFinderFieldCoverageRef = useRef<HTMLDivElement | null>(null);
+  const aiFinderUrlInputRef = useRef<HTMLInputElement | null>(null);
   const cloudHydratedRef = useRef(false);
+  const dealsSchemaColumnsCacheRef = useRef<{ columns: string[]; fetchedAt: number } | null>(null);
+  const previousRoutePathRef = useRef(routePath);
   const isBusinessSubscribed = role === 'business' && subscriptionStatus === 'active';
   const hasPortalAccess = LOCAL_ADMIN_MODE || isBusinessSubscribed;
   const isAdminRoute = routePath === '/admin';
   const isDashboardRoute = routePath === '/dashboard';
-  const isPublicRoute = !isAdminRoute;
   const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
   const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
+  const selectedAIFinderCandidate = useMemo(
+    () =>
+      aiFinderCandidates.find((candidate) => candidate.url === selectedAIFinderUrl)
+      ?? aiFinderSearchSnapshot?.searchCandidates?.find((candidate) => candidate.url === selectedAIFinderUrl)
+      ?? null,
+    [aiFinderCandidates, aiFinderSearchSnapshot?.searchCandidates, selectedAIFinderUrl],
+  );
+  const aiFinderDirectUrl = aiFinderUrl.trim();
+  const aiFinderHasDirectUrlFallback = aiFinderUseDirectUrlFallback && Boolean(aiFinderDirectUrl);
+  const aiFinderSelectedSourceUrl = aiFinderDirectUrl;
 
   const getLocalCloudState = () => ({
     claims: readStoredClaims(),
@@ -562,6 +1071,55 @@ export default function App() {
     seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
   };
 
+  useEffect(() => {
+    if (!pendingPortalAutofill || !portalFieldSnapshot) {
+      return;
+    }
+
+    const livePortalValues = buildPortalAutofillPayload(portalFieldSnapshot);
+    const expectedPortalValues = pendingPortalAutofill.mappedPayload;
+    const finalCoverage = buildPortalFieldCoverage(portalFieldSnapshot);
+    const fieldsChanged = Object.entries(expectedPortalValues).some(([key, value]) => {
+      if (!value) return false;
+      return livePortalValues[key as keyof PortalAutofillPayload] === value;
+    });
+
+    console.info('[LiveDrop] Auto Fill Portal verification', {
+      normalizedDeal: pendingPortalAutofill.normalizedDeal,
+      mappedPortalPayload: expectedPortalValues,
+      finalPortalFormState: livePortalValues,
+    });
+
+    if (fieldsChanged && finalCoverage.filled.length > 0) {
+      const successMessage =
+        finalCoverage.missingRequired.length === 0
+          ? 'Portal form updated successfully.'
+          : 'Portal form updated, but some required fields are still missing.';
+      setAiFinderMessage(successMessage);
+      setBulkImportMessage(successMessage);
+      setAiFinderError('');
+      setPortalAutofillStatus({
+        state: 'success',
+        attempted: true,
+        message: successMessage,
+        failureReason: '',
+      });
+    } else {
+      const failureMessage = 'Portal mapping did not update the live form state.';
+      setAiFinderError(failureMessage);
+      setBulkImportError(failureMessage);
+      setPortalAutofillStatus({
+        state: 'failure',
+        attempted: true,
+        message: '',
+        failureReason: failureMessage,
+      });
+    }
+
+    setPortalAutofillRequest(null);
+    setPendingPortalAutofill(null);
+  }, [pendingPortalAutofill, portalFieldSnapshot]);
+
   const pushAdminLog = (level: 'info' | 'error', message: string, detail?: string) => {
     setAdminLogs((prev) => [
       {
@@ -573,6 +1131,261 @@ export default function App() {
       },
       ...prev,
     ].slice(0, 20));
+  };
+
+  const getDealsTableClient = () => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
+    }
+
+    return supabase.schema(DEALS_SCHEMA).from(DEALS_TABLE);
+  };
+
+  const fetchDealsSchemaColumns = async (forceRefresh = false) => {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
+    }
+
+    const cached = dealsSchemaColumnsCacheRef.current;
+    if (!forceRefresh && cached && Date.now() - cached.fetchedAt < 60_000) {
+      return {
+        columns: cached.columns,
+        source: 'rpc' as const,
+      };
+    }
+
+    const { data, error } = await supabase.rpc('get_deals_schema_columns');
+
+    if (error) {
+      console.error('[LiveDrop] Failed to fetch public.deals schema columns', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
+        table: DEALS_TABLE,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      pushAdminLog('error', `Failed to inspect ${DEALS_SCHEMA}.${DEALS_TABLE} schema`, buildSharedWriteLogDetail({
+        operation: 'select',
+        error,
+      }));
+      pushAdminLog('info', `Falling back to local ${DEALS_SCHEMA}.${DEALS_TABLE} schema fields`, buildSharedWriteLogDetail({
+        operation: 'select',
+        schemaColumns: [...PUBLIC_DEALS_SCHEMA_FIELDS],
+        schemaSource: 'local-fallback',
+      }));
+      return {
+        columns: [...PUBLIC_DEALS_SCHEMA_FIELDS],
+        source: 'local-fallback' as const,
+      };
+    }
+
+    const schemaColumns = (data ?? [])
+      .map((row) => (typeof row?.column_name === 'string' ? row.column_name : ''))
+      .filter(Boolean);
+
+    dealsSchemaColumnsCacheRef.current = {
+      columns: schemaColumns,
+      fetchedAt: Date.now(),
+    };
+
+    return {
+      columns: schemaColumns,
+      source: 'rpc' as const,
+    };
+  };
+
+  const runDealsPayloadPreflight = async (
+    row: DealRow,
+    operation: 'insert' | 'update' | 'bulk-upsert',
+  ): Promise<DealsSchemaPreflightResult> => {
+    const { payload, extraFieldsRemoved } = sanitizeDealRowForPublish(row);
+    const { columns: schemaColumns, source: schemaSource } = await fetchDealsSchemaColumns();
+    const payloadKeys = Object.keys(payload);
+    const missingColumns = payloadKeys.filter((key) => !schemaColumns.includes(key));
+
+    const logDetail = buildSharedWriteLogDetail({
+      operation,
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    });
+
+    pushAdminLog('info', `Preflight checked ${DEALS_SCHEMA}.${DEALS_TABLE} ${operation} payload`, logDetail);
+
+    if (missingColumns.length > 0) {
+      const preflightError = Object.assign(
+        new Error(`Schema mismatch on ${DEALS_SCHEMA}.${DEALS_TABLE}. Missing columns: ${missingColumns.join(', ')}`),
+        {
+          code: 'SCHEMA_MISMATCH',
+          details: `Payload keys not present in ${DEALS_SCHEMA}.${DEALS_TABLE}: ${missingColumns.join(', ')}`,
+          hint: 'Apply the latest supabase/schema.sql migration before retrying publish.',
+          missingColumns,
+          payloadKeys,
+          schemaColumns,
+        },
+      );
+
+      pushAdminLog('error', `Preflight blocked ${operation} on ${DEALS_SCHEMA}.${DEALS_TABLE}`, logDetail);
+      throw preflightError;
+    }
+
+    return {
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+      extraFieldsRemoved,
+      payload,
+    };
+  };
+
+  const createSharedPublishFailure = (
+    deal: Deal,
+    mode: 'insert' | 'update',
+    error: unknown,
+  ): SharedPublishFailure => {
+    const { payload } = sanitizeDealRowForPublish(mapDealToDealRow(deal, authUser?.id ?? null));
+    const errorContext = getSupabaseErrorContext(error);
+
+    return {
+      deal,
+      mode,
+      payload,
+      projectUrl: resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)',
+      schema: DEALS_SCHEMA,
+      table: DEALS_TABLE,
+      reason: errorContext.reason,
+      errorCode: errorContext.code,
+      errorDetails: errorContext.details,
+      errorHint: errorContext.hint,
+      missingColumns: errorContext.missingColumns,
+      occurredAt: Date.now(),
+    };
+  };
+
+  const logMissingDealColumns = (error: unknown) => {
+    const { missingColumns } = getSupabaseErrorContext(error);
+
+    if (missingColumns.length === 0) {
+      return;
+    }
+
+    pushAdminLog(
+      'error',
+      `Schema mismatch on ${DEALS_SCHEMA}.${DEALS_TABLE}`,
+      `Missing columns: ${missingColumns.join(', ')}`,
+    );
+  };
+
+  const dedupeAIFinderQueries = (queries: string[]) => {
+    const seen = new Set<string>();
+    return queries.filter((query) => {
+      const normalized = query.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+  };
+
+  const buildAIFinderQueries = (options: {
+    keyword?: string;
+    url?: string;
+    merchant?: string | null;
+    category?: string | null;
+    maxPrice?: number | null;
+    minDiscount?: number | null;
+  }) => {
+    const keyword = options.keyword?.trim() ?? '';
+    const directUrl = options.url?.trim() ?? '';
+    if (directUrl) return [directUrl];
+
+    const merchant = options.merchant?.trim() || '';
+    const priceConstraint = options.maxPrice ? `under $${options.maxPrice}` : '';
+    const discountConstraint = options.minDiscount ? `${options.minDiscount}% off` : '';
+    const queries = [
+      [keyword, 'buy', 'price', priceConstraint, discountConstraint].filter(Boolean).join(' '),
+      [keyword, merchant || 'Amazon'].filter(Boolean).join(' '),
+      [keyword, 'deal'].filter(Boolean).join(' '),
+      ['buy', keyword, 'online'].filter(Boolean).join(' '),
+      [keyword, 'product'].filter(Boolean).join(' '),
+    ];
+
+    return dedupeAIFinderQueries(queries).slice(0, 5);
+  };
+
+  const createEmptyAIFinderSnapshot = (overrides?: Partial<AIDealFinderResult>): AIDealFinderResult => ({
+    normalizedDeal: {
+      businessName: '',
+      title: '',
+      description: '',
+      category: '',
+      offerText: '',
+      isOnline: true,
+    },
+    generatedJson: '',
+    missingFields: [],
+    dealScore: 0,
+    rawResults: [],
+    searchCandidates: [],
+    validProductCandidates: [],
+    rejectedCandidates: [],
+    ...overrides,
+  });
+
+  const selectAIFinderResult = (
+    candidate: AIDealFinderCandidate,
+    options?: {
+      clearGeneratedResult?: boolean;
+      message?: string;
+    },
+  ) => {
+    setSelectedAIFinderUrl(candidate.url);
+    setAiFinderUrl(candidate.url);
+    setAiFinderUseDirectUrlFallback(false);
+    setAiFinderStage('result-selected');
+    setAiFinderError('');
+    setAiFinderMessage(options?.message ?? 'Result selected. Generate coupon fields when you are ready.');
+    if (options?.clearGeneratedResult !== false) {
+      setAiFinderResult(null);
+    }
+  };
+
+  const activateAIFinderDirectUrlFallback = () => {
+    const directUrl = aiFinderUrl.trim();
+
+    if (!directUrl) {
+      const message = 'Paste a product URL in Advanced Filters to use the fallback path.';
+      setAiFinderError(message);
+      setAiFinderMessage("Tavily is a discovery tool. If search results are weak or empty, paste a specific product URL instead.");
+      setShowSearchMeter(true);
+      aiFinderUrlInputRef.current?.focus();
+      return;
+    }
+
+    setSelectedAIFinderUrl('');
+    setAiFinderUseDirectUrlFallback(true);
+    setAiFinderStage('result-selected');
+    setAiFinderResult(null);
+    setAiFinderError('');
+    setAiFinderMessage('Direct product URL selected as the fallback source. Generate coupon fields when you are ready.');
+  };
+
+  const ensureAIFinderSourceSelection = (overrideUrl?: string) => {
+    const selectedSourceUrl = overrideUrl?.trim() || aiFinderUrl.trim() || '';
+
+    if (!selectedSourceUrl) {
+      const message = 'Paste a direct product URL to continue.';
+      setAiFinderError(message);
+      setAiFinderMessage('Direct URL intake is the active admin flow right now. Paste a product URL to continue.');
+      return null;
+    }
+
+    return selectedSourceUrl;
   };
 
   const navigateToPath = (path: string) => {
@@ -594,26 +1407,62 @@ export default function App() {
     setBulkImportMessage('');
     setAiFinderError('');
     setAiFinderMessage('');
+    setAiFinderStage('idle');
     setAiFinderResult(null);
+    setAiFinderSearchSnapshot(null);
+    setAiFinderCandidates([]);
+    setSelectedAIFinderUrl('');
+    setAiFinderUseDirectUrlFallback(false);
+    setShowSearchMeter(false);
+    setAiFinderRuntime({
+      requestSent: false,
+      responseReceived: false,
+      actualQuery: '',
+      currentAction: 'idle',
+      lastError: '',
+    });
+    setPortalAutofillStatus({
+      state: 'idle',
+      attempted: false,
+      message: '',
+      failureReason: '',
+    });
+    setPortalAutofillRequest(null);
+    setPendingPortalAutofill(null);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
     setEditingDealId(null);
     setDealDraft(null);
+    setPortalFieldSnapshot(null);
     setIsCreating(false);
     setShowDebug(false);
-    setCurrentView('live-deals');
+  };
+
+  const handleReturnToPublicApp = () => {
+    console.info('[LiveDrop] Public navigation flow', {
+      routePath,
+      isAdminRoute,
+      hasAdminAccess,
+      adminSessionEmail,
+      userEmail: authUser?.email ?? null,
+      currentView,
+    });
+    setAuthModalOpen(false);
+    setAuthError('');
+    setAuthInfo('');
+    setAdminAccessError('');
+    resetAdminUiState();
+    navigateToPath('/');
   };
 
   const fetchSharedDeals = async () => {
-    if (!supabase || !hasSupabaseConfig) {
-      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
-    }
-
     const includeAllStatuses = isAdminRoute && hasAdminAccess;
-    console.info('[LiveDrop] Querying shared deals table:', DEALS_TABLE, includeAllStatuses ? '(all statuses)' : '(active only)');
+    console.info('[LiveDrop] Querying shared deals table:', `${DEALS_SCHEMA}.${DEALS_TABLE}`, {
+      projectUrl: resolvedSupabaseUrl,
+      includeAllStatuses,
+    });
 
-    const baseQuery = supabase
-      .from(DEALS_TABLE)
+    const baseQuery = getDealsTableClient()
       .select('*')
       .order('created_at', { ascending: false });
 
@@ -623,122 +1472,261 @@ export default function App() {
 
     if (error) {
       console.error('[LiveDrop] Supabase deals query failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
         code: error.code,
         message: error.message,
         details: error.details,
         hint: error.hint,
       });
-      pushAdminLog('error', 'Shared deals fetch failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      pushAdminLog('error', 'Shared deals fetch failed', buildSharedWriteLogDetail({
+        operation: 'select',
+        error,
+      }));
       throw error;
     }
 
-    pushAdminLog('info', `Fetched ${data?.length ?? 0} shared deals from Supabase`);
+    pushAdminLog('info', `Fetched ${data?.length ?? 0} shared deals from Supabase`, buildSharedWriteLogDetail({
+      operation: 'select',
+    }));
 
     return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
   };
 
   const publishDealToBackend = async (deal: Deal) => {
-    if (!supabase || !hasSupabaseConfig) {
-      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
-    }
+    const { payload, extraFieldsRemoved, schemaColumns, schemaSource, payloadKeys, missingColumns } = await runDealsPayloadPreflight(
+      mapDealToDealRow(deal, authUser?.id ?? null),
+      'insert',
+    );
 
-    const payload = mapDealToDealRow(deal, authUser?.id ?? null);
-    const { data, error } = await supabase
-      .from(DEALS_TABLE)
+    console.info('[LiveDrop] Publishing deal to shared backend', {
+      projectUrl: resolvedSupabaseUrl,
+      schema: DEALS_SCHEMA,
+      table: DEALS_TABLE,
+      operation: 'insert',
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+      payload,
+    });
+    pushAdminLog('info', `Publishing "${deal.title}" to ${DEALS_SCHEMA}.${DEALS_TABLE}`, buildSharedWriteLogDetail({
+      operation: 'insert',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
+
+    const { data, error } = await getDealsTableClient()
       .insert(payload)
       .select()
       .single();
 
     if (error) {
+      logMissingDealColumns(error);
       console.error('[LiveDrop] Supabase deal insert failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
         payload,
+        extraFieldsRemoved,
         code: error.code,
         message: error.message,
         details: error.details,
         hint: error.hint,
       });
-      pushAdminLog('error', 'Shared deal publish failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      pushAdminLog('error', 'Shared deal publish failed', buildSharedWriteLogDetail({
+        operation: 'insert',
+        payload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys,
+        missingColumns,
+        error,
+      }));
       throw error;
     }
 
-    pushAdminLog('info', `Published deal "${deal.title}" to shared backend`);
+    pushAdminLog('info', `Published deal "${deal.title}" to shared backend`, buildSharedWriteLogDetail({
+      operation: 'insert',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
 
     return mapDealRowToDeal(data as DealRow);
   };
 
   const publishDealsToBackend = async (inputDeals: Deal[]) => {
-    if (!supabase || !hasSupabaseConfig) {
-      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
-    }
+    const preparedPayload = await Promise.all(
+      inputDeals.map((deal) =>
+        runDealsPayloadPreflight(mapDealToDealRow(deal, authUser?.id ?? null), 'bulk-upsert'),
+      ),
+    );
+    const payload = preparedPayload.map((entry) => entry.payload);
+    const extraFieldsRemoved = preparedPayload.flatMap((entry) => entry.extraFieldsRemoved);
+    const schemaColumns = preparedPayload[0]?.schemaColumns ?? [];
+    const schemaSource = preparedPayload[0]?.schemaSource ?? 'local-fallback';
+    const payloadKeys = preparedPayload[0]?.payloadKeys ?? [];
+    const missingColumns = Array.from(new Set(preparedPayload.flatMap((entry) => entry.missingColumns)));
 
-    const payload = inputDeals.map((deal) => mapDealToDealRow(deal, authUser?.id ?? null));
-    const { data, error } = await supabase
-      .from(DEALS_TABLE)
+    console.info('[LiveDrop] Bulk publishing deals to shared backend', {
+      projectUrl: resolvedSupabaseUrl,
+      schema: DEALS_SCHEMA,
+      table: DEALS_TABLE,
+      operation: 'bulk-upsert',
+      payloadCount: payload.length,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+      payload,
+    });
+    pushAdminLog('info', `Bulk publishing ${payload.length} deals to ${DEALS_SCHEMA}.${DEALS_TABLE}`, buildSharedWriteLogDetail({
+      operation: 'bulk-upsert',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
+
+    const { data, error } = await getDealsTableClient()
       .upsert(payload, { onConflict: 'id' })
       .select();
 
     if (error) {
+      logMissingDealColumns(error);
       console.error('[LiveDrop] Supabase bulk deal upsert failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
         payloadCount: payload.length,
         payload,
+        extraFieldsRemoved,
         code: error.code,
         message: error.message,
         details: error.details,
         hint: error.hint,
       });
-      pushAdminLog('error', 'Bulk shared deal import failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      pushAdminLog('error', 'Bulk shared deal import failed', buildSharedWriteLogDetail({
+        operation: 'bulk-upsert',
+        payload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys,
+        missingColumns,
+        error,
+      }));
       throw error;
     }
 
-    pushAdminLog('info', `Bulk upserted ${data?.length ?? inputDeals.length} deals to shared backend`);
+    pushAdminLog('info', `Bulk upserted ${data?.length ?? inputDeals.length} deals to shared backend`, buildSharedWriteLogDetail({
+      operation: 'bulk-upsert',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
 
     return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
   };
 
   const updateDealInBackend = async (deal: Deal) => {
-    if (!supabase || !hasSupabaseConfig) {
-      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
-    }
+    const { payload, extraFieldsRemoved, schemaColumns, schemaSource, payloadKeys, missingColumns } = await runDealsPayloadPreflight(
+      mapDealToDealRow(deal, authUser?.id ?? null),
+      'update',
+    );
 
-    const payload = mapDealToDealRow(deal, authUser?.id ?? null);
-    const { data, error } = await supabase
-      .from(DEALS_TABLE)
-      .upsert(payload, { onConflict: 'id' })
+    console.info('[LiveDrop] Updating deal in shared backend', {
+      projectUrl: resolvedSupabaseUrl,
+      schema: DEALS_SCHEMA,
+      table: DEALS_TABLE,
+      operation: 'update',
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+      payload,
+    });
+    pushAdminLog('info', `Updating "${deal.title}" in ${DEALS_SCHEMA}.${DEALS_TABLE}`, buildSharedWriteLogDetail({
+      operation: 'update',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
+
+    const { data, error } = await getDealsTableClient()
+      .update(payload)
+      .eq('id', deal.id)
       .select()
       .single();
 
     if (error) {
+      logMissingDealColumns(error);
       console.error('[LiveDrop] Supabase deal update failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
         payload,
+        extraFieldsRemoved,
         code: error.code,
         message: error.message,
         details: error.details,
         hint: error.hint,
       });
-      pushAdminLog('error', 'Shared deal update failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      pushAdminLog('error', 'Shared deal update failed', buildSharedWriteLogDetail({
+        operation: 'update',
+        payload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys,
+        missingColumns,
+        error,
+      }));
       throw error;
     }
 
-    pushAdminLog('info', `Updated deal "${deal.title}" in shared backend`);
+    pushAdminLog('info', `Updated deal "${deal.title}" in shared backend`, buildSharedWriteLogDetail({
+      operation: 'update',
+      payload,
+      extraFieldsRemoved,
+      schemaColumns,
+      schemaSource,
+      payloadKeys,
+      missingColumns,
+    }));
     return mapDealRowToDeal(data as DealRow);
   };
 
   const deleteDealFromBackend = async (dealId: string) => {
-    if (!supabase || !hasSupabaseConfig) {
-      throw new Error(supabaseConfigIssue || 'Supabase connection is unavailable.');
-    }
-
-    const { error } = await supabase
-      .from(DEALS_TABLE)
+    const { error } = await getDealsTableClient()
       .delete()
       .eq('id', dealId);
 
     if (error) {
       console.error('[LiveDrop] Supabase deal delete failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
         dealId,
         code: error.code,
@@ -746,11 +1734,16 @@ export default function App() {
         details: error.details,
         hint: error.hint,
       });
-      pushAdminLog('error', 'Shared deal delete failed', `${error.message}${error.details ? ` | ${error.details}` : ''}`);
+      pushAdminLog('error', 'Shared deal delete failed', buildSharedWriteLogDetail({
+        operation: 'delete',
+        error,
+      }));
       throw error;
     }
 
-    pushAdminLog('info', `Deleted deal ${dealId} from shared backend`);
+    pushAdminLog('info', `Deleted deal ${dealId} from shared backend`, buildSharedWriteLogDetail({
+      operation: 'delete',
+    }));
   };
 
   const handleLoadBulkImportSample = () => {
@@ -769,7 +1762,13 @@ export default function App() {
       if (error && typeof error === 'object' && 'context' in error) {
         const context = (error as { context?: Response }).context;
         if (context) {
+          console.error('[LiveDrop] Affiliate Deal Finder HTTP error response', {
+            status: context.status,
+            statusText: context.statusText,
+          });
           const payload = await context.clone().json().catch(() => null);
+          const details = typeof payload?.details === 'string' ? payload.details : null;
+          const stage = typeof payload?.stage === 'string' ? payload.stage : null;
           const structuredMessage =
             typeof payload?.error === 'string'
               ? payload.error
@@ -778,7 +1777,11 @@ export default function App() {
                 : null;
 
           if (structuredMessage) {
-            return structuredMessage;
+            return [structuredMessage, details, stage ? `Stage: ${stage}` : null].filter(Boolean).join(' | ');
+          }
+
+          if (context.status === 404) {
+            return `Could not find the ${AI_DEAL_FINDER_FUNCTION} Edge Function in this Supabase project. Deploy the function, then try again.`;
           }
         }
       }
@@ -787,55 +1790,89 @@ export default function App() {
     }
 
     if (fallback.includes('Failed to send a request to the Edge Function')) {
-      return 'Could not reach the ai-deal-finder Edge Function. Verify it is deployed and your Supabase project URL/API key are correct.';
+      return `Could not reach the ${AI_DEAL_FINDER_FUNCTION} Edge Function. Verify it is deployed and your Supabase project URL/API key are correct.`;
     }
 
     return fallback;
   };
 
-  const runAIDealFinder = async () => {
-    if (!supabase || !hasSupabaseConfig) {
+  const runAIDealFinder = async (
+    mode: 'extract' | 'generate' = 'extract',
+    options?: {
+      overrideUrl?: string;
+    },
+  ) => {
+    const keyword = aiFinderKeyword.trim();
+    const sourceUrl = options?.overrideUrl?.trim() || aiFinderUrl.trim();
+
+    setAiFinderRuntime({
+      requestSent: true,
+      responseReceived: false,
+      actualQuery: sourceUrl,
+      currentAction: 'validating',
+      lastError: '',
+    });
+
+    if (!supabaseEdgeClient || !hasSupabaseConfig) {
       const message = supabaseConfigIssue || 'Supabase is required for Affiliate Deal Finder.';
       setAiFinderError(message);
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        currentAction: 'idle',
+        lastError: message,
+      }));
       throw new Error(message);
     }
 
-    const keyword = aiFinderKeyword.trim();
-    const url = aiFinderUrl.trim();
-
-    if (!keyword && !url) {
-      const message = 'Enter a search keyword. A product URL is optional.';
+    if (!sourceUrl) {
+      const message = 'Paste a direct product URL to continue.';
       setAiFinderError(message);
+      setAiFinderMessage('Direct URL intake is the only active admin flow right now.');
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        currentAction: 'idle',
+        lastError: message,
+      }));
       throw new Error(message);
     }
 
     setAiFinderLoading(true);
     setAiFinderError('');
-    setAiFinderMessage('');
+    setAiFinderMessage(mode === 'extract' ? 'URL accepted. Starting extraction...' : 'Generating coupon fields from the product URL...');
+    setAiFinderStage('searching');
+    setAiFinderSearchSnapshot(null);
+    setAiFinderCandidates([]);
+    setSelectedAIFinderUrl('');
+    setAiFinderUseDirectUrlFallback(false);
+
+    const requestPayload = {
+      phase: mode,
+      keyword: keyword || undefined,
+      url: sourceUrl,
+    };
 
     try {
-      console.info('[LiveDrop] Invoking Edge Function', {
-        functionName: 'ai-deal-finder',
-        keyword,
-        hasUrl: Boolean(url),
-        merchant: aiFinderMerchant,
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        currentAction: 'invoking edge function',
+      }));
+
+      console.info('[LiveDrop] Invoking direct URL deal extraction', {
+        supabaseUrl: resolvedSupabaseUrl,
+        hasSupabaseUrl: Boolean(resolvedSupabaseUrl),
+        hasSupabaseAnonKey,
+        functionName: AI_DEAL_FINDER_FUNCTION,
+        mode,
+        payload: requestPayload,
       });
 
-      const { data, error } = await supabase.functions.invoke('ai-deal-finder', {
-        body: {
-          keyword: keyword || undefined,
-          url: url || undefined,
-          merchant: aiFinderMerchant === 'Any' ? undefined : aiFinderMerchant,
-          category: aiFinderCategory || undefined,
-          maxPrice: aiFinderMaxPrice.trim() ? Number(aiFinderMaxPrice) : null,
-          minDiscount: aiFinderMinDiscount.trim() ? Number(aiFinderMinDiscount) : null,
-        },
+      const { data, error } = await supabaseEdgeClient.functions.invoke(AI_DEAL_FINDER_FUNCTION, {
+        body: requestPayload,
       });
 
       if (error) {
-        console.error('[LiveDrop] AI Deal Finder function failed', error);
         const message = await extractAIDealFinderErrorMessage(error);
-        pushAdminLog('error', 'Affiliate Deal Finder failed', message);
+        pushAdminLog('error', 'Direct URL extraction failed', message);
         throw new Error(message);
       }
 
@@ -844,27 +1881,63 @@ export default function App() {
       }
 
       const result = data as AIDealFinderResult | null;
-      if (!result?.normalizedDeal || !result?.generatedJson) {
-        console.error('[LiveDrop] AI Deal Finder returned incomplete data', data);
-        throw new Error('Affiliate Deal Finder returned an incomplete response.');
+      if (!result?.normalizedDeal) {
+        throw new Error('Direct URL extraction returned an incomplete response.');
       }
 
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        responseReceived: true,
+        currentAction: 'completed',
+      }));
       setAiFinderResult(result);
-      setAiFinderMessage('Deal data generated. Review it, then fill the portal when ready.');
+
+      if (mode === 'extract') {
+        const extractionSucceeded = result.extractionStatus === 'Extraction succeeded';
+        setAiFinderStage(extractionSucceeded ? 'result-selected' : 'idle');
+        setAiFinderMessage(
+          extractionSucceeded
+            ? 'Stage 1 complete. Source data was extracted and is ready for normalization.'
+            : 'Stage 1 completed with partial data. Basic URL fields were mapped and you can still continue to Generate Deal.',
+        );
+      } else {
+        const extractionSucceeded = result.extractionStatus === 'Extraction succeeded';
+        setAiFinderStage('coupon-generated');
+        setAiFinderMessage(
+          extractionSucceeded
+            ? 'Stage 2 complete. A normalized deal object is ready for portal mapping.'
+            : 'Stage 2 completed with fallback data. The normalized deal object is ready, but some source fields are still missing.',
+        );
+        syncGeneratedDealToPortalFields(result);
+        setBulkImportMessage(
+          extractionSucceeded
+            ? 'Generated coupon JSON inserted into the portal intake box.'
+            : 'Fallback coupon JSON inserted into the portal intake box. Add any missing source assets before publishing.',
+        );
+      }
+
       pushAdminLog(
         'info',
-        `Affiliate Deal Finder generated ${result.normalizedDeal.title}`,
+        mode === 'extract' ? `Extracted deal from ${sourceUrl}` : `Generated coupon for ${result.normalizedDeal.title}`,
         result.missingFields.length ? `Missing: ${result.missingFields.join(', ')}` : 'All key fields extracted.',
       );
+
       return result;
     } catch (error) {
       const message = await extractAIDealFinderErrorMessage(error);
       setAiFinderError(message);
-      console.error('[LiveDrop] Affiliate Deal Finder failed', {
-        functionName: 'ai-deal-finder',
-        keyword,
-        url,
-        merchant: aiFinderMerchant,
+      setAiFinderMessage(mode === 'extract' ? 'Extraction failed.' : 'Coupon generation failed.');
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        currentAction: 'idle',
+        lastError: message,
+      }));
+      setAiFinderStage('idle');
+      console.error('[LiveDrop] Direct URL intake failed', {
+        supabaseUrl: resolvedSupabaseUrl,
+        functionName: AI_DEAL_FINDER_FUNCTION,
+        mode,
+        sourceUrl,
         error,
         message,
       });
@@ -874,37 +1947,161 @@ export default function App() {
     }
   };
 
-  const handleSearchAIDeal = async () => {
+  const handleExtractAIDeal = async () => {
     try {
-      await runAIDealFinder();
+      await runAIDealFinder('extract');
     } catch {
-      // Error is already surfaced in UI state.
+      // surfaced in UI state
     }
   };
 
-  const handleGenerateAIDealJson = async () => {
+  const handleSearchAIDeal = handleExtractAIDeal;
+
+  const handleGenerateAIDealJson = async (overrideUrl?: string) => {
+    const sourceUrl = ensureAIFinderSourceSelection(overrideUrl);
+    if (!sourceUrl) return;
+
     try {
-      const result = aiFinderResult ?? (await runAIDealFinder());
-      setBulkImportJson(result.generatedJson);
-      setBulkImportCandidates([]);
-      setSelectedBulkImportIndex(0);
-      setBulkImportError('');
-      setBulkImportMessage('Generated JSON inserted into the portal intake box.');
+      await runAIDealFinder('generate', { overrideUrl: sourceUrl });
     } catch (error) {
       console.error('[LiveDrop] AI Deal Finder JSON generation failed', error);
     }
   };
 
-  const handleFillPortalFromAIDeal = async () => {
+  const handleFillPortalFromAIDeal = async (overrideUrl?: string) => {
+    const sourceUrl = ensureAIFinderSourceSelection(overrideUrl);
+    if (!sourceUrl) return;
+
     try {
-      const result = aiFinderResult ?? (await runAIDealFinder());
-      setBulkImportJson(result.generatedJson);
-      setBulkImportError('');
-      setBulkImportMessage('AI Deal Finder generated JSON and loaded it into the Business Portal.');
-      const parsedDeals = parseBulkImportDeals(result.generatedJson);
-      loadBulkImportCandidateIntoPortal(parsedDeals, 0);
+      const result = aiFinderResult?.generatedJson
+        ? aiFinderResult
+        : await runAIDealFinder('generate', { overrideUrl: sourceUrl });
+      const mappedPortalPayload = buildPortalAutofillPayload(result.normalizedDeal);
+      openPortalWithAutofillPayload(mappedPortalPayload, result.normalizedDeal, {
+        serializedDeal: result.generatedJson,
+        message: 'Applying normalized deal data to the Business Portal form...',
+      });
     } catch (error) {
       console.error('[LiveDrop] AI Deal Finder portal fill failed', error);
+    }
+  };
+
+  const handleFillTestCoupon = () => {
+    const normalizedDeal: BulkImportDealInput = {
+      businessName: TEST_COUPON_AUTOFILL.storeName,
+      title: TEST_COUPON_AUTOFILL.dealTitle,
+      description: TEST_COUPON_AUTOFILL.description,
+      category: TEST_COUPON_AUTOFILL.category,
+      offerText: TEST_COUPON_AUTOFILL.offerText,
+      websiteUrl: TEST_COUPON_AUTOFILL.websiteUrl,
+      productLink: TEST_COUPON_AUTOFILL.productLink,
+      isOnline: true,
+    };
+
+    openPortalWithAutofillPayload(TEST_COUPON_AUTOFILL, normalizedDeal, {
+      message: 'Applying hardcoded test coupon values to the Business Portal form...',
+    });
+  };
+
+  const handleCopyAIDealJson = async () => {
+    if (!aiFinderResult?.generatedJson) return;
+
+    const copyResult = await copyTextToClipboard(aiFinderResult.generatedJson);
+    if (copyResult === 'success') {
+      setAiFinderMessage('Coupon JSON copied to clipboard.');
+      setAiFinderError('');
+      return;
+    }
+
+    setAiFinderError('Could not copy coupon JSON automatically.');
+  };
+
+  const handleReviewAIDealMissingFields = () => {
+    aiFinderFieldCoverageRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+
+    const portalCoverage = buildPortalFieldCoverage(portalFieldSnapshot ?? dealDraft);
+    const requiredMissing = portalCoverage.missingRequired;
+    const optionalMissing = portalCoverage.missingOptional;
+
+    if (requiredMissing.length || optionalMissing.length) {
+      setAiFinderMessage('Scrolled to the missing-fields review section.');
+    } else {
+      setAiFinderMessage('All mapped portal fields are already filled.');
+    }
+  };
+
+  const handleEnhanceAIDeal = async () => {
+    if (!aiFinderResult?.normalizedDeal) {
+      await handleSearchAIDeal();
+      return;
+    }
+
+    if (!supabaseEdgeClient || !hasSupabaseConfig) {
+      const message = supabaseConfigIssue || 'Supabase is required for Affiliate Deal Finder.';
+      setAiFinderError(message);
+      return;
+    }
+
+    setAiFinderLoading(true);
+    setAiFinderError('');
+    setAiFinderMessage('');
+
+    try {
+      const requestPayload = {
+        phase: 'generate',
+        keyword: aiFinderKeyword.trim() || aiFinderResult.normalizedDeal.title,
+        url: (
+          selectedAIFinderUrl ||
+          (
+            aiFinderResult.normalizedDeal.affiliateUrl ??
+            aiFinderResult.normalizedDeal.productUrl ??
+            aiFinderResult.normalizedDeal.websiteUrl ??
+            aiFinderUrl.trim()
+          )
+        ) || undefined,
+        merchant: aiFinderMerchant === 'Any' ? undefined : aiFinderMerchant,
+        category: aiFinderCategory || undefined,
+        maxPrice: aiFinderMaxPrice.trim() ? Number(aiFinderMaxPrice) : null,
+        minDiscount: aiFinderMinDiscount.trim() ? Number(aiFinderMinDiscount) : null,
+        enhance: true,
+      };
+
+      console.info('[LiveDrop] Enhancing deal via Edge Function', {
+        functionName: AI_DEAL_FINDER_FUNCTION,
+        payload: requestPayload,
+      });
+
+      const { data, error } = await supabaseEdgeClient.functions.invoke(AI_DEAL_FINDER_FUNCTION, {
+        body: requestPayload,
+      });
+
+      if (error) {
+        const message = await extractAIDealFinderErrorMessage(error);
+        throw new Error(message);
+      }
+
+      if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') {
+        throw new Error(data.error);
+      }
+
+      const result = data as AIDealFinderResult | null;
+      if (!result?.normalizedDeal || !result?.generatedJson) {
+        throw new Error('Enhance Deal returned an incomplete response.');
+      }
+
+      setAiFinderResult(result);
+      setBulkImportJson(result.generatedJson);
+      setBulkImportMessage('Enhanced deal JSON is ready and synced into the portal intake box.');
+      setAiFinderMessage(result.resultQuality === 'enriched' ? 'Deal upgraded with full product-page data.' : 'Enhancement attempted. Partial data is still available.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Enhance Deal failed.';
+      setAiFinderError(message);
+      console.error('[LiveDrop] Enhance Deal failed', { error, message });
+    } finally {
+      setAiFinderLoading(false);
     }
   };
 
@@ -915,8 +2112,9 @@ export default function App() {
     const createdAt = Date.now() - index * 60 * 1000;
     const businessType = item.isOnline === false ? 'local' : 'online';
     const affiliateUrl = item.affiliateUrl || undefined;
-    const websiteUrl = item.websiteUrl || affiliateUrl || item.productUrl || undefined;
-    const productUrl = item.productUrl || affiliateUrl || item.websiteUrl || undefined;
+    const productLink = item.productLink || item.productUrl || undefined;
+    const websiteUrl = item.websiteUrl || affiliateUrl || productLink || undefined;
+    const productUrl = productLink || affiliateUrl || item.websiteUrl || undefined;
 
     return {
       id: `import-draft-${Math.random().toString(36).slice(2, 10)}`,
@@ -947,6 +2145,84 @@ export default function App() {
     };
   };
 
+  const syncGeneratedDealToPortalFields = (
+    result: AIDealFinderResult,
+    options?: {
+      openPortal?: boolean;
+    },
+  ) => {
+    const serializedDeal = result.generatedJson || JSON.stringify(result.normalizedDeal, null, 2);
+    const parsedDeals = parseBulkImportDeals(serializedDeal);
+    const nextDraft = createDraftFromBulkImport(parsedDeals[0], 0);
+
+    setDealDraft(nextDraft);
+    setPortalFieldSnapshot(null);
+    setBulkImportJson(serializedDeal);
+    setBulkImportCandidates(parsedDeals);
+    setSelectedBulkImportIndex(0);
+    setBulkImportError('');
+
+    if (options?.openPortal) {
+      setPortalSuccessMessage('');
+      setDropMode(nextDraft.businessType === 'online' ? 'online' : 'local');
+      setCurrentView('business-portal');
+      setIsCreating(true);
+    }
+
+    return {
+      serializedDeal,
+      parsedDeals,
+      nextDraft,
+    };
+  };
+
+  const openPortalWithAutofillPayload = (
+    mappedPayload: PortalAutofillPayload,
+    normalizedDeal: BulkImportDealInput,
+    options?: {
+      serializedDeal?: string;
+      message?: string;
+    },
+  ) => {
+    const serializedDeal = options?.serializedDeal ?? JSON.stringify(normalizedDeal, null, 2);
+    const parsedDeals = parseBulkImportDeals(serializedDeal);
+    const nextDraft = createDraftFromBulkImport(parsedDeals[0], 0);
+    const requestId = Date.now();
+
+    console.info('[LiveDrop] Preparing portal autofill', {
+      normalizedDealObject: normalizedDeal,
+      mappedPortalPayload: mappedPayload,
+    });
+
+    setPortalSuccessMessage('');
+    setDealDraft(nextDraft);
+    setPortalFieldSnapshot(null);
+    setPortalAutofillRequest({
+      id: requestId,
+      payload: mappedPayload,
+    });
+    setPendingPortalAutofill({
+      requestId,
+      normalizedDeal,
+      mappedPayload,
+    });
+    setPortalAutofillStatus({
+      state: 'pending',
+      attempted: true,
+      message: options?.message ?? 'Applying data to the Business Portal form...',
+      failureReason: '',
+    });
+    setBulkImportJson(serializedDeal);
+    setBulkImportCandidates(parsedDeals);
+    setSelectedBulkImportIndex(0);
+    setBulkImportError('');
+    setBulkImportMessage(options?.message ?? 'Applying data to the Business Portal form...');
+    setAiFinderMessage(options?.message ?? 'Applying data to the Business Portal form...');
+    setDropMode(nextDraft.businessType === 'online' ? 'online' : 'local');
+    setCurrentView('business-portal');
+    setIsCreating(true);
+  };
+
   const loadBulkImportCandidateIntoPortal = (items: BulkImportDealInput[], index = 0) => {
     const safeIndex = Math.min(Math.max(index, 0), items.length - 1);
     const nextDraft = createDraftFromBulkImport(items[safeIndex], safeIndex);
@@ -961,6 +2237,9 @@ export default function App() {
         : 'Deal loaded into the portal form.',
     );
     setDealDraft(nextDraft);
+    setPortalFieldSnapshot(null);
+    setPortalAutofillRequest(null);
+    setPendingPortalAutofill(null);
     setDropMode(nextDraft.businessType === 'online' ? 'online' : 'local');
     setCurrentView('business-portal');
     setIsCreating(true);
@@ -988,8 +2267,15 @@ export default function App() {
   const handleAdminLogout = () => {
     console.info('[LiveDrop] Admin logout started', {
       routePath,
+      isAdminRoute,
+      hasAdminAccess,
       adminSessionEmail,
+      userEmail: authUser?.email ?? null,
     });
+    setAuthModalOpen(false);
+    setAuthError('');
+    setAuthInfo('');
+    setAdminAccessError('');
     setAdminSessionEmail(null);
     resetAdminUiState();
 
@@ -998,6 +2284,10 @@ export default function App() {
       window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
       window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
     }
+    console.info('[LiveDrop] Admin logout completed', {
+      routePath,
+      adminSessionCleared: true,
+    });
     navigateToPath('/');
   };
 
@@ -1129,11 +2419,34 @@ export default function App() {
   }, [adminSessionEmail]);
 
   useEffect(() => {
-    if (isPublicRoute) {
+    const previousRoutePath = previousRoutePathRef.current;
+    console.info('[LiveDrop] Route transition evaluated', {
+      from: previousRoutePath,
+      to: routePath,
+      isAdminRoute,
+      hasAdminAccess,
+      userEmail: authUser?.email ?? null,
+    });
+
+    if (previousRoutePath === '/admin' && routePath !== '/admin') {
+      console.info('[LiveDrop] Leaving admin route for public shell', {
+        from: previousRoutePath,
+        to: routePath,
+      });
       resetAdminUiState();
       setAdminAccessError('');
+      setAuthModalOpen(false);
+      setAuthError('');
+      setAuthInfo('');
     }
-  }, [isPublicRoute]);
+
+    if (!isAdminRoute && !currentView) {
+      console.info('[LiveDrop] Restoring safe default public state');
+      setCurrentView('live-deals');
+    }
+
+    previousRoutePathRef.current = routePath;
+  }, [authUser?.email, currentView, hasAdminAccess, isAdminRoute, routePath]);
 
   useEffect(() => {
     if (isDashboardRoute) {
@@ -1624,23 +2937,40 @@ export default function App() {
     };
 
     let publishedDeal = localDeal;
+    let sharedWriteSucceeded = false;
+    const sharedWriteMode: SharedPublishFailure['mode'] = editingDealId ? 'update' : 'insert';
 
     if (supabase && hasSupabaseConfig) {
       try {
         publishedDeal = editingDealId
           ? await updateDealInBackend(localDeal)
           : await publishDealToBackend(localDeal);
+        sharedWriteSucceeded = true;
+        setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
-        console.error('Failed to publish deal to shared backend:', error);
-        setDealsError('Could not publish to the shared backend. Showing your local copy for now.');
+        const failure = createSharedPublishFailure(localDeal, sharedWriteMode, error);
+        console.error('[LiveDrop] Shared publish fallback engaged', failure);
+        setLastSharedPublishFailure(failure);
+        pushAdminLog('error', `Using local fallback after shared ${sharedWriteMode} failure`, formatAdminLogDetail(failure));
+        setDealsError(`Could not ${sharedWriteMode} to ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Showing your local copy for now.`);
       }
     } else {
-      setDealsError('Shared backend is not configured. Showing local-only publishing fallback.');
+      setLastSharedPublishFailure(null);
+      setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
     }
 
     setDeals(prev => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
     setDealDraft(null);
+    setPortalFieldSnapshot(null);
+    setPortalAutofillStatus({
+      state: 'idle',
+      attempted: false,
+      message: '',
+      failureReason: '',
+    });
+    setPortalAutofillRequest(null);
+    setPendingPortalAutofill(null);
     setEditingDealId(null);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
@@ -1650,16 +2980,64 @@ export default function App() {
     } else {
       setDropMode('online');
     }
-    setPortalSuccessMessage('Your deal is live');
+    setPortalSuccessMessage(sharedWriteSucceeded ? 'Your deal is live' : '');
     setIsCreating(false);
     if (!isAdminRoute) {
       setCurrentView('live-deals');
     }
   };
 
+  const handleRetryLastSharedPublish = async () => {
+    if (!lastSharedPublishFailure) {
+      return;
+    }
+
+    setRetryingSharedPublish(true);
+    setDealsError('');
+    pushAdminLog('info', `Retrying shared ${lastSharedPublishFailure.mode} for "${lastSharedPublishFailure.deal.title}"`, formatAdminLogDetail({
+      projectUrl: lastSharedPublishFailure.projectUrl,
+      schema: lastSharedPublishFailure.schema,
+      table: lastSharedPublishFailure.table,
+      operation: lastSharedPublishFailure.mode,
+      payload: lastSharedPublishFailure.payload,
+    }));
+
+    try {
+      const publishedDeal = lastSharedPublishFailure.mode === 'update'
+        ? await updateDealInBackend(lastSharedPublishFailure.deal)
+        : await publishDealToBackend(lastSharedPublishFailure.deal);
+      setDeals((prev) => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
+      setLastSharedPublishFailure(null);
+      setDealsError('');
+      setPortalSuccessMessage('Your deal is live');
+      pushAdminLog('info', `Retry ${lastSharedPublishFailure.mode} succeeded for "${publishedDeal.title}"`);
+    } catch (error) {
+      const failure = createSharedPublishFailure(
+        lastSharedPublishFailure.deal,
+        lastSharedPublishFailure.mode,
+        error,
+      );
+      console.error('[LiveDrop] Retry publish failed', failure);
+      setLastSharedPublishFailure(failure);
+      setDealsError(`Retry failed for ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Your local copy is still available.`);
+      pushAdminLog('error', `Retry ${failure.mode} failed`, formatAdminLogDetail(failure));
+      setPortalSuccessMessage('');
+    } finally {
+      setRetryingSharedPublish(false);
+    }
+  };
+
   const handleOpenCreateDeal = () => {
     setPortalSuccessMessage('');
     setDealDraft(null);
+    setPortalFieldSnapshot(null);
+    setPortalAutofillStatus({
+      state: 'idle',
+      attempted: false,
+      message: '',
+      failureReason: '',
+    });
+    setPendingPortalAutofill(null);
     setEditingDealId(null);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
@@ -1699,23 +3077,24 @@ export default function App() {
   };
 
   const handleReuseDeal = (deal: Deal) => {
-    setPortalSuccessMessage('');
-    setEditingDealId(null);
-    setBulkImportCandidates([]);
-    setSelectedBulkImportIndex(0);
-    setDealDraft({
+    const nextDraft = {
       ...deal,
       expiresAt: Date.now() + 30 * 60 * 1000,
       currentClaims: 0,
       claimCount: 0,
       hasTimer: true,
-    });
+    };
+    setPortalSuccessMessage('');
+    setEditingDealId(null);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
+    setDealDraft(nextDraft);
+    setPortalFieldSnapshot(nextDraft);
     setIsCreating(true);
   };
 
   const handleReuseDealAndGoLive = (deal: Deal) => {
-    handleCreateDeal(createReusedDealPayload(deal, { durationMinutes: 30, publishImmediately: true }));
-    setPortalSuccessMessage('Your deal is live');
+    void handleCreateDeal(createReusedDealPayload(deal, { durationMinutes: 30, publishImmediately: true }));
   };
 
   const handleCancelDeal = (dealId: string) => {
@@ -1725,6 +3104,7 @@ export default function App() {
   const handleEditDeal = (deal: Deal) => {
     setPortalSuccessMessage('');
     setDealDraft(deal);
+    setPortalFieldSnapshot(deal);
     setEditingDealId(deal.id);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
@@ -1763,8 +3143,10 @@ export default function App() {
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
-    } catch {
-      setDealsError('Could not update deal status.');
+    } catch (error) {
+      const failure = createSharedPublishFailure(nextDeal, 'update', error);
+      setDealsError(`Could not update deal status in ${failure.schema}.${failure.table}. ${failure.reason}`);
+      setLastSharedPublishFailure(failure);
     }
   };
 
@@ -1778,8 +3160,10 @@ export default function App() {
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
-    } catch {
-      setDealsError('Could not update featured status.');
+    } catch (error) {
+      const failure = createSharedPublishFailure(nextDeal, 'update', error);
+      setDealsError(`Could not update featured status in ${failure.schema}.${failure.table}. ${failure.reason}`);
+      setLastSharedPublishFailure(failure);
     }
   };
 
@@ -1792,8 +3176,10 @@ export default function App() {
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
-    } catch {
-      setDealsError('Could not update trending status.');
+    } catch (error) {
+      const failure = createSharedPublishFailure(nextDeal, 'update', error);
+      setDealsError(`Could not update trending status in ${failure.schema}.${failure.table}. ${failure.reason}`);
+      setLastSharedPublishFailure(failure);
     }
   };
 
@@ -1817,6 +3203,38 @@ export default function App() {
   const handleViewClaims = () => {
     setSelectedDeal(null);
     setCurrentView('my-claims');
+  };
+
+  const renderDealsErrorBanner = () => {
+    if (dealsLoading || !dealsError) {
+      return null;
+    }
+
+    const canRetryPublish = Boolean(lastSharedPublishFailure) && (hasAdminAccess || currentView === 'business-portal' || isAdminRoute);
+
+    return (
+      <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p>{dealsError}</p>
+            {lastSharedPublishFailure ? (
+              <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
+                Last backend error: {lastSharedPublishFailure.reason}
+              </p>
+            ) : null}
+          </div>
+          {canRetryPublish ? (
+            <button
+              onClick={() => void handleRetryLastSharedPublish()}
+              disabled={retryingSharedPublish}
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {retryingSharedPublish ? 'Retrying...' : 'Retry publish'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
   };
 
   const pushNotification = (payload: Omit<AppNotification, 'id' | 'timestamp' | 'read'>) => {
@@ -2205,11 +3623,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {!dealsLoading && dealsError ? (
-          <div className="rounded-[1.25rem] border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-semibold text-amber-700">
-            {dealsError}
-          </div>
-        ) : null}
+        {renderDealsErrorBanner()}
 
         {/* Developer Debug Section */}
         {isAdminRoute && showDebug && dropMode === 'local' && (
@@ -2825,7 +4239,517 @@ export default function App() {
   };
 
   const renderAIDealFinderPanel = () => {
+    {
+      const previewDeal = aiFinderResult?.normalizedDeal;
+      const extractionDebug = aiFinderResult?.extractionDebug;
+      const sourceAssets = aiFinderResult?.sourceAssets;
+      const generatedFieldRows = [
+        { label: 'Business Name', value: previewDeal?.businessName ?? '' },
+        { label: 'Deal Title', value: previewDeal?.title ?? '' },
+        { label: 'Description', value: previewDeal?.description ?? '' },
+        { label: 'Category', value: previewDeal?.category ?? '' },
+        { label: 'Deal / Discount Text', value: previewDeal?.offerText ?? '' },
+        { label: 'Website URL', value: previewDeal?.websiteUrl ?? '' },
+        { label: 'Product Link', value: previewDeal?.productUrl ?? previewDeal?.productLink ?? previewDeal?.affiliateUrl ?? '' },
+        { label: 'Image URL', value: previewDeal?.imageUrl ?? '' },
+      ];
+      const portalCoverageSource = portalFieldSnapshot;
+      const portalCoverage = buildPortalFieldCoverage(portalCoverageSource);
+      const filledFields = portalCoverage.filled;
+      const requiredMissingFields = portalCoverage.missingRequired;
+      const optionalMissingFields = portalCoverage.missingOptional;
+      const completionPercent = portalCoverage.completionPercent;
+      const normalizedJson = aiFinderResult?.generatedJson || (previewDeal ? JSON.stringify(previewDeal, null, 2) : '');
+      const priceText = formatFinderPrice(previewDeal?.price);
+      const originalPriceText = formatFinderPrice(previewDeal?.originalPrice);
+      const hasAcceptedUrl = Boolean(aiFinderDirectUrl);
+      const hasMappedBasicFields = Boolean(previewDeal?.websiteUrl || previewDeal?.productUrl || previewDeal?.businessName);
+      const extractionSucceeded = aiFinderResult?.extractionStatus === 'Extraction succeeded';
+      const extractionFailed = aiFinderResult?.extractionStatus === 'Extraction failed';
+      const canGenerateCoupon = Boolean(aiFinderDirectUrl);
+      const canFillPortal = Boolean(aiFinderResult?.generatedJson);
+      const portalMappingReady = filledFields.length > 0;
+      const portalMappingSucceeded = portalMappingReady && requiredMissingFields.length === 0;
+      const requiredFilledCount = portalCoverage.required.filter((field) => field.filled).length;
+      const optionalFilledCount = portalCoverage.optional.filter((field) => field.filled).length;
+      const stageCards = [
+        {
+          key: 'extract',
+          label: 'Stage 1',
+          title: 'Extract',
+          status: extractionSucceeded ? 'Ready' : extractionFailed ? 'Partial' : hasAcceptedUrl ? 'Pending' : 'Awaiting URL',
+          tone: extractionSucceeded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : extractionFailed ? 'bg-amber-100 text-amber-700 border-amber-200' : hasAcceptedUrl ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+        },
+        {
+          key: 'normalize',
+          label: 'Stage 2',
+          title: 'Normalize',
+          status: aiFinderResult?.generatedJson ? 'Ready' : aiFinderResult?.normalizedDeal ? 'Preview Ready' : 'Pending',
+          tone: aiFinderResult?.generatedJson ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : aiFinderResult?.normalizedDeal ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+        },
+        {
+          key: 'map',
+          label: 'Stage 3',
+          title: 'Map to Portal',
+          status: portalMappingSucceeded ? 'Ready' : portalMappingReady ? 'Partial' : 'Pending',
+          tone: portalMappingSucceeded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : portalMappingReady ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+        },
+      ];
+
+      return (
+        <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Direct Deal Intake</p>
+              <h3 className="mt-1 text-lg font-black text-slate-900">Paste a product URL, extract product data, generate coupon fields, then fill the portal</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-500">Tavily search is disabled for now. This admin tool uses a direct product URL only, keeps the cleaned product link and merchant even when extraction fails, and lets you review the result before it touches the portal.</p>
+            </div>
+            <span className={`inline-flex h-9 items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-[0.12em] ${
+              aiFinderLoading
+                ? 'bg-indigo-100 text-indigo-700'
+                : aiFinderResult?.generatedJson
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : hasAcceptedUrl
+                    ? 'bg-sky-100 text-sky-700'
+                    : 'bg-slate-100 text-slate-600'
+            }`}>
+              {aiFinderLoading ? 'Processing URL' : aiFinderResult?.generatedJson ? 'Coupon Ready' : hasAcceptedUrl ? 'URL Ready' : 'Awaiting URL'}
+            </span>
+          </div>
+
+          <div className="mt-5 rounded-[1.5rem] border border-slate-100 bg-slate-50/60 p-4">
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product URL</span>
+              <input
+                ref={aiFinderUrlInputRef}
+                type="url"
+                value={aiFinderUrl}
+                onChange={(event) => setAiFinderUrl(event.target.value)}
+                placeholder="https://www.amazon.com/... or another product page"
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+              />
+              <p className="mt-2 text-xs leading-5 text-slate-400">Direct URL only. The app will always keep the cleaned link, merchant, and website domain even if deeper extraction fails.</p>
+            </label>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleExtractAIDeal}
+                disabled={aiFinderLoading || !aiFinderDirectUrl}
+                className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {aiFinderLoading ? 'Scanning...' : 'Scan URL'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleGenerateAIDealJson()}
+                disabled={aiFinderLoading || !canGenerateCoupon}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Generate Deal
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleFillPortalFromAIDeal()}
+                disabled={aiFinderLoading || !canFillPortal}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Auto Fill Portal
+              </button>
+              <button
+                type="button"
+                onClick={handleFillTestCoupon}
+                disabled={aiFinderLoading}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Fill Test Coupon
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {hasAcceptedUrl ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full bg-sky-100 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-sky-700">
+                  URL accepted
+                </span>
+              ) : null}
+              {hasMappedBasicFields ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-100 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-700">
+                  Basic fields mapped
+                </span>
+              ) : null}
+              {extractionSucceeded ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full bg-emerald-100 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                  Extraction succeeded
+                </span>
+              ) : null}
+              {extractionFailed ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full bg-rose-100 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-rose-700">
+                  Extraction failed
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {stageCards.map((stage) => (
+              <div key={stage.key} className="rounded-[1.25rem] border border-slate-100 bg-slate-50/70 px-4 py-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{stage.label}</p>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-slate-900">{stage.title}</p>
+                  <span className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-[9px] font-black uppercase tracking-[0.1em] ${stage.tone}`}>
+                    {stage.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {aiFinderMessage ? (
+            <p className="mt-4 text-sm font-semibold text-emerald-600">{aiFinderMessage}</p>
+          ) : null}
+          {aiFinderError ? (
+            <p className="mt-3 text-sm font-semibold text-rose-500">{aiFinderError}</p>
+          ) : null}
+
+          {aiFinderResult ? (
+            <div className="mt-5 space-y-4">
+              <div className="overflow-hidden rounded-[1.75rem] border border-indigo-100/80 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-5 shadow-sm shadow-indigo-100/40">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Normalized Deal Object</p>
+                    <p className="mt-1 text-sm text-slate-500">Stage 2 converts the extracted source into one portal-ready internal deal record.</p>
+                  </div>
+                  <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${
+                    aiFinderResult.generatedJson ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'
+                  }`}>
+                    {aiFinderResult.generatedJson ? 'Generated' : 'Preview Ready'}
+                  </span>
+                </div>
+                <div className="flex min-w-0 items-start gap-4">
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white shadow-sm sm:h-24 sm:w-24">
+                    {previewDeal?.imageUrl ? (
+                      <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
+                        <AppIcon name="spark" size={22} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex h-7 items-center justify-center rounded-full border border-white/80 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600 shadow-sm">
+                        {previewDeal?.category ?? 'Uncategorized'}
+                      </span>
+                      {previewDeal?.discountPercent ? (
+                        <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white shadow-sm shadow-indigo-200">
+                          {previewDeal.discountPercent}% OFF
+                        </span>
+                      ) : null}
+                      <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] shadow-sm ${
+                        extractionSucceeded ? 'bg-emerald-600 text-white' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {aiFinderResult.extractionStatus}
+                      </span>
+                    </div>
+                    <h4
+                      className="mt-3 max-w-[42rem] overflow-hidden text-lg font-black leading-6 text-slate-900 sm:text-[1.15rem]"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                      }}
+                    >
+                      {previewDeal?.title}
+                    </h4>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-500">{previewDeal?.businessName}</p>
+                    <p
+                      className="mt-3 max-w-[42rem] overflow-hidden text-sm leading-6 text-slate-600 sm:text-[0.95rem]"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 4,
+                        WebkitBoxOrient: 'vertical',
+                      }}
+                    >
+                      {aiFinderResult.summary ?? previewDeal?.summary ?? previewDeal?.description}
+                    </p>
+                    <div className="mt-4 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 xl:grid-cols-3">
+                      {priceText ? (
+                        <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                          <span>Price: <span className="font-semibold text-slate-700">{priceText}</span></span>
+                        </div>
+                      ) : null}
+                      {originalPriceText ? (
+                        <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                          <span>List: <span className="font-semibold text-slate-700">{originalPriceText}</span></span>
+                        </div>
+                      ) : null}
+                      {previewDeal?.rating ? (
+                        <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                          <span>Rating: <span className="font-semibold text-slate-700">{previewDeal.rating.toFixed(1)}</span></span>
+                        </div>
+                      ) : null}
+                      {previewDeal?.reviewCount ? (
+                        <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                          <span>Reviews: <span className="font-semibold text-slate-700">{previewDeal.reviewCount.toLocaleString()}</span></span>
+                        </div>
+                      ) : null}
+                      {previewDeal?.merchant ? (
+                        <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                          <span>Merchant: <span className="font-semibold text-slate-700">{previewDeal.merchant}</span></span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+                  <div className="border-b border-white/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
+                    Normalized Deal JSON
+                  </div>
+                  <pre className="max-h-[360px] overflow-auto px-4 py-4 text-xs leading-6 text-slate-200">{normalizedJson}</pre>
+                </div>
+              </div>
+
+              <div className="rounded-[1.75rem] border border-slate-100 bg-white p-5 shadow-sm">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Extracted Source Data</p>
+                <p className="mt-1 text-sm text-slate-500">Stage 1 reads the product page, keeps the cleaned URL and merchant, and records exactly what extraction returned.</p>
+                <div className="mt-4 space-y-4 text-sm text-slate-600">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-slate-700">Extraction Summary</p>
+                      <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${
+                        extractionSucceeded ? 'bg-emerald-100 text-emerald-700' : extractionFailed ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {aiFinderResult.extractionStatus}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-xl bg-white px-3 py-2">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Merchant</p>
+                        <p className="mt-1 font-semibold text-slate-700">{previewDeal?.businessName ?? 'Missing'}</p>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-2">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                        <p className="mt-1 break-all font-semibold text-slate-700">{sourceAssets?.productUrl ?? previewDeal?.productUrl ?? 'Missing source asset'}</p>
+                      </div>
+                    </div>
+                    {aiFinderResult.enrichmentError ? (
+                      <p className="mt-3 text-xs leading-5 text-rose-500">{aiFinderResult.enrichmentError}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Mapped Source Fields</p>
+                    <div className="mt-3 space-y-3 text-xs text-slate-600">
+                      <div>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Website URL</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.websiteUrl ?? previewDeal?.websiteUrl ?? 'Missing source asset'}</p>
+                      </div>
+                      <div>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.productUrl ?? previewDeal?.productUrl ?? 'Missing source asset'}</p>
+                      </div>
+                      <div>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Image URL</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.imageUrl ?? previewDeal?.imageUrl ?? 'Missing source asset'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {extractionDebug ? (
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Admin Extraction Debug</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">Fetch Status</p>
+                          <p className="mt-1 font-semibold text-slate-700">
+                            {extractionDebug.fetchAttempted ? (extractionDebug.fetchSucceeded ? 'Succeeded' : 'Failed') : 'Not attempted'}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">HTTP Status</p>
+                          <p className="mt-1 font-semibold text-slate-700">{extractionDebug.responseStatus ?? 'Unknown'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2 sm:col-span-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">Failure Reason</p>
+                          <p className="mt-1 break-all text-slate-700">{extractionDebug.failureReason ?? 'None'}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                </div>
+              </div>
+
+              <div ref={aiFinderFieldCoverageRef} className="rounded-[1.75rem] border border-slate-100 bg-white p-5 shadow-sm">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Portal Mapping Status</p>
+                <p className="mt-1 text-sm text-slate-500">Stage 3 maps the normalized deal object into the actual Business Portal fields and only counts fields that are really populated.</p>
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-700">Portal field coverage</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">Success is only shown when the mapped portal fields are actually filled.</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-black text-slate-900">{completionPercent}%</span>
+                        <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${
+                          portalMappingSucceeded ? 'bg-emerald-100 text-emerald-700' : portalMappingReady ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {portalMappingSucceeded ? 'Portal Ready' : portalMappingReady ? 'Partially Mapped' : 'Not Mapped'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className={`h-full rounded-full ${completionPercent >= 75 ? 'bg-emerald-500' : completionPercent >= 45 ? 'bg-amber-500' : 'bg-indigo-500'}`}
+                        style={{ width: `${completionPercent}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Portal Status</p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Required Filled</p>
+                        <p className="mt-2 text-lg font-black text-slate-900">{requiredFilledCount}/{portalCoverage.required.length}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Optional Filled</p>
+                        <p className="mt-2 text-lg font-black text-slate-900">{optionalFilledCount}/{portalCoverage.optional.length}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Last Autofill Attempt</p>
+                        <p className="mt-2 text-sm font-black text-slate-900">
+                          {portalAutofillStatus.state === 'success'
+                            ? 'Succeeded'
+                            : portalAutofillStatus.state === 'failure'
+                              ? 'Failed'
+                              : portalAutofillStatus.state === 'pending'
+                                ? 'In progress'
+                                : 'Not run'}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Last Failure Reason</p>
+                        <p className="mt-2 text-sm leading-5 text-slate-700">{portalAutofillStatus.failureReason || 'None'}</p>
+                      </div>
+                    </div>
+                    {portalAutofillStatus.state === 'failure' ? (
+                      <p className="mt-3 text-xs font-semibold text-rose-500">Autofill attempted but portal form state did not update.</p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Mapped Portal Fields</p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {[...portalCoverage.required, ...portalCoverage.optional].map((field) => (
+                        <div key={field.key} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{field.label}</p>
+                            <span className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[8px] font-black uppercase tracking-[0.08em] ${
+                              field.filled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {field.filled ? 'Filled' : 'Missing'}
+                            </span>
+                          </div>
+                          <p className="mt-2 break-all text-sm leading-6 text-slate-700">{field.value || 'Missing'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Filled</p>
+                      {filledFields.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {filledFields.map((field) => (
+                            <span key={field.key} className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                              {field.label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-emerald-700">No portal fields are filled yet.</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">Missing Required</p>
+                      {requiredMissingFields.length ? (
+                        <ul className="mt-2 space-y-2 text-sm text-amber-700">
+                          {requiredMissingFields.map((field) => (
+                            <li key={field.key} className="flex items-start gap-2">
+                              <span className="mt-[2px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                              <span className="leading-5">{field.label}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm font-semibold text-emerald-600">All required portal fields are ready.</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Missing Optional</p>
+                      {optionalMissingFields.length ? (
+                        <ul className="mt-2 space-y-2 text-sm text-slate-600">
+                          {optionalMissingFields.map((field) => (
+                            <li key={field.key} className="flex items-start gap-2">
+                              <span className="mt-[2px] h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+                              <span className="leading-5">{field.label}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm font-semibold text-emerald-600">Optional portal fields are filled.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     const previewDeal = aiFinderResult?.normalizedDeal;
+    const searchSnapshot = aiFinderSearchSnapshot;
+    const resultCards = searchSnapshot?.searchCandidates ?? aiFinderCandidates;
+    const rawResultCount = searchSnapshot?.responseMeta?.rawResultCount ?? searchSnapshot?.rawResults?.length ?? 0;
+    const filteredResultCount = searchSnapshot?.responseMeta?.filteredResultCount ?? resultCards.length;
+    const queryAttempts = searchSnapshot?.queryAttempts ?? [];
+    const canGenerateFromSource = Boolean(aiFinderSelectedSourceUrl);
+    const canFillPortal = Boolean(aiFinderResult?.generatedJson && aiFinderSelectedSourceUrl);
+    const hasSearchAttempt = aiFinderRuntime.requestSent || Boolean(searchSnapshot);
+    const searchStatus =
+      aiFinderRuntime.lastError || searchSnapshot?.searchStatus === 'Search failed'
+        ? 'failed'
+        : aiFinderLoading || (aiFinderRuntime.requestSent && !aiFinderRuntime.responseReceived)
+          ? 'running'
+          : aiFinderRuntime.requestSent && aiFinderRuntime.responseReceived
+            ? rawResultCount > 0
+              ? 'completed with results'
+              : 'completed with zero results'
+            : 'idle';
+    const searchStatusMessage =
+      searchStatus === 'completed with zero results'
+        ? "No results found from Tavily after multiple attempts. Try more specific keywords like 'iPhone 14 128GB' or paste a product URL."
+        : searchStatus === 'failed'
+          ? 'Tavily request failed.'
+          : 'Results returned, but no valid product pages found.';
+    const resultQuality = aiFinderResult?.resultQuality ?? 'basic';
+    const completionPercent = aiFinderResult
+      ? aiFinderResult.completionPercent ?? 100
+      : aiFinderSelectedSourceUrl
+        ? 50
+        : 0;
+    const filledFields = aiFinderResult?.missingGroups?.filled ?? [];
+    const requiredMissingFields = aiFinderResult?.missingGroups?.required ?? [];
+    const optionalMissingFields = aiFinderResult?.missingGroups?.optional ?? [];
+    const sourceAssets = aiFinderResult?.sourceAssets;
+    const extractionStatus = aiFinderResult?.extractionStatus ?? (aiFinderResult?.partialData ? 'Extraction failed' : 'Full deal enrichment completed successfully');
+    const extractionDebug = aiFinderResult?.extractionDebug;
+    const hasMissingSourceAsset = !sourceAssets?.productUrl || !sourceAssets?.imageUrl;
     const priceText =
       previewDeal?.price != null
         ? `$${previewDeal.price.toFixed(2)}`
@@ -2834,18 +4758,46 @@ export default function App() {
       previewDeal?.originalPrice != null
         ? `$${previewDeal.originalPrice.toFixed(2)}`
         : null;
+    const stageMeta: Record<AIDealFinderStage, { label: string; tone: string }> = {
+      idle: { label: 'Search for products/deals', tone: 'bg-slate-100 text-slate-600' },
+      searching: { label: 'Searching', tone: 'bg-indigo-100 text-indigo-700' },
+      'results-loaded': { label: 'Results loaded', tone: 'bg-sky-100 text-sky-700' },
+      'result-selected': { label: 'Result selected', tone: 'bg-violet-100 text-violet-700' },
+      'coupon-generated': { label: 'Coupon generated', tone: 'bg-emerald-100 text-emerald-700' },
+    };
+    const selectedResultTitle = selectedAIFinderCandidate?.title ?? (aiFinderHasDirectUrlFallback ? 'Direct Product URL Fallback' : 'No result selected');
+    const selectedResultDescription = selectedAIFinderCandidate?.snippet
+      ?? (aiFinderHasDirectUrlFallback ? 'This pasted product URL will be used directly because Tavily is best for discovery, not guaranteed product lookup.' : 'Choose one search result before generating coupon fields.');
+    const selectedResultMerchant = selectedAIFinderCandidate?.merchant
+      ?? (aiFinderHasDirectUrlFallback
+        ? (() => {
+            try {
+              return new URL(aiFinderDirectUrl).hostname.replace(/^www\./, '');
+            } catch {
+              return 'Direct URL';
+            }
+          })()
+        : 'No merchant yet');
+    const selectedResultPrice = formatFinderPrice(selectedAIFinderCandidate?.price);
+    const selectedResultOriginalPrice = formatFinderPrice(selectedAIFinderCandidate?.originalPrice);
+    const selectedResultLabels = selectedAIFinderCandidate?.rankLabels ?? [];
 
     return (
       <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="max-w-2xl">
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Affiliate Deal Finder</p>
-            <h3 className="mt-1 text-lg font-black text-slate-900">Search affiliate deals and generate portal-ready JSON</h3>
-            <p className="mt-1 text-sm text-slate-500">Start with a keyword search, then optionally add a product URL or filters before filling the portal.</p>
+            <h3 className="mt-1 text-lg font-black text-slate-900">Search affiliate deals, pick a result, then generate portal-ready coupon fields</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500">Search first, review the matches, explicitly choose one source, generate the coupon fields, and only then fill the Business Portal.</p>
           </div>
-          <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">
-            Admin Tool
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex h-9 items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-[0.12em] ${stageMeta[aiFinderStage].tone}`}>
+              {stageMeta[aiFinderStage].label}
+            </span>
+            <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">
+              Admin Tool
+            </span>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-3">
@@ -2882,12 +4834,14 @@ export default function App() {
               <label className="block sm:col-span-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Optional Product URL</span>
                 <input
+                  ref={aiFinderUrlInputRef}
                   type="url"
                   value={aiFinderUrl}
                   onChange={(event) => setAiFinderUrl(event.target.value)}
                   placeholder="https://www.amazon.com/... or another product page"
                   className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                 />
+                <p className="mt-2 text-xs leading-5 text-slate-400">Fallback only. If Tavily search is weak or empty, you can paste a direct product page URL and choose the fallback flow.</p>
               </label>
               <label className="block">
                 <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Category</span>
@@ -2934,25 +4888,9 @@ export default function App() {
             type="button"
             onClick={handleSearchAIDeal}
             disabled={aiFinderLoading}
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {aiFinderLoading ? 'Searching...' : 'Search Deal'}
-          </button>
-          <button
-            type="button"
-            onClick={handleGenerateAIDealJson}
-            disabled={aiFinderLoading}
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {aiFinderLoading ? 'Generating...' : 'Generate JSON'}
-          </button>
-          <button
-            type="button"
-            onClick={handleFillPortalFromAIDeal}
-            disabled={aiFinderLoading}
             className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {aiFinderLoading ? 'Loading...' : 'Fill Portal'}
+            {aiFinderLoading && aiFinderStage === 'searching' ? 'Searching...' : 'Search Deal'}
           </button>
         </div>
 
@@ -2962,12 +4900,505 @@ export default function App() {
         {aiFinderError ? (
           <p className="mt-3 text-sm font-semibold text-rose-500">{aiFinderError}</p>
         ) : null}
+        {hasSearchAttempt ? (
+          <div className="mt-5 rounded-[1.75rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Step 2</p>
+                <h4 className="mt-1 text-base font-black text-slate-900">Results List</h4>
+                <p className="mt-1 text-sm text-slate-500">Inspect the matching sources, then choose one result to use as the coupon source.</p>
+              </div>
+              <span className="text-[11px] font-semibold text-slate-500">{resultCards.length} result{resultCards.length === 1 ? '' : 's'}</span>
+            </div>
+
+            {resultCards.length > 0 ? (
+            <div className="mt-4 grid gap-3 xl:grid-cols-2">
+              {resultCards.map((candidate) => {
+                const isSelected = selectedAIFinderUrl === candidate.url;
+                const priceLabel = formatFinderPrice(candidate.price);
+                const originalPriceLabel = formatFinderPrice(candidate.originalPrice);
+                const discountLabel = candidate.discountPercent ? `${candidate.discountPercent}% OFF` : null;
+                return (
+                  <div
+                    key={`picker-${candidate.url}`}
+                    className={`overflow-hidden rounded-[1.5rem] border p-4 transition-colors ${
+                      isSelected ? 'border-indigo-200 bg-indigo-50/40 shadow-sm shadow-indigo-100/40' : 'border-slate-200 bg-slate-50/40'
+                    }`}
+                  >
+                    <div className="flex min-w-0 gap-4">
+                      <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-[1rem] border border-slate-200 bg-white sm:h-24 sm:w-24">
+                        {candidate.imageUrl ? (
+                          <img src={candidate.imageUrl} alt={candidate.title} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
+                            <AppIcon name="spark" size={20} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-start gap-2">
+                          <p
+                            className="min-w-0 flex-1 overflow-hidden text-sm font-black leading-5 text-slate-900 sm:text-[0.95rem]"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: 'vertical',
+                            }}
+                          >
+                            {candidate.title}
+                          </p>
+                          <span className={`inline-flex h-7 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${getFinderScoreTone(candidate.dealScore)}`}>
+                            Score {candidate.dealScore ?? 0}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                          {candidate.merchant} · {candidate.domain}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${
+                            candidate.productConfidence >= 70
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : candidate.productConfidence >= 40
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-rose-100 text-rose-700'
+                          }`}>
+                            {candidate.resultType}
+                          </span>
+                          {(candidate.rankLabels ?? []).map((label) => (
+                            <span
+                              key={`${candidate.url}-${label}`}
+                              className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${getFinderRankTone(label)}`}
+                            >
+                              {label}
+                            </span>
+                          ))}
+                          {candidate.extractionStatus ? (
+                            <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-slate-500">
+                              {candidate.extractionStatus}
+                            </span>
+                          ) : null}
+                        </div>
+                        {(priceLabel || originalPriceLabel || discountLabel) ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {priceLabel ? (
+                              <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.08em] text-indigo-700">
+                                {priceLabel}
+                              </span>
+                            ) : null}
+                            {originalPriceLabel ? (
+                              <span className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 line-through">
+                                {originalPriceLabel}
+                              </span>
+                            ) : null}
+                            {discountLabel ? (
+                              <span className="inline-flex h-7 items-center justify-center rounded-full bg-emerald-100 px-3 text-[10px] font-black uppercase tracking-[0.08em] text-emerald-700">
+                                {discountLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <p
+                          className="mt-3 overflow-hidden text-sm leading-6 text-slate-600"
+                          style={{
+                            display: '-webkit-box',
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: 'vertical',
+                          }}
+                        >
+                          {candidate.snippet}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                          {candidate.category ? (
+                            <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5">
+                              {candidate.category}
+                            </span>
+                          ) : null}
+                          {candidate.rating != null ? (
+                            <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5">
+                              {candidate.rating.toFixed(1)} Rating
+                            </span>
+                          ) : null}
+                          {candidate.reviewCount != null ? (
+                            <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5">
+                              {candidate.reviewCount.toLocaleString()} Reviews
+                            </span>
+                          ) : null}
+                          {candidate.dataCompleteness != null ? (
+                            <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5">
+                              {candidate.dataCompleteness}% complete
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 break-all text-xs leading-5 text-slate-400">{candidate.productLink ?? candidate.url}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => selectAIFinderResult(candidate)}
+                        className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white'
+                            : 'border border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:text-indigo-600'
+                        }`}
+                      >
+                        {isSelected ? 'Selected' : 'Use This Result'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => window.open(candidate.productLink ?? candidate.url, '_blank', 'noopener,noreferrer')}
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 hover:border-indigo-200 hover:text-indigo-600"
+                      >
+                        Open Source
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const copyResult = await copyTextToClipboard(candidate.productLink ?? candidate.url);
+                          if (copyResult === 'success') {
+                            setAiFinderMessage('Source link copied to clipboard.');
+                            setAiFinderError('');
+                          } else {
+                            setAiFinderError('Could not copy source link automatically.');
+                          }
+                        }}
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 hover:border-indigo-200 hover:text-indigo-600"
+                      >
+                        Copy Link
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            ) : (
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-sm font-semibold text-amber-700">
+                {searchStatusMessage}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {searchStatus === 'completed with zero results' ? (
+          <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-amber-50/80 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">Fallback Mode</p>
+                <h4 className="mt-1 text-base font-black text-slate-900">Paste product URL instead</h4>
+                <p className="mt-1 text-sm leading-6 text-slate-600">Tavily is a broad web discovery tool, not a product database. If it returns zero results, try more specific keywords like `iPhone 14 128GB` or paste a direct product page URL and continue with the fallback path.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={activateAIFinderDirectUrlFallback}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+                >
+                  Paste Product URL Instead
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {searchSnapshot ? (
+          <div className="mt-4 rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Search Result Debug Panel</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {searchSnapshot.message ?? 'Review what Tavily returned before continuing.'}
+                </p>
+              </div>
+              <span className={`inline-flex h-8 items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-[0.1em] ${
+                searchStatus === 'completed with results'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : searchStatus === 'completed with zero results'
+                    ? 'bg-amber-100 text-amber-700'
+                    : searchStatus === 'failed'
+                      ? 'bg-rose-100 text-rose-700'
+                      : searchStatus === 'running'
+                        ? 'bg-indigo-100 text-indigo-700'
+                        : 'bg-white text-slate-500'
+              }`}>
+                {searchStatus}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {[
+                ['Request Sent', aiFinderRuntime.requestSent ? 'Yes' : 'No'],
+                ['Response Received', aiFinderRuntime.responseReceived ? 'Yes' : searchStatus === 'failed' ? 'No' : 'Pending'],
+                ['Current Action', aiFinderRuntime.currentAction],
+                ['Last Error', aiFinderRuntime.lastError || 'None'],
+                ['Raw Result Count', String(rawResultCount)],
+                ['Filtered Result Count', String(filteredResultCount)],
+                ['Total Results', String(searchSnapshot.searchStats?.totalResults ?? searchSnapshot.rawResults?.length ?? 0)],
+                ['Product Candidates', String(searchSnapshot.searchStats?.validProductPages ?? resultCards.filter((candidate) => candidate.productConfidence >= 40).length)],
+                ['Rejected Results', String(searchSnapshot.searchStats?.rejectedNonProductPages ?? resultCards.filter((candidate) => candidate.productConfidence < 40).length)],
+                ['Selected Source', selectedAIFinderCandidate ? 'Chosen' : 'None'],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+              <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Primary Query</p>
+              <p className="mt-1 break-all text-sm text-slate-700">
+                {aiFinderRuntime.actualQuery || searchSnapshot.searchQuery || searchSnapshot.requestPayload?.query || 'No query recorded'}
+              </p>
+            </div>
+            {queryAttempts.length ? (
+              <div className="mt-3 grid gap-2 lg:grid-cols-3">
+                {queryAttempts.map((attempt) => (
+                  <div key={`${attempt.label}-${attempt.query}`} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                    <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{attempt.label}</p>
+                    <p className="mt-1 break-all text-sm font-semibold text-slate-700">{attempt.query}</p>
+                    <p className="mt-2 text-xs text-slate-500">Result count: {attempt.rawResultCount}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <p className="mt-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Tavily Search Meter</p>
+            <button
+              type="button"
+              onClick={() => setShowSearchMeter((prev) => !prev)}
+              className="mt-3 inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              {showSearchMeter ? 'Hide Tavily Search Meter' : 'Show Tavily Search Meter'}
+            </button>
+            {showSearchMeter ? (
+              <div className="mt-3 space-y-2">
+                {resultCards.length > 0 ? resultCards.map((candidate) => {
+                  const barColor =
+                    candidate.productConfidence >= 70
+                      ? 'bg-emerald-500'
+                      : candidate.productConfidence >= 40
+                        ? 'bg-amber-500'
+                        : 'bg-rose-500';
+
+                  return (
+                    <div
+                      key={candidate.url}
+                      className={`w-full rounded-2xl border px-4 py-3 transition-colors ${
+                        selectedAIFinderUrl === candidate.url
+                          ? 'border-indigo-200 bg-white shadow-sm'
+                          : 'border-slate-200 bg-white/80'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          {candidate.imageUrl ? (
+                            <div className="mb-3 h-28 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                              <img src={candidate.imageUrl} alt={candidate.title} className="h-full w-full object-cover" />
+                            </div>
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-sm font-black text-slate-900">{candidate.title}</p>
+                            <span className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${
+                              candidate.productConfidence >= 70
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : candidate.productConfidence >= 40
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-rose-100 text-rose-700'
+                            }`}>
+                              {candidate.resultType}
+                            </span>
+                            {candidate.isKnownEcommerceDomain ? (
+                              <span className="inline-flex h-6 items-center justify-center rounded-full bg-indigo-100 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-indigo-700">
+                                Known Commerce
+                              </span>
+                            ) : null}
+                            {candidate.patterns.map((pattern) => (
+                              <span key={pattern} className="inline-flex h-6 items-center justify-center rounded-full bg-slate-100 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-slate-600">
+                                {pattern}
+                              </span>
+                            ))}
+                          </div>
+                          <p className="mt-2 truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                            {candidate.merchant} · {candidate.domain}
+                          </p>
+                          {(candidate.price != null || candidate.originalPrice != null) ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {candidate.price != null ? (
+                                <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.08em] text-indigo-700">
+                                  ${candidate.price.toFixed(2)}
+                                </span>
+                              ) : null}
+                              {candidate.originalPrice != null ? (
+                                <span className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">
+                                  ${candidate.originalPrice.toFixed(2)}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <p className="mt-2 line-clamp-2 text-sm leading-5 text-slate-500">{candidate.snippet}</p>
+                          <p className="mt-2 break-all text-xs text-slate-400">{candidate.url}</p>
+                          <div className="mt-3">
+                            <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-500">
+                              <span>Product confidence</span>
+                              <span>{candidate.productConfidence}%</span>
+                            </div>
+                            <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
+                              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${candidate.productConfidence}%` }} />
+                            </div>
+                          </div>
+                          {candidate.rejectionReasons.length ? (
+                            <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-3">
+                              <p className="text-[9px] font-black uppercase tracking-[0.08em] text-rose-600">Why it was rejected</p>
+                              <ul className="mt-2 space-y-1.5 text-xs text-rose-700">
+                                {candidate.rejectionReasons.map((reason) => (
+                                  <li key={reason} className="flex items-start gap-2">
+                                    <span className="mt-[4px] h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+                                    <span>{reason}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 flex-col gap-2">
+                          <span className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] ${
+                            selectedAIFinderUrl === candidate.url
+                              ? 'bg-indigo-600 text-white'
+                              : 'border border-slate-200 bg-white text-slate-500'
+                          }`}>
+                            {selectedAIFinderUrl === candidate.url ? 'Selected in Step 3' : 'Review in Step 2'}
+                          </span>
+                          <span className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500">
+                            Debug View
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-sm font-semibold text-amber-700">
+                    {searchStatusMessage}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {(selectedAIFinderCandidate || aiFinderHasDirectUrlFallback) ? (
+          <div className="mt-4 rounded-[1.75rem] border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Step 3</p>
+                <h4 className="mt-1 text-base font-black text-slate-900">{aiFinderHasDirectUrlFallback ? 'Selected Fallback Source' : 'Selected Result'}</h4>
+                <p className="mt-1 text-sm text-slate-500">{aiFinderHasDirectUrlFallback ? 'Use the pasted product URL as the source for coupon generation.' : 'Lock in one source, then generate the coupon fields from that selected result.'}</p>
+                <div className="mt-4 rounded-2xl border border-white/80 bg-white/80 px-4 py-4 shadow-sm">
+                  <h5 className="text-sm font-black text-slate-900">{selectedResultTitle}</h5>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{selectedResultMerchant}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedResultLabels.map((label) => (
+                      <span
+                        key={`selected-${label}`}
+                        className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${getFinderRankTone(label)}`}
+                      >
+                        {label}
+                      </span>
+                    ))}
+                    {selectedAIFinderCandidate?.dealScore != null ? (
+                      <span className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[9px] font-black uppercase tracking-[0.08em] ${getFinderScoreTone(selectedAIFinderCandidate.dealScore)}`}>
+                        Score {selectedAIFinderCandidate.dealScore}
+                      </span>
+                    ) : null}
+                    {selectedResultPrice ? (
+                      <span className="inline-flex h-6 items-center justify-center rounded-full bg-indigo-50 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-indigo-700">
+                        {selectedResultPrice}
+                      </span>
+                    ) : null}
+                    {selectedResultOriginalPrice ? (
+                      <span className="inline-flex h-6 items-center justify-center rounded-full border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-slate-500 line-through">
+                        {selectedResultOriginalPrice}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">{selectedResultDescription}</p>
+                  {selectedAIFinderCandidate?.dataCompleteness != null ? (
+                    <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                      {selectedAIFinderCandidate.dataCompleteness}% deal data complete
+                    </p>
+                  ) : null}
+                  <p className="mt-2 break-all text-xs leading-5 text-slate-400">{aiFinderSelectedSourceUrl}</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateAIDealJson()}
+                  disabled={aiFinderLoading || !canGenerateFromSource}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {aiFinderLoading ? 'Generating...' : aiFinderHasDirectUrlFallback ? 'Generate Coupon From Pasted URL' : 'Generate Coupon From Selected Result'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAIFinderUrl('');
+                    setAiFinderUseDirectUrlFallback(false);
+                    setAiFinderResult(null);
+                    setAiFinderStage(resultCards.length ? 'results-loaded' : 'idle');
+                    setAiFinderMessage("Selection cleared. Pick a different result whenever you're ready.");
+                  }}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:text-rose-600"
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {aiFinderResult && hasMissingSourceAsset ? (
+          <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+            Missing source asset: {!sourceAssets?.productUrl ? 'product link' : 'image'} could not be extracted yet.
+            {previewDeal?.sourceType === 'url' ? ' Fallback portal data was preserved from the pasted URL. Add the missing image manually if needed.' : ''}
+          </div>
+        ) : null}
 
         {aiFinderResult ? (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="rounded-[1.5rem] border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-4">
-              <div className="flex items-start gap-4">
-                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white shadow-sm">
+          <div className="mt-5 rounded-[1.75rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Step 4</p>
+                <h4 className="mt-1 text-base font-black text-slate-900">Generated Coupon Preview</h4>
+                <p className="mt-1 text-sm text-slate-500">Review the generated coupon fields, then send them into the Business Portal or export the JSON.</p>
+              </div>
+              <div className="flex flex-col items-start gap-2 lg:items-end">
+                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Step 5</span>
+                <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleFillPortalFromAIDeal()}
+                  disabled={aiFinderLoading || !canFillPortal}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Fill Portal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyAIDealJson()}
+                  disabled={!aiFinderResult.generatedJson}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Copy JSON
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReviewAIDealMissingFields}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Review Missing Fields
+                </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.9fr)]">
+            <div className="overflow-hidden rounded-[1.75rem] border border-indigo-100/80 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-5 shadow-sm shadow-indigo-100/40">
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white shadow-sm sm:h-24 sm:w-24">
                   {previewDeal?.imageUrl ? (
                     <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
                   ) : (
@@ -2978,66 +5409,282 @@ export default function App() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex h-7 items-center justify-center rounded-full bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600 shadow-sm">
+                    <span className="inline-flex h-7 items-center justify-center rounded-full border border-white/80 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600 shadow-sm">
                       {previewDeal?.category}
                     </span>
+                    <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] shadow-sm ${
+                      resultQuality === 'enriched'
+                        ? 'bg-emerald-600 text-white shadow-emerald-100'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {resultQuality === 'enriched' ? 'Enriched result (full deal data)' : 'Basic result (keyword only)'}
+                    </span>
                     {previewDeal?.discountPercent ? (
-                      <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white">
+                      <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white shadow-sm shadow-indigo-200">
                         {previewDeal.discountPercent}% OFF
                       </span>
                     ) : null}
-                    <span className="inline-flex h-7 items-center justify-center rounded-full bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500 shadow-sm">
+                    <span className="inline-flex h-7 items-center justify-center rounded-full border border-white/80 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500 shadow-sm">
                       Score {aiFinderResult.dealScore}
                     </span>
                   </div>
-                  <h4 className="mt-3 text-base font-black text-slate-900">{previewDeal?.title}</h4>
-                  <p className="mt-1 text-sm font-semibold text-slate-500">{previewDeal?.businessName}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                  <h4
+                    className="mt-3 max-w-[42rem] overflow-hidden text-lg font-black leading-6 text-slate-900 sm:text-[1.15rem]"
+                    style={{
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                    }}
+                  >
+                    {previewDeal?.title}
+                  </h4>
+                  <p className="mt-1.5 text-sm font-semibold text-slate-500">{previewDeal?.businessName}</p>
+                  <p
+                    className="mt-3 max-w-[42rem] overflow-hidden text-sm leading-6 text-slate-600 sm:text-[0.95rem]"
+                    style={{
+                      display: '-webkit-box',
+                      WebkitLineClamp: 4,
+                      WebkitBoxOrient: 'vertical',
+                    }}
+                  >
                     {aiFinderResult.summary ?? previewDeal?.summary ?? previewDeal?.description}
                   </p>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
-                    {priceText ? <span>Price: <span className="font-semibold text-slate-700">{priceText}</span></span> : null}
-                    {originalPriceText ? <span>List: <span className="font-semibold text-slate-700">{originalPriceText}</span></span> : null}
-                    {previewDeal?.rating ? <span>Rating: <span className="font-semibold text-slate-700">{previewDeal.rating.toFixed(1)}</span></span> : null}
-                    {previewDeal?.reviewCount ? <span>Reviews: <span className="font-semibold text-slate-700">{previewDeal.reviewCount.toLocaleString()}</span></span> : null}
-                    {previewDeal?.merchant ? <span>Merchant: <span className="font-semibold text-slate-700">{previewDeal.merchant}</span></span> : null}
+                  <div className="mt-4 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 xl:grid-cols-3">
+                    {priceText ? (
+                      <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                        <span>Price: <span className="font-semibold text-slate-700">{priceText}</span></span>
+                      </div>
+                    ) : null}
+                    {originalPriceText ? (
+                      <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                        <span>List: <span className="font-semibold text-slate-700">{originalPriceText}</span></span>
+                      </div>
+                    ) : null}
+                    {previewDeal?.rating ? (
+                      <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                        <span>Rating: <span className="font-semibold text-slate-700">{previewDeal.rating.toFixed(1)}</span></span>
+                      </div>
+                    ) : null}
+                    {previewDeal?.reviewCount ? (
+                      <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                        <span>Reviews: <span className="font-semibold text-slate-700">{previewDeal.reviewCount.toLocaleString()}</span></span>
+                      </div>
+                    ) : null}
+                    {previewDeal?.merchant ? (
+                      <div className="min-w-0 rounded-xl bg-white/80 px-3 py-2">
+                        <span>Merchant: <span className="font-semibold text-slate-700">{previewDeal.merchant}</span></span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
             </div>
-            <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 p-4">
+            <div className="rounded-[1.75rem] border border-slate-100 bg-white p-5 shadow-sm">
               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Extraction Status</p>
-              <div className="mt-3 space-y-3 text-sm text-slate-600">
-                <p>
-                  Source: <span className="font-semibold text-slate-800">{previewDeal?.sourceType === 'url' ? 'Direct URL' : 'Keyword search'}</span>
-                </p>
-                {previewDeal?.sourceQuery ? (
-                  <p className="break-all text-xs text-slate-500">{previewDeal.sourceQuery}</p>
+              <div className="mt-4 space-y-4 text-sm text-slate-600">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-slate-700">Completion</p>
+                    <span className="text-sm font-black text-slate-900">{completionPercent}%</span>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full ${completionPercent >= 75 ? 'bg-emerald-500' : completionPercent >= 45 ? 'bg-amber-500' : 'bg-indigo-500'}`}
+                      style={{ width: `${completionPercent}%` }}
+                    />
+                  </div>
+                  {extractionStatus === 'Extraction failed' ? (
+                    <div className="mt-3 space-y-1">
+                      <p className="text-xs leading-5 font-semibold text-rose-600">Extraction failed</p>
+                      {aiFinderResult.enrichmentError ? (
+                        <p className="text-xs leading-5 text-rose-500">{aiFinderResult.enrichmentError}</p>
+                      ) : null}
+                    </div>
+                  ) : aiFinderResult.partialData ? (
+                    <p className="mt-3 text-xs leading-5 text-amber-700">
+                      Partial Data: {aiFinderResult.enrichmentError ?? 'Keyword result could not be fully enriched.'}
+                    </p>
+                  ) : (
+                    <p className="mt-3 text-xs leading-5 text-emerald-600">{extractionStatus}</p>
+                  )}
+                </div>
+                <div ref={aiFinderFieldCoverageRef} className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Source Assets</p>
+                  <div className="mt-3 space-y-3 text-xs text-slate-600">
+                    <div>
+                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Website URL</p>
+                      <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.websiteUrl ?? 'Missing source asset'}</p>
+                    </div>
+                    <div>
+                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                      <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.productUrl ?? 'Missing source asset'}</p>
+                    </div>
+                    <div>
+                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Image URL</p>
+                      <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.imageUrl ?? 'Missing source asset'}</p>
+                    </div>
+                  </div>
+                </div>
+                {extractionDebug ? (
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Extraction Debug</p>
+                    <div className="mt-3 space-y-3 text-xs text-slate-600">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">Fetch Attempted</p>
+                          <p className="mt-1 font-semibold text-slate-700">{extractionDebug.fetchAttempted ? 'Yes' : 'No'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">Fetch Succeeded</p>
+                          <p className="mt-1 font-semibold text-slate-700">{extractionDebug.fetchSucceeded ? 'Yes' : 'No'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">HTTP Status</p>
+                          <p className="mt-1 font-semibold text-slate-700">{extractionDebug.responseStatus ?? 'Unknown'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">Content-Type</p>
+                          <p className="mt-1 break-all font-semibold text-slate-700">{extractionDebug.contentType ?? 'Unknown'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2 sm:col-span-2">
+                          <p className="font-black uppercase tracking-[0.08em] text-slate-500">HTML Length</p>
+                          <p className="mt-1 font-semibold text-slate-700">{extractionDebug.htmlLength || 0}</p>
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Source URL</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{extractionDebug.sourceUrl}</p>
+                        <p className="mt-3 font-black uppercase tracking-[0.08em] text-slate-500">Final URL</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{extractionDebug.finalUrl ?? 'Unknown'}</p>
+                        <p className="mt-3 font-black uppercase tracking-[0.08em] text-slate-500">Cleaned Product URL</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{extractionDebug.cleanedProductUrl ?? 'Missing source asset'}</p>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Extracted Fields</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {[
+                            ['Title extracted', extractionDebug.extractedFlags.title],
+                            ['Image extracted', extractionDebug.extractedFlags.image],
+                            ['Price extracted', extractionDebug.extractedFlags.price],
+                            ['Canonical URL extracted', extractionDebug.extractedFlags.canonicalUrl],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                              <p className="text-[11px] font-semibold text-slate-500">{label}</p>
+                              <p className={`mt-1 font-semibold ${value ? 'text-emerald-600' : 'text-rose-600'}`}>{value ? 'Yes' : 'No'}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Matched Selectors</p>
+                        <div className="mt-2 space-y-2">
+                          {[
+                            ['Title', extractionDebug.matchedSelectors.title ?? 'No selector matched'],
+                            ['Image', extractionDebug.matchedSelectors.image ?? 'No selector matched'],
+                            ['Price', extractionDebug.matchedSelectors.price ?? 'No selector matched'],
+                            ['Canonical URL', extractionDebug.matchedSelectors.canonicalUrl ?? 'No selector matched'],
+                          ].map(([label, value]) => (
+                            <div key={label} className="flex items-start justify-between gap-3">
+                              <p className="font-semibold text-slate-500">{label}</p>
+                              <p className="max-w-[65%] text-right text-slate-700">{value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {extractionDebug.failureReason ? (
+                        <div className="rounded-xl border border-rose-100 bg-rose-50/80 px-3 py-3">
+                          <p className="font-black uppercase tracking-[0.08em] text-rose-700">Failure Reason</p>
+                          <p className="mt-2 text-sm leading-5 text-rose-700">{extractionDebug.failureReason}</p>
+                        </div>
+                      ) : null}
+                      <div className="rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-amber-700">Fields Failed</p>
+                        {extractionDebug.failedFields.length ? (
+                          <ul className="mt-2 space-y-1.5 text-amber-700">
+                            {extractionDebug.failedFields.map((field) => (
+                              <li key={field} className="flex items-start gap-2">
+                                <span className="mt-[4px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                                <span>{field}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-sm font-semibold text-emerald-600">No extraction field failures.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 ) : null}
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                  <p>
+                    Source: <span className="font-semibold text-slate-800">{previewDeal?.sourceType === 'url' ? 'Direct URL' : 'Keyword search'}</span>
+                  </p>
+                  {previewDeal?.sourceQuery ? (
+                    <p className="mt-2 break-all text-xs leading-5 text-slate-500">{previewDeal.sourceQuery}</p>
+                  ) : null}
+                </div>
                 {previewDeal?.tags?.length ? (
                   <div className="flex flex-wrap gap-2">
                     {previewDeal.tags.map((tag) => (
-                      <span key={tag} className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
+                      <span key={tag} className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
                         {tag}
                       </span>
                     ))}
                   </div>
                 ) : null}
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Missing Fields</p>
-                  {aiFinderResult.missingFields.length ? (
-                    <ul className="mt-2 space-y-1 text-sm text-amber-700">
-                      {aiFinderResult.missingFields.map((field) => (
-                        <li key={field}>• {field}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-sm font-semibold text-emerald-600">All key fields extracted.</p>
-                  )}
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Field Coverage</p>
+                  <div className="mt-3 grid gap-3">
+                    <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Filled</p>
+                      {filledFields.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {filledFields.map((field) => (
+                            <span key={field} className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                              {field}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-emerald-700">No filled fields yet.</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">Missing Required</p>
+                      {requiredMissingFields.length ? (
+                        <ul className="mt-2 space-y-2 text-sm text-amber-700">
+                          {requiredMissingFields.map((field) => (
+                            <li key={field} className="flex items-start gap-2">
+                              <span className="mt-[2px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                              <span className="leading-5">{field}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm font-semibold text-emerald-600">All required portal fields are ready.</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Missing Optional</p>
+                      {optionalMissingFields.length ? (
+                        <ul className="mt-2 space-y-2 text-sm text-slate-600">
+                          {optionalMissingFields.map((field) => (
+                            <li key={field} className="flex items-start gap-2">
+                              <span className="mt-[2px] h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+                              <span className="leading-5">{field}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm font-semibold text-emerald-600">Optional enrichment fields are filled.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
+        </div>
         ) : null}
       </div>
     );
@@ -3105,11 +5752,15 @@ export default function App() {
               onCancel={() => {
                 setIsCreating(false);
                 setDealDraft(null);
+                setPortalFieldSnapshot(null);
+                setPortalAutofillRequest(null);
                 setBulkImportCandidates([]);
                 setSelectedBulkImportIndex(0);
               }}
               userLocation={userLocation}
               initialData={dealDraft}
+              onDraftChange={setPortalFieldSnapshot}
+              autofillRequest={portalAutofillRequest}
             />
           </div>
         );
@@ -3117,11 +5768,7 @@ export default function App() {
 
       return (
         <div className="space-y-8">
-          {!dealsLoading && dealsError ? (
-            <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-              {dealsError}
-            </div>
-          ) : null}
+          {renderDealsErrorBanner()}
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-black text-slate-900">Business Portal</h2>
@@ -3260,11 +5907,15 @@ export default function App() {
             onCancel={() => {
               setIsCreating(false);
               setDealDraft(null);
+              setPortalFieldSnapshot(null);
+              setPortalAutofillRequest(null);
               setBulkImportCandidates([]);
               setSelectedBulkImportIndex(0);
             }} 
             userLocation={userLocation}
             initialData={dealDraft}
+            onDraftChange={setPortalFieldSnapshot}
+            autofillRequest={portalAutofillRequest}
           />
         </div>
       );
@@ -3272,11 +5923,7 @@ export default function App() {
 
     return (
       <div className="space-y-8">
-        {!dealsLoading && dealsError ? (
-          <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-            {dealsError}
-          </div>
-        ) : null}
+        {renderDealsErrorBanner()}
         <div className="flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-black text-slate-900">Business Portal</h2>
@@ -3406,7 +6053,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => navigateToPath('/')}
+              onClick={handleReturnToPublicApp}
               className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-[11px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
             >
               Back to App
@@ -3429,7 +6076,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => navigateToPath('/')}
+                  onClick={handleReturnToPublicApp}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Public App
@@ -3448,12 +6095,16 @@ export default function App() {
               onCancel={() => {
                 setIsCreating(false);
                 setDealDraft(null);
+                setPortalFieldSnapshot(null);
+                setPortalAutofillRequest(null);
                 setEditingDealId(null);
                 setBulkImportCandidates([]);
                 setSelectedBulkImportIndex(0);
               }}
               userLocation={userLocation}
               initialData={dealDraft}
+              onDraftChange={setPortalFieldSnapshot}
+              autofillRequest={portalAutofillRequest}
             />
           </div>
         </div>
@@ -3472,7 +6123,7 @@ export default function App() {
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <button
-                  onClick={() => navigateToPath('/')}
+                  onClick={handleReturnToPublicApp}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Public App
@@ -3487,11 +6138,7 @@ export default function App() {
             </div>
           </div>
 
-          {!dealsLoading && dealsError ? (
-            <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-              {dealsError}
-            </div>
-          ) : null}
+          {renderDealsErrorBanner()}
 
           {renderAIDealFinderPanel()}
 
@@ -3536,7 +6183,9 @@ export default function App() {
                     <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{new Date(entry.timestamp).toLocaleTimeString()}</span>
                   </div>
                   {entry.detail ? (
-                    <p className="mt-1 text-xs text-slate-500">{entry.detail}</p>
+                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-white/80 px-3 py-2 text-[11px] leading-5 text-slate-600">
+                      {entry.detail}
+                    </pre>
                   ) : null}
                 </div>
               )) : (
@@ -3672,26 +6321,32 @@ export default function App() {
     </Layout>
   );
 
-  const shellContent = isAdminRoute ? renderAdminPage() : renderPublicShell();
+  const hasKnownRoute = routePath === '/admin' || routePath === '/' || routePath === '/dashboard';
+  const routeFallback = (
+    <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
+      <div className="mx-auto max-w-[430px] rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
+        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-500">Navigation Error</p>
+        <h1 className="mt-1 text-2xl font-black text-slate-900">LiveDrop recovered safely</h1>
+        <p className="mt-2 text-sm text-slate-500">The app hit an unexpected route state. You can return to the public app below.</p>
+        <button
+          onClick={() => navigateToPath('/')}
+          className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+        >
+          Go to Home
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <AppErrorBoundary>
       <ToastStack notifications={toastNotifications} />
-      {shellContent ?? (
-        <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
-          <div className="mx-auto max-w-[430px] rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-500">Navigation Error</p>
-            <h1 className="mt-1 text-2xl font-black text-slate-900">LiveDrop recovered safely</h1>
-            <p className="mt-2 text-sm text-slate-500">The app hit an unexpected route state. You can return to the public app below.</p>
-            <button
-              onClick={() => navigateToPath('/')}
-              className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
-            >
-              Go to Home
-            </button>
-          </div>
-        </div>
-      )}
+      <AppShellRoute
+        routePath={hasKnownRoute ? routePath : '__fallback__'}
+        renderAdminPage={renderAdminPage}
+        renderPublicShell={renderPublicShell}
+        fallback={routeFallback}
+      />
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => {

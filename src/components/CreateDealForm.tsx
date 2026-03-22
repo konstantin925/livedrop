@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Deal, UserLocation } from '../types';
 import { CATEGORY_OPTIONS, ONLINE_CATEGORY_OPTIONS } from '../constants';
 import { getCategoryIconName, getCategoryLabel } from '../utils/categories';
@@ -10,6 +10,20 @@ interface CreateDealFormProps {
   onCancel: () => void;
   userLocation: UserLocation;
   initialData?: Deal | null;
+  onDraftChange?: (draft: Deal) => void;
+  autofillRequest?: {
+    id: number;
+    payload: {
+      storeName: string;
+      websiteUrl: string;
+      productLink: string;
+      imageUrl: string;
+      dealTitle: string;
+      description: string;
+      category: string;
+      offerText: string;
+    };
+  } | null;
 }
 
 const BUSINESS_DEFAULTS_KEY = 'livedrop_business_defaults';
@@ -37,6 +51,25 @@ const getOfferTypeFromDeal = (deal: Deal): OfferType => {
 
 const getDiscountValueFromDeal = (deal: Deal) => {
   const trimmedOffer = deal.offerText.trim();
+  const percentageMatch = trimmedOffer.match(/^(\d+(\.\d+)?)\s*%\s*OFF$/i);
+  if (percentageMatch) return percentageMatch[1];
+
+  const fixedMatch = trimmedOffer.match(/^\$(\d+(\.\d+)?)\s*OFF$/i);
+  if (fixedMatch) return fixedMatch[1];
+
+  return '30';
+};
+
+const getOfferTypeFromText = (offerText: string): OfferType => {
+  const trimmedOffer = offerText.trim();
+
+  if (/%\s*OFF$/i.test(trimmedOffer)) return 'percentage';
+  if (/^\$\d+(\.\d+)?\s*OFF$/i.test(trimmedOffer)) return 'fixed';
+  return 'custom';
+};
+
+const getDiscountValueFromText = (offerText: string) => {
+  const trimmedOffer = offerText.trim();
   const percentageMatch = trimmedOffer.match(/^(\d+(\.\d+)?)\s*%\s*OFF$/i);
   if (percentageMatch) return percentageMatch[1];
 
@@ -128,10 +161,53 @@ const getInitialFormData = (
   };
 };
 
-export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, initialData }) => {
+export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, initialData, onDraftChange, autofillRequest }) => {
   const savedDefaults = readBusinessDefaults();
   const [formData, setFormData] = useState(() => getInitialFormData(savedDefaults, initialData));
   const [submitError, setSubmitError] = useState<string>('');
+
+  useEffect(() => {
+    const nextFormData = getInitialFormData(readBusinessDefaults(), initialData);
+    setFormData(nextFormData);
+    setSubmitError('');
+
+    console.info('[LiveDrop] CreateDealForm hydrated form state from initialData', {
+      initialData,
+      finalPortalFormState: nextFormData,
+    });
+  }, [initialData]);
+
+  useEffect(() => {
+    if (!autofillRequest) return;
+
+    const nextOfferType = getOfferTypeFromText(autofillRequest.payload.offerText);
+
+    setFormData((prev) => {
+      const nextState = {
+        ...prev,
+        businessMode: 'online' as BusinessMode,
+        businessName: autofillRequest.payload.storeName,
+        websiteUrl: autofillRequest.payload.websiteUrl,
+        productUrl: autofillRequest.payload.productLink,
+        title: autofillRequest.payload.dealTitle,
+        description: autofillRequest.payload.description,
+        category: autofillRequest.payload.category || prev.category,
+        offerType: nextOfferType,
+        discountValue: getDiscountValueFromText(autofillRequest.payload.offerText),
+        customOfferText: nextOfferType === 'custom' ? autofillRequest.payload.offerText : '',
+        imageUrl: autofillRequest.payload.imageUrl || prev.imageUrl,
+      };
+
+      console.info('[LiveDrop] CreateDealForm applied autofill request', {
+        autofillRequest,
+        finalPortalFormState: nextState,
+      });
+
+      return nextState;
+    });
+
+    setSubmitError('');
+  }, [autofillRequest]);
 
   const durationMinutes = formData.durationPreset === 'custom'
     ? Number(formData.customDuration || 0)
@@ -146,6 +222,69 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     if (formData.offerType === 'fixed') return `$${formData.discountValue} OFF`;
     return formData.customOfferText.trim();
   }, [formData.offerType, formData.discountValue, formData.customOfferText]);
+
+  const portalDraft: Deal = useMemo(() => {
+    const safeRadius = Number.isFinite(radiusMiles) && radiusMiles > 0 ? radiusMiles : 1;
+    const latOffset = safeRadius / 69;
+    const isOnline = formData.businessMode === 'online';
+    const createdAt = Date.now();
+
+    return {
+      id: initialData?.id ?? 'portal-draft',
+      businessType: formData.businessMode,
+      status: initialData?.status ?? 'draft',
+      businessName: formData.businessName.trim(),
+      title: formData.title.trim(),
+      description: formData.description.trim(),
+      offerText: offerText.trim(),
+      originalPrice: initialData?.originalPrice ?? null,
+      discountPercent: initialData?.discountPercent ?? null,
+      affiliateUrl: initialData?.affiliateUrl,
+      reviewCount: initialData?.reviewCount ?? null,
+      stockStatus: initialData?.stockStatus ?? null,
+      imageUrl: formData.imageUrl.trim() || undefined,
+      websiteUrl: formData.websiteUrl.trim() || undefined,
+      productUrl: formData.productUrl.trim() || undefined,
+      hasTimer: formData.durationPreset !== 'none',
+      distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
+      lat: isOnline ? 0 : userLocation.lat + latOffset / 4,
+      lng: isOnline ? 0 : userLocation.lng,
+      createdAt,
+      expiresAt: createdAt + Math.max(durationMinutes, 1) * 60 * 1000,
+      maxClaims: Math.max(Number(formData.quantity || 0), 0),
+      currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
+      claimCount: Math.max(Number(formData.currentClaims || 0), 0),
+      category: formData.category.trim(),
+    };
+  }, [
+    durationMinutes,
+    formData.businessMode,
+    formData.businessName,
+    formData.category,
+    formData.currentClaims,
+    formData.description,
+    formData.durationPreset,
+    formData.imageUrl,
+    formData.productUrl,
+    formData.quantity,
+    formData.title,
+    formData.websiteUrl,
+    initialData?.affiliateUrl,
+    initialData?.discountPercent,
+    initialData?.id,
+    initialData?.originalPrice,
+    initialData?.reviewCount,
+    initialData?.status,
+    initialData?.stockStatus,
+    offerText,
+    radiusMiles,
+    userLocation.lat,
+    userLocation.lng,
+  ]);
+
+  useEffect(() => {
+    onDraftChange?.(portalDraft);
+  }, [onDraftChange, portalDraft]);
 
   const previewDeal: Deal = useMemo(() => {
     const safeRadius = Number.isFinite(radiusMiles) && radiusMiles > 0 ? radiusMiles : 1;

@@ -10,6 +10,9 @@ const supabaseUrl = readEnv(import.meta.env.VITE_SUPABASE_URL);
 const supabaseAnonKey = readEnv(import.meta.env.VITE_SUPABASE_ANON_KEY);
 const siteUrl = readEnv(import.meta.env.VITE_SITE_URL);
 
+export const resolvedSupabaseUrl = supabaseUrl;
+export const hasSupabaseAnonKey = Boolean(supabaseAnonKey) && !looksLikePlaceholder(supabaseAnonKey);
+
 export const hasSupabaseConfig =
   Boolean(supabaseUrl && supabaseAnonKey) &&
   !looksLikePlaceholder(supabaseUrl) &&
@@ -25,6 +28,16 @@ export const supabase = hasSupabaseConfig
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
+      },
+    })
+  : null;
+
+export const supabaseEdgeClient = hasSupabaseConfig
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
       },
     })
   : null;

@@ -22,6 +22,19 @@ create table if not exists public.user_app_state (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create or replace function public.get_deals_schema_columns()
+returns table(column_name text)
+language sql
+security definer
+set search_path = public, pg_catalog, information_schema
+as $$
+  select columns.column_name::text
+  from information_schema.columns
+  where columns.table_schema = 'public'
+    and columns.table_name = 'deals'
+  order by columns.ordinal_position;
+$$;
+
 create table if not exists public.deals (
   id text primary key,
   owner_id uuid references auth.users (id) on delete set null,
@@ -30,8 +43,10 @@ create table if not exists public.deals (
   featured boolean not null default false,
   admin_tag text check (admin_tag in ('featured', 'trending')),
   business_name text not null,
+  merchant text,
   logo_url text,
   image_url text,
+  image text,
   title text not null,
   description text not null,
   offer_text text not null,
@@ -41,6 +56,7 @@ create table if not exists public.deals (
   review_count integer,
   stock_status text,
   website_url text,
+  product_link text,
   product_url text,
   has_timer boolean not null default true,
   distance text not null default 'Online',
@@ -64,10 +80,13 @@ alter table public.deals add column if not exists stock_status text;
 alter table public.deals add column if not exists business_type text not null default 'local';
 alter table public.deals add column if not exists status text not null default 'active';
 alter table public.deals add column if not exists business_name text;
+alter table public.deals add column if not exists merchant text;
 alter table public.deals add column if not exists logo_url text;
 alter table public.deals add column if not exists image_url text;
+alter table public.deals add column if not exists image text;
 alter table public.deals add column if not exists offer_text text;
 alter table public.deals add column if not exists website_url text;
+alter table public.deals add column if not exists product_link text;
 alter table public.deals add column if not exists product_url text;
 alter table public.deals add column if not exists has_timer boolean not null default true;
 alter table public.deals add column if not exists distance text not null default 'Online';
@@ -85,9 +104,10 @@ alter table public.user_app_state enable row level security;
 alter table public.deals enable row level security;
 
 grant usage on schema public to anon, authenticated;
+grant execute on function public.get_deals_schema_columns() to anon, authenticated;
 grant select on public.deals to anon, authenticated;
 grant insert on public.deals to anon, authenticated;
-grant update on public.deals to authenticated;
+grant update on public.deals to anon, authenticated;
 grant delete on public.deals to authenticated;
 
 drop policy if exists "profiles_select_own" on public.profiles;
@@ -156,12 +176,13 @@ to anon, authenticated
 with check (true);
 
 drop policy if exists "deals_update_owner" on public.deals;
-create policy "deals_update_owner"
+drop policy if exists "deals_update_development" on public.deals;
+create policy "deals_update_development"
 on public.deals
 for update
-to authenticated
-using (auth.uid() = owner_id or owner_id is null)
-with check (auth.uid() = owner_id or owner_id is null);
+to anon, authenticated
+using (true)
+with check (true);
 
 drop policy if exists "deals_delete_owner" on public.deals;
 create policy "deals_delete_owner"
