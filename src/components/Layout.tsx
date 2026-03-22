@@ -36,6 +36,15 @@ export const Layout: React.FC<LayoutProps> = ({
   onOpenAuth,
   onSignOut,
 }) => {
+  const mainContentStyle: React.CSSProperties = {
+    paddingBottom: 'calc(4.75rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
+  };
+
+  const bottomNavStyle: React.CSSProperties = {
+    bottom: 'max(env(safe-area-inset-bottom, 0px), 0.4rem)',
+    paddingBottom: 'calc(0.375rem + env(safe-area-inset-bottom, 0px))',
+  };
+
   const getNotificationIcon = (type: AppNotification['type']) => {
     if (type === 'new_deal') return 'live' as const;
     if (type === 'ending_soon') return 'ending' as const;
@@ -43,7 +52,7 @@ export const Layout: React.FC<LayoutProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col max-w-[390px] mx-auto shadow-[0_24px_70px_rgba(15,23,42,0.12)] overflow-hidden border-x border-slate-200/80">
+    <div className="min-h-[100dvh] bg-slate-50 text-slate-900 flex flex-col max-w-[390px] mx-auto shadow-[0_24px_70px_rgba(15,23,42,0.12)] overflow-hidden border-x border-slate-200/80">
       {/* Header */}
       <header className="px-4 py-3 pt-5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex flex-col justify-center items-start">
@@ -145,12 +154,15 @@ export const Layout: React.FC<LayoutProps> = ({
       ) : null}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto px-3 py-2 pb-[4.35rem]">
+      <main className="flex-1 overflow-y-auto px-3 py-2" style={mainContentStyle}>
         {children}
       </main>
 
       {/* Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 max-w-[390px] mx-auto bg-white/94 backdrop-blur-xl border-t border-slate-100 px-4 py-1.5 flex justify-between items-center z-50">
+      <nav
+        className="fixed left-0 right-0 max-w-[390px] mx-auto bg-white/94 backdrop-blur-xl border-t border-slate-100 px-4 pt-1.5 flex justify-between items-center z-50"
+        style={bottomNavStyle}
+      >
         <NavButton 
           active={currentView === 'live-deals'} 
           onClick={() => onViewChange('live-deals')}

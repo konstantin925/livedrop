@@ -192,8 +192,12 @@ const getRadiusForDeal = (location: UserLocation, deal: Deal) => {
   return RADIUS_OPTIONS.find(option => distance <= option) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
 };
 
-const parseDistanceLabel = (distanceLabel: string): number | null => {
-  const normalized = distanceLabel.trim().toLowerCase();
+const parseDistanceLabel = (distanceLabel?: string | null): number | null => {
+  const normalized = (typeof distanceLabel === 'string' ? distanceLabel : '').trim().toLowerCase();
+
+  if (!normalized) {
+    return null;
+  }
 
   if (normalized.startsWith('<')) {
     const value = Number.parseFloat(normalized.replace(/[^0-9.]/g, ''));
@@ -204,8 +208,13 @@ const parseDistanceLabel = (distanceLabel: string): number | null => {
   return Number.isFinite(value) ? value : null;
 };
 
-const getEffectiveLocalDealDistance = (location: UserLocation, deal: Deal): number => {
+const getEffectiveLocalDealDistance = (
+  location: UserLocation,
+  deal: Deal,
+  allowCoordinateDistance: boolean,
+): number => {
   const hasUsableCoordinates =
+    allowCoordinateDistance &&
     Number.isFinite(deal.lat) &&
     Number.isFinite(deal.lng) &&
     !(deal.lat === 0 && deal.lng === 0);
@@ -219,11 +228,21 @@ const getEffectiveLocalDealDistance = (location: UserLocation, deal: Deal): numb
 };
 
 const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
-  const seededOnlineDeals = generateSeededOnlineDeals();
-  const seededOnlineDealIds = new Set(seededOnlineDeals.map((deal) => deal.id));
-  const nonSeededDeals = existingDeals.filter((deal) => !seededOnlineDealIds.has(deal.id));
+  const mergedDeals = new Map<string, Deal>();
 
-  return [...seededOnlineDeals, ...nonSeededDeals];
+  generateSeededOnlineDeals().forEach((deal) => {
+    mergedDeals.set(deal.id, deal);
+  });
+
+  existingDeals.forEach((deal) => {
+    mergedDeals.set(deal.id, deal);
+  });
+
+  return [...mergedDeals.values()].sort((a, b) => {
+    const left = Number.isFinite(a.createdAt) ? a.createdAt : 0;
+    const right = Number.isFinite(b.createdAt) ? b.createdAt : 0;
+    return right - left;
+  });
 };
 
 const getDealExternalUrl = (deal: Deal) => deal.affiliateUrl ?? deal.websiteUrl ?? deal.productUrl ?? null;
@@ -443,6 +462,26 @@ type PortalAutofillRequest = {
   payload: PortalAutofillPayload;
 };
 
+type AdminLogEntry = {
+  id: string;
+  level: 'info' | 'error';
+  message: string;
+  detail?: string;
+  timestamp: number;
+};
+
+type AdminActivityStatus = 'success' | 'warning' | 'error';
+
+type AdminActivityCard = {
+  id: string;
+  title: string;
+  summary: string;
+  timestamp: number;
+  status: AdminActivityStatus;
+  rawMessage: string;
+  rawDetail?: string;
+};
+
 const normalizePortalFieldValue = (value: string | number | null | undefined) => {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? String(value) : '';
@@ -598,10 +637,12 @@ type DealRow = {
   owner_id: string | null;
 };
 
+type DealPublishPayload = Partial<DealRow>;
+
 type SharedPublishFailure = {
   deal: Deal;
   mode: 'insert' | 'update';
-  payload: DealRow;
+  payload: DealPublishPayload;
   projectUrl: string;
   schema: string;
   table: string;
@@ -618,8 +659,9 @@ type DealsSchemaPreflightResult = {
   schemaSource: 'rpc' | 'local-fallback';
   payloadKeys: string[];
   missingColumns: string[];
+  requiredSchemaMissingColumns: string[];
   extraFieldsRemoved: string[];
-  payload: DealRow;
+  payload: DealPublishPayload;
 };
 
 const PUBLIC_DEALS_SCHEMA_FIELDS = [
@@ -659,42 +701,164 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
 
 const PUBLIC_DEALS_SCHEMA_FIELD_SET = new Set<string>(PUBLIC_DEALS_SCHEMA_FIELDS);
 
-const mapDealRowToDeal = (row: DealRow): Deal => ({
-  id: row.id,
-  businessType: row.business_type,
-  status: row.status,
-  featured: row.featured ?? false,
-  adminTag: row.admin_tag ?? null,
-  businessName: row.business_name ?? row.merchant ?? 'Unknown Merchant',
-  logoUrl: row.logo_url ?? undefined,
-  imageUrl: row.image_url ?? row.image ?? undefined,
-  title: row.title,
-  description: row.description,
-  offerText: row.offer_text,
-  originalPrice: row.original_price,
-  discountPercent: row.discount_percent,
-  affiliateUrl: row.affiliate_url ?? row.product_link ?? undefined,
-  reviewCount: row.review_count,
-  stockStatus: row.stock_status ?? undefined,
-  websiteUrl: row.website_url ?? undefined,
-  productUrl: row.product_link ?? row.product_url ?? row.affiliate_url ?? undefined,
-  hasTimer: row.has_timer,
-  distance: row.distance,
-  lat: row.lat,
-  lng: row.lng,
-  createdAt: new Date(row.created_at).getTime(),
-  expiresAt: new Date(row.expires_at).getTime(),
-  maxClaims: row.max_claims,
-  currentClaims: row.current_claims,
-  claimCount: row.claim_count,
-  category: row.category,
-});
+const REQUIRED_PUBLIC_DEALS_SCHEMA_FIELDS = [
+  'id',
+  'business_name',
+  'title',
+  'description',
+  'offer_text',
+  'category',
+] as const satisfies ReadonlyArray<keyof DealRow>;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeUuidOrNull = (value?: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed && UUID_PATTERN.test(trimmed) ? trimmed : null;
+};
+
+const validateDirectProductUrl = (value?: string | null) => {
+  const trimmed = value?.trim() ?? '';
+
+  if (!trimmed) {
+    return {
+      url: null,
+      error: 'Paste a direct product URL to continue.',
+    };
+  }
+
+  if (
+    /could not insert to public\.deals/i.test(trimmed) ||
+    /last backend error/i.test(trimmed) ||
+    /schema mismatch/i.test(trimmed)
+  ) {
+    return {
+      url: null,
+      error: 'The Product URL field contains a backend error message, not a product link. Paste a direct product or affiliate URL and try again.',
+    };
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Unsupported protocol');
+    }
+
+    return {
+      url: trimmed,
+      error: null,
+    };
+  } catch {
+    return {
+      url: null,
+      error: 'Paste a valid product or affiliate URL to continue.',
+    };
+  }
+};
+
+const createUuid = () => {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+};
+
+const ensureUuid = (value?: string | null) => normalizeUuidOrNull(value) ?? createUuid();
+
+const parseDealTimestampOrFallback = (value: string | null | undefined, fallback: number) => {
+  const parsed = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const parseDealNumberOrFallback = (value: unknown, fallback: number) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+const inferDealBusinessType = (row: Partial<DealRow>, fallback?: Deal['businessType']) => {
+  if (row.business_type === 'local' || row.business_type === 'online') {
+    return row.business_type;
+  }
+
+  if (fallback === 'local' || fallback === 'online') {
+    return fallback;
+  }
+
+  return row.website_url || row.product_link || row.product_url || row.affiliate_url || row.image_url || row.image
+    ? 'online'
+    : 'local';
+};
+
+const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal => {
+  const businessType = inferDealBusinessType(row, fallback?.businessType);
+  const createdAt = parseDealTimestampOrFallback(
+    row.created_at,
+    fallback?.createdAt ?? Date.now(),
+  );
+  const expiresAt = parseDealTimestampOrFallback(
+    row.expires_at,
+    fallback?.expiresAt ?? (
+      businessType === 'online'
+        ? createdAt + 7 * 24 * 60 * 60 * 1000
+        : createdAt + 60 * 60 * 1000
+    ),
+  );
+  const currentClaims = parseDealNumberOrFallback(
+    row.current_claims,
+    fallback?.currentClaims ?? 0,
+  );
+  const claimCount = parseDealNumberOrFallback(
+    row.claim_count,
+    fallback?.claimCount ?? currentClaims,
+  );
+  const maxClaims = parseDealNumberOrFallback(
+    row.max_claims,
+    fallback?.maxClaims ?? 999,
+  );
+
+  return {
+    id: row.id ?? fallback?.id ?? createUuid(),
+    businessType,
+    status: row.status ?? fallback?.status ?? 'active',
+    featured: row.featured ?? fallback?.featured ?? false,
+    adminTag: row.admin_tag ?? fallback?.adminTag ?? null,
+    businessName: row.business_name ?? row.merchant ?? fallback?.businessName ?? 'Unknown Merchant',
+    logoUrl: row.logo_url ?? fallback?.logoUrl ?? undefined,
+    imageUrl: row.image_url ?? row.image ?? fallback?.imageUrl ?? undefined,
+    title: row.title ?? fallback?.title ?? 'Untitled Deal',
+    description: row.description ?? fallback?.description ?? '',
+    offerText: row.offer_text ?? fallback?.offerText ?? 'Special offer',
+    originalPrice: row.original_price ?? fallback?.originalPrice ?? null,
+    discountPercent: row.discount_percent ?? fallback?.discountPercent ?? null,
+    affiliateUrl: row.affiliate_url ?? row.product_link ?? fallback?.affiliateUrl ?? fallback?.productUrl ?? undefined,
+    reviewCount: row.review_count ?? fallback?.reviewCount ?? null,
+    stockStatus: row.stock_status ?? fallback?.stockStatus ?? undefined,
+    websiteUrl: row.website_url ?? fallback?.websiteUrl ?? undefined,
+    productUrl: row.product_link ?? row.product_url ?? row.affiliate_url ?? fallback?.productUrl ?? fallback?.affiliateUrl ?? undefined,
+    hasTimer: typeof row.has_timer === 'boolean' ? row.has_timer : fallback?.hasTimer ?? Boolean(row.expires_at),
+    distance: row.distance ?? fallback?.distance ?? (businessType === 'online' ? 'Online' : 'Nearby'),
+    lat: parseDealNumberOrFallback(row.lat, fallback?.lat ?? 0),
+    lng: parseDealNumberOrFallback(row.lng, fallback?.lng ?? 0),
+    createdAt,
+    expiresAt,
+    maxClaims,
+    currentClaims,
+    claimCount,
+    category: row.category ?? fallback?.category ?? 'Tech',
+  };
+};
 
 const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const productLink = deal.affiliateUrl ?? deal.productUrl ?? null;
+  const normalizedOwnerId = normalizeUuidOrNull(ownerId);
 
   return {
-    id: deal.id,
+    id: ensureUuid(deal.id),
     business_type: deal.businessType ?? 'local',
     status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
     featured: deal.featured ?? false,
@@ -725,7 +889,7 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     current_claims: deal.currentClaims,
     claim_count: deal.claimCount ?? deal.currentClaims,
     category: deal.category,
-    owner_id: ownerId ?? null,
+    owner_id: normalizedOwnerId,
   };
 };
 
@@ -738,11 +902,501 @@ const formatAdminLogDetail = (value: unknown) => {
   }
 };
 
-const sanitizeDealRowForPublish = (row: DealRow) => {
+const asAdminLogRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const asAdminLogString = (value: unknown) =>
+  typeof value === 'string' ? value.trim() : '';
+
+const asAdminLogStringArray = (value: unknown) =>
+  Array.isArray(value)
+    ? value.map((item) => asAdminLogString(item)).filter(Boolean)
+    : [];
+
+const humanizeAdminFieldName = (field: string) => {
+  const overrides: Record<string, string> = {
+    affiliate_url: 'affiliate URL',
+    business_name: 'store name',
+    image_url: 'image',
+    imageUrl: 'image',
+    offer_text: 'offer text',
+    offerText: 'offer text',
+    original_price: 'original price',
+    originalPrice: 'original price',
+    product_link: 'product link',
+    productLink: 'product link',
+    review_count: 'review count',
+    reviewCount: 'review count',
+    website_url: 'website URL',
+    websiteUrl: 'website URL',
+  };
+
+  if (overrides[field]) {
+    return overrides[field];
+  }
+
+  return field
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .toLowerCase();
+};
+
+const formatAdminFieldList = (fields: string[]) =>
+  Array.from(
+    new Set(fields.map((field) => humanizeAdminFieldName(field)).filter(Boolean)),
+  ).join(', ');
+
+const parseAdminLogDetailObject = (detail?: string): Record<string, unknown> | null => {
+  if (!detail) return null;
+
+  try {
+    const parsed = JSON.parse(detail);
+    return asAdminLogRecord(parsed);
+  } catch {
+    return null;
+  }
+};
+
+const getAdminLogPrimaryPayload = (detailObject: Record<string, unknown> | null) => {
+  const payload = detailObject?.payload;
+
+  if (Array.isArray(payload)) {
+    return payload.map((item) => asAdminLogRecord(item)).find(Boolean) ?? null;
+  }
+
+  return asAdminLogRecord(payload);
+};
+
+const getAdminLogPayloadTitle = (
+  detailObject: Record<string, unknown> | null,
+  fallbackMessage?: string,
+) => {
+  const payloadTitle = asAdminLogString(getAdminLogPrimaryPayload(detailObject)?.title);
+  if (payloadTitle) return payloadTitle;
+
+  const productTitle = asAdminLogString(detailObject?.productTitle);
+  if (productTitle) return productTitle;
+
+  const quotedMatch = fallbackMessage?.match(/"([^"]+)"/);
+  return quotedMatch?.[1] ?? '';
+};
+
+const getAdminLogMerchant = (detailObject: Record<string, unknown> | null) => {
+  const primaryPayload = getAdminLogPrimaryPayload(detailObject);
+
+  return (
+    asAdminLogString(detailObject?.sourceMerchant) ||
+    asAdminLogString(detailObject?.merchant) ||
+    asAdminLogString(detailObject?.businessName) ||
+    asAdminLogString(primaryPayload?.merchant) ||
+    asAdminLogString(primaryPayload?.business_name)
+  );
+};
+
+const getAdminLogMissingOptionalFields = (
+  detailObject: Record<string, unknown> | null,
+  rawDetail?: string,
+) => {
+  const missingFromObject =
+    asAdminLogStringArray(detailObject?.missingOptionalFields).length > 0
+      ? asAdminLogStringArray(detailObject?.missingOptionalFields)
+      : asAdminLogStringArray(detailObject?.missingFields);
+
+  if (missingFromObject.length > 0) {
+    return missingFromObject;
+  }
+
+  if (rawDetail && !rawDetail.trim().startsWith('{')) {
+    const match = rawDetail.match(/Missing:\s*(.+)$/i);
+    if (match?.[1]) {
+      return match[1]
+        .split(',')
+        .map((field) => field.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+};
+
+const getAdminLogErrorReason = (
+  detailObject: Record<string, unknown> | null,
+  rawDetail?: string,
+) => {
+  const errorContext = asAdminLogRecord(detailObject?.error);
+  const explicitReason =
+    asAdminLogString(errorContext?.reason) ||
+    asAdminLogString(errorContext?.message) ||
+    asAdminLogString(detailObject?.failureReason);
+
+  if (explicitReason) return explicitReason;
+
+  if (rawDetail && !rawDetail.trim().startsWith('{')) {
+    return rawDetail.trim();
+  }
+
+  return '';
+};
+
+const humanizeAdminBackendReason = (reason: string) => {
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) return '';
+
+  const normalizedReason = trimmedReason.toLowerCase();
+
+  if (
+    normalizedReason.includes('missing vite_supabase_url') ||
+    normalizedReason.includes('missing vite_supabase_anon_key') ||
+    normalizedReason.includes('missing vite_supabase_url or vite_supabase_anon_key') ||
+    normalizedReason.includes('supabase is not configured')
+  ) {
+    return 'Supabase is not connected in this build yet, so LiveDrop is using fallback data instead of shared syncing.';
+  }
+
+  if (
+    normalizedReason.includes('failed to fetch') ||
+    normalizedReason.includes('networkerror') ||
+    normalizedReason.includes('network request failed')
+  ) {
+    return 'LiveDrop could not reach the shared backend right now, so it stayed on fallback data.';
+  }
+
+  if (normalizedReason.includes('row level security')) {
+    return 'Supabase blocked this action with its current permissions policy.';
+  }
+
+  if (normalizedReason.includes('invalid input syntax for type uuid')) {
+    return 'The shared backend rejected one of the deal IDs being sent for this action.';
+  }
+
+  return trimmedReason;
+};
+
+const summarizeAdminLogEntry = (entry: AdminLogEntry): AdminActivityCard | null => {
+  const hiddenMessagePatterns = [
+    /^Publishing "/i,
+    /^Updating "/i,
+    /^Bulk publishing /i,
+    /^Retrying shared /i,
+    /^Preflight checked /i,
+  ];
+
+  if (hiddenMessagePatterns.some((pattern) => pattern.test(entry.message))) {
+    return null;
+  }
+
+  const detailObject = parseAdminLogDetailObject(entry.detail);
+  const merchant = getAdminLogMerchant(detailObject);
+  const dealTitle = getAdminLogPayloadTitle(detailObject, entry.message);
+  const missingOptionalFields = getAdminLogMissingOptionalFields(detailObject, entry.detail);
+  const errorReason = getAdminLogErrorReason(detailObject, entry.detail);
+  const friendlyErrorReason = humanizeAdminBackendReason(errorReason);
+  const unsupportedFields = asAdminLogStringArray(detailObject?.extraFieldsRemoved);
+  const schemaMissingFields =
+    asAdminLogStringArray(detailObject?.requiredSchemaMissingColumns).length > 0
+      ? asAdminLogStringArray(detailObject?.requiredSchemaMissingColumns)
+      : asAdminLogStringArray(detailObject?.missingColumns);
+  const payloadCount = Array.isArray(detailObject?.payload) ? detailObject?.payload.length : null;
+  const syncCountMatch = entry.message.match(/Fetched (\d+) shared deals/i);
+  const syncedCount = syncCountMatch?.[1] ?? null;
+
+  if (entry.message === 'Deal extracted successfully' || entry.message === 'Coupon generated') {
+    const missingSummary = missingOptionalFields.length > 0
+      ? `Missing optional fields: ${formatAdminFieldList(missingOptionalFields)}.`
+      : 'All key coupon fields are available.';
+    const summaryParts = [
+      merchant ? `Source merchant: ${merchant}.` : '',
+      dealTitle ? `Product: ${dealTitle}.` : '',
+      missingSummary,
+    ].filter(Boolean);
+
+    return {
+      id: entry.id,
+      title: missingOptionalFields.length > 0 ? 'Missing optional fields' : entry.message,
+      summary: summaryParts.join(' '),
+      timestamp: entry.timestamp,
+      status: missingOptionalFields.length > 0 ? 'warning' : 'success',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message === 'Direct URL extraction failed') {
+    return {
+      id: entry.id,
+      title: 'Deal extraction failed',
+      summary: friendlyErrorReason || 'LiveDrop could not extract source data from the pasted URL.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Fetched ')) {
+    return {
+      id: entry.id,
+      title: 'Shared deals synced',
+      summary: syncedCount
+        ? `Loaded ${syncedCount} shared deal${syncedCount === '1' ? '' : 's'} from the backend.`
+        : 'Shared deals were refreshed from the backend.',
+      timestamp: entry.timestamp,
+      status: 'success',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message === 'Force refreshed shared deals') {
+    return null;
+  }
+
+  if (entry.message === 'Shared deals fetch failed' || entry.message === 'Force refresh failed') {
+    const isConfigIssue = friendlyErrorReason.includes('Supabase is not connected');
+
+    return {
+      id: entry.id,
+      title: isConfigIssue ? 'Shared sync unavailable' : 'Shared deals sync failed',
+      summary: friendlyErrorReason || 'LiveDrop could not load shared deals from the backend.',
+      timestamp: entry.timestamp,
+      status: isConfigIssue ? 'warning' : 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (
+    entry.message.startsWith('Published deal "') ||
+    entry.message.startsWith('Updated deal "') ||
+    entry.message.startsWith('Retry insert succeeded') ||
+    entry.message.startsWith('Retry update succeeded')
+  ) {
+    return {
+      id: entry.id,
+      title: 'Publish succeeded',
+      summary: dealTitle
+        ? `"${dealTitle}" is now saved to shared deals.`
+        : 'The deal was saved to shared deals successfully.',
+      timestamp: entry.timestamp,
+      status: 'success',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message === 'Shared deal publish failed' || entry.message === 'Shared deal update failed') {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: dealTitle
+        ? `Could not save "${dealTitle}" to shared deals. ${friendlyErrorReason || 'Please retry once the backend issue is fixed.'}`
+        : friendlyErrorReason || 'LiveDrop could not save the deal to shared deals.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Bulk upserted ')) {
+    return {
+      id: entry.id,
+      title: 'Shared deals synced',
+      summary: payloadCount && payloadCount > 1
+        ? `${payloadCount} deals were saved to the shared backend.`
+        : 'Bulk deal changes were saved to the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'success',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message === 'Bulk shared deal import failed') {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: friendlyErrorReason || 'Bulk deal import could not be saved to the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Deleted deal ')) {
+    return {
+      id: entry.id,
+      title: 'Deal removed',
+      summary: 'The deal was removed from the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'success',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message === 'Shared deal delete failed') {
+    return {
+      id: entry.id,
+      title: 'Delete failed',
+      summary: friendlyErrorReason || 'LiveDrop could not remove the deal from the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Omitted unsupported ')) {
+    return {
+      id: entry.id,
+      title: 'Missing optional fields',
+      summary: unsupportedFields.length > 0
+        ? `The shared backend skipped unsupported optional fields: ${formatAdminFieldList(unsupportedFields)}.`
+        : 'The shared backend skipped a few optional fields that are not part of the current schema.',
+      timestamp: entry.timestamp,
+      status: 'warning',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Failed to inspect ')) {
+    return {
+      id: entry.id,
+      title: 'Shared schema check failed',
+      summary: 'LiveDrop could not inspect the live shared-deals schema and switched to its local schema map for now.',
+      timestamp: entry.timestamp,
+      status: 'warning',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Falling back to local ')) {
+    return null;
+  }
+
+  if (entry.message.startsWith('Schema mismatch on ')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: schemaMissingFields.length > 0
+        ? `The shared backend is missing required fields: ${formatAdminFieldList(schemaMissingFields)}.`
+        : friendlyErrorReason || 'The shared backend schema does not match the app expectations.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Using local fallback after shared ')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: friendlyErrorReason
+        ? `The deal stayed local because the shared backend write failed: ${friendlyErrorReason}`
+        : 'The deal stayed local because the shared backend write failed.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Retry ') && entry.message.includes('failed')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: friendlyErrorReason || 'The retry could not save the deal to the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Schema mismatch on ')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: schemaMissingFields.length > 0
+        ? `The shared backend is missing required fields: ${formatAdminFieldList(schemaMissingFields)}.`
+        : errorReason || 'The shared backend schema does not match the app’s expected deal fields.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Using local fallback after shared ')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: errorReason
+        ? `The deal stayed local because the shared backend write failed: ${errorReason}`
+        : 'The deal stayed local because the shared backend write failed.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.message.startsWith('Retry ') && entry.message.includes('failed')) {
+    return {
+      id: entry.id,
+      title: 'Publish failed',
+      summary: errorReason || 'The retry could not save the deal to the shared backend.',
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  if (entry.level === 'error') {
+    return {
+      id: entry.id,
+      title: 'Backend action failed',
+      summary: friendlyErrorReason || entry.message,
+      timestamp: entry.timestamp,
+      status: 'error',
+      rawMessage: entry.message,
+      rawDetail: entry.detail,
+    };
+  }
+
+  return {
+    id: entry.id,
+    title: entry.message,
+    summary:
+      asAdminLogString(detailObject?.message) ||
+      (entry.detail && !entry.detail.trim().startsWith('{') ? entry.detail : 'Shared backend activity was recorded.'),
+    timestamp: entry.timestamp,
+    status: 'success',
+    rawMessage: entry.message,
+    rawDetail: entry.detail,
+  };
+};
+
+const sanitizeDealRowForPublish = (
+  row: DealRow,
+  allowedFields: ReadonlyArray<string> = PUBLIC_DEALS_SCHEMA_FIELDS,
+) => {
+  const sanitizedFieldNames = allowedFields.filter((field): field is keyof DealRow =>
+    PUBLIC_DEALS_SCHEMA_FIELD_SET.has(field),
+  );
   const sanitized = Object.fromEntries(
-    PUBLIC_DEALS_SCHEMA_FIELDS.map((field) => [field, row[field]]),
-  ) as DealRow;
-  const extraFieldsRemoved = Object.keys(row).filter((field) => !PUBLIC_DEALS_SCHEMA_FIELD_SET.has(field));
+    sanitizedFieldNames.map((field) => [field, row[field]]),
+  ) as DealPublishPayload;
+  const extraFieldsRemoved = Object.keys(row).filter((field) => !sanitizedFieldNames.includes(field as keyof DealRow));
 
   return {
     payload: sanitized,
@@ -834,12 +1488,13 @@ const getSupabaseErrorContext = (error: unknown) => {
 
 const buildSharedWriteLogDetail = (options: {
   operation: 'insert' | 'update' | 'delete' | 'select' | 'bulk-upsert';
-  payload?: DealRow | DealRow[];
+  payload?: DealPublishPayload | DealPublishPayload[];
   extraFieldsRemoved?: string[];
   schemaColumns?: string[];
   schemaSource?: 'rpc' | 'local-fallback';
   payloadKeys?: string[];
   missingColumns?: string[];
+  requiredSchemaMissingColumns?: string[];
   error?: unknown;
 }) =>
   formatAdminLogDetail({
@@ -852,6 +1507,7 @@ const buildSharedWriteLogDetail = (options: {
     schemaSource: options.schemaSource ?? 'rpc',
     payloadKeys: options.payloadKeys ?? [],
     missingColumns: options.missingColumns ?? [],
+    requiredSchemaMissingColumns: options.requiredSchemaMissingColumns ?? [],
     payload: options.payload,
     error: options.error ? getSupabaseErrorContext(options.error) : null,
   });
@@ -1025,7 +1681,8 @@ export default function App() {
     lastError: '',
   });
   const [adminAccessError, setAdminAccessError] = useState('');
-  const [adminLogs, setAdminLogs] = useState<Array<{ id: string; level: 'info' | 'error'; message: string; detail?: string; timestamp: number }>>([]);
+  const [adminLogs, setAdminLogs] = useState<AdminLogEntry[]>([]);
+  const [showAdvancedBackendLogs, setShowAdvancedBackendLogs] = useState(false);
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
@@ -1041,6 +1698,15 @@ export default function App() {
   const hasPortalAccess = LOCAL_ADMIN_MODE || isBusinessSubscribed;
   const isAdminRoute = routePath === '/admin';
   const isDashboardRoute = routePath === '/dashboard';
+  const hasPreciseUserLocation = locationStatus === 'success';
+  const locationDisplayName =
+    locationStatus === 'loading'
+      ? 'Locating...'
+      : locationStatus === 'denied'
+        ? 'Location access denied'
+        : locationStatus === 'error'
+          ? 'Location unavailable'
+          : (cityName || 'Current area');
   const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
   const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
   const selectedAIFinderCandidate = useMemo(
@@ -1049,6 +1715,12 @@ export default function App() {
       ?? aiFinderSearchSnapshot?.searchCandidates?.find((candidate) => candidate.url === selectedAIFinderUrl)
       ?? null,
     [aiFinderCandidates, aiFinderSearchSnapshot?.searchCandidates, selectedAIFinderUrl],
+  );
+  const adminActivityCards = useMemo(
+    () => adminLogs
+      .map((entry) => summarizeAdminLogEntry(entry))
+      .filter((entry): entry is AdminActivityCard => Boolean(entry)),
+    [adminLogs],
   );
   const aiFinderDirectUrl = aiFinderUrl.trim();
   const aiFinderHasDirectUrlFallback = aiFinderUseDirectUrlFallback && Boolean(aiFinderDirectUrl);
@@ -1121,16 +1793,36 @@ export default function App() {
   }, [pendingPortalAutofill, portalFieldSnapshot]);
 
   const pushAdminLog = (level: 'info' | 'error', message: string, detail?: string) => {
-    setAdminLogs((prev) => [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        level,
-        message,
-        detail,
-        timestamp: Date.now(),
-      },
-      ...prev,
-    ].slice(0, 20));
+    setAdminLogs((prev) => {
+      const timestamp = Date.now();
+      const latestEntry = prev[0];
+
+      if (
+        latestEntry &&
+        latestEntry.level === level &&
+        latestEntry.message === message &&
+        latestEntry.detail === detail
+      ) {
+        return [
+          {
+            ...latestEntry,
+            timestamp,
+          },
+          ...prev.slice(1),
+        ];
+      }
+
+      return [
+        {
+          id: `${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+          level,
+          message,
+          detail,
+          timestamp,
+        },
+        ...prev,
+      ].slice(0, 20);
+    });
   };
 
   const getDealsTableClient = () => {
@@ -1200,10 +1892,15 @@ export default function App() {
     row: DealRow,
     operation: 'insert' | 'update' | 'bulk-upsert',
   ): Promise<DealsSchemaPreflightResult> => {
-    const { payload, extraFieldsRemoved } = sanitizeDealRowForPublish(row);
     const { columns: schemaColumns, source: schemaSource } = await fetchDealsSchemaColumns();
+    const { payload, extraFieldsRemoved } = sanitizeDealRowForPublish(row, schemaColumns);
     const payloadKeys = Object.keys(payload);
-    const missingColumns = payloadKeys.filter((key) => !schemaColumns.includes(key));
+    const missingColumns = PUBLIC_DEALS_SCHEMA_FIELDS.filter(
+      (field) => !schemaColumns.includes(field) && Object.prototype.hasOwnProperty.call(row, field),
+    );
+    const requiredSchemaMissingColumns = REQUIRED_PUBLIC_DEALS_SCHEMA_FIELDS.filter(
+      (field) => !schemaColumns.includes(field),
+    );
 
     const logDetail = buildSharedWriteLogDetail({
       operation,
@@ -1213,20 +1910,39 @@ export default function App() {
       schemaSource,
       payloadKeys,
       missingColumns,
+      requiredSchemaMissingColumns,
     });
 
     pushAdminLog('info', `Preflight checked ${DEALS_SCHEMA}.${DEALS_TABLE} ${operation} payload`, logDetail);
 
     if (missingColumns.length > 0) {
+      pushAdminLog(
+        'info',
+        `Omitted unsupported ${DEALS_SCHEMA}.${DEALS_TABLE} columns from ${operation} payload`,
+        buildSharedWriteLogDetail({
+          operation,
+          payload,
+          extraFieldsRemoved,
+          schemaColumns,
+          schemaSource,
+          payloadKeys,
+          missingColumns,
+          requiredSchemaMissingColumns,
+        }),
+      );
+    }
+
+    if (requiredSchemaMissingColumns.length > 0) {
       const preflightError = Object.assign(
-        new Error(`Schema mismatch on ${DEALS_SCHEMA}.${DEALS_TABLE}. Missing columns: ${missingColumns.join(', ')}`),
+        new Error(`Schema mismatch on ${DEALS_SCHEMA}.${DEALS_TABLE}. Required columns missing: ${requiredSchemaMissingColumns.join(', ')}`),
         {
           code: 'SCHEMA_MISMATCH',
-          details: `Payload keys not present in ${DEALS_SCHEMA}.${DEALS_TABLE}: ${missingColumns.join(', ')}`,
+          details: `Required columns not present in ${DEALS_SCHEMA}.${DEALS_TABLE}: ${requiredSchemaMissingColumns.join(', ')}`,
           hint: 'Apply the latest supabase/schema.sql migration before retrying publish.',
-          missingColumns,
+          missingColumns: requiredSchemaMissingColumns,
           payloadKeys,
           schemaColumns,
+          omittedColumns: missingColumns,
         },
       );
 
@@ -1239,6 +1955,7 @@ export default function App() {
       schemaSource,
       payloadKeys,
       missingColumns,
+      requiredSchemaMissingColumns,
       extraFieldsRemoved,
       payload,
     };
@@ -1377,15 +2094,20 @@ export default function App() {
 
   const ensureAIFinderSourceSelection = (overrideUrl?: string) => {
     const selectedSourceUrl = overrideUrl?.trim() || aiFinderUrl.trim() || '';
+    const validation = validateDirectProductUrl(selectedSourceUrl);
 
-    if (!selectedSourceUrl) {
-      const message = 'Paste a direct product URL to continue.';
+    if (!validation.url) {
+      const message = validation.error || 'Paste a direct product URL to continue.';
+      console.warn('[LiveDrop] Invalid Quick Coupon Creator URL input', {
+        attemptedValue: selectedSourceUrl,
+        reason: message,
+      });
       setAiFinderError(message);
-      setAiFinderMessage('Direct URL intake is the active admin flow right now. Paste a product URL to continue.');
+      setAiFinderMessage('Quick Coupon Creator only works from a real product or affiliate URL.');
       return null;
     }
 
-    return selectedSourceUrl;
+    return validation.url;
   };
 
   const navigateToPath = (path: string) => {
@@ -1436,6 +2158,7 @@ export default function App() {
     setPortalFieldSnapshot(null);
     setIsCreating(false);
     setShowDebug(false);
+    setShowAdvancedBackendLogs(false);
   };
 
   const handleReturnToPublicApp = () => {
@@ -1452,6 +2175,7 @@ export default function App() {
     setAuthInfo('');
     setAdminAccessError('');
     resetAdminUiState();
+    setCurrentView('live-deals');
     navigateToPath('/');
   };
 
@@ -1491,7 +2215,7 @@ export default function App() {
       operation: 'select',
     }));
 
-    return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
+    return (data ?? []).map((row) => mapDealRowToDeal(row as Partial<DealRow>));
   };
 
   const publishDealToBackend = async (deal: Deal) => {
@@ -1563,7 +2287,7 @@ export default function App() {
       missingColumns,
     }));
 
-    return mapDealRowToDeal(data as DealRow);
+    return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
   const publishDealsToBackend = async (inputDeals: Deal[]) => {
@@ -1643,7 +2367,11 @@ export default function App() {
       missingColumns,
     }));
 
-    return (data ?? []).map((row) => mapDealRowToDeal(row as DealRow));
+    const inputDealsById = new Map(inputDeals.map((deal) => [ensureUuid(deal.id), deal]));
+    return (data ?? []).map((row) => {
+      const fallbackDeal = inputDealsById.get(String((row as Partial<DealRow>).id ?? ''));
+      return mapDealRowToDeal(row as Partial<DealRow>, fallbackDeal);
+    });
   };
 
   const updateDealInBackend = async (deal: Deal) => {
@@ -1715,7 +2443,7 @@ export default function App() {
       payloadKeys,
       missingColumns,
     }));
-    return mapDealRowToDeal(data as DealRow);
+    return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
   const deleteDealFromBackend = async (dealId: string) => {
@@ -1803,12 +2531,13 @@ export default function App() {
     },
   ) => {
     const keyword = aiFinderKeyword.trim();
-    const sourceUrl = options?.overrideUrl?.trim() || aiFinderUrl.trim();
+    const sourceUrlInput = options?.overrideUrl?.trim() || aiFinderUrl.trim();
+    const sourceValidation = validateDirectProductUrl(sourceUrlInput);
 
     setAiFinderRuntime({
       requestSent: true,
       responseReceived: false,
-      actualQuery: sourceUrl,
+      actualQuery: sourceUrlInput,
       currentAction: 'validating',
       lastError: '',
     });
@@ -1824,10 +2553,15 @@ export default function App() {
       throw new Error(message);
     }
 
-    if (!sourceUrl) {
-      const message = 'Paste a direct product URL to continue.';
+    if (!sourceValidation.url) {
+      const message = sourceValidation.error || 'Paste a direct product URL to continue.';
+      console.warn('[LiveDrop] Quick Coupon Creator validation blocked request', {
+        attemptedValue: sourceUrlInput,
+        mode,
+        reason: message,
+      });
       setAiFinderError(message);
-      setAiFinderMessage('Direct URL intake is the only active admin flow right now.');
+      setAiFinderMessage('Quick Coupon Creator only accepts a valid direct product or affiliate URL.');
       setAiFinderRuntime((prev) => ({
         ...prev,
         currentAction: 'idle',
@@ -1835,6 +2569,13 @@ export default function App() {
       }));
       throw new Error(message);
     }
+
+    const sourceUrl = sourceValidation.url;
+
+    setAiFinderRuntime((prev) => ({
+      ...prev,
+      actualQuery: sourceUrl,
+    }));
 
     setAiFinderLoading(true);
     setAiFinderError('');
@@ -1918,8 +2659,17 @@ export default function App() {
 
       pushAdminLog(
         'info',
-        mode === 'extract' ? `Extracted deal from ${sourceUrl}` : `Generated coupon for ${result.normalizedDeal.title}`,
-        result.missingFields.length ? `Missing: ${result.missingFields.join(', ')}` : 'All key fields extracted.',
+        mode === 'extract' ? 'Deal extracted successfully' : 'Coupon generated',
+        formatAdminLogDetail({
+          sourceMerchant:
+            result.normalizedDeal.merchant ??
+            result.normalizedDeal.businessName ??
+            '',
+          productTitle: result.normalizedDeal.title ?? '',
+          missingOptionalFields: result.missingFields,
+          extractionStatus: result.extractionStatus ?? '',
+          sourceUrl,
+        }),
       );
 
       return result;
@@ -2117,7 +2867,7 @@ export default function App() {
     const productUrl = productLink || affiliateUrl || item.websiteUrl || undefined;
 
     return {
-      id: `import-draft-${Math.random().toString(36).slice(2, 10)}`,
+      id: createUuid(),
       businessType,
       status: 'draft',
       businessName: item.businessName,
@@ -2278,6 +3028,7 @@ export default function App() {
     setAdminAccessError('');
     setAdminSessionEmail(null);
     resetAdminUiState();
+    setCurrentView('live-deals');
 
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
@@ -2438,6 +3189,7 @@ export default function App() {
       setAuthModalOpen(false);
       setAuthError('');
       setAuthInfo('');
+      setCurrentView('live-deals');
     }
 
     if (!isAdminRoute && !currentView) {
@@ -2573,9 +3325,10 @@ export default function App() {
   // Geolocation fetching
   const fetchLocation = () => {
     setLocationStatus('loading');
+    setCityName('');
     if (!navigator.geolocation) {
       setLocationStatus('error');
-      setUserLocation(DEFAULT_LOCATION);
+      setCityName('Location unavailable');
       return;
     }
 
@@ -2588,6 +3341,7 @@ export default function App() {
         };
         setUserLocation(newLocation);
         setLocationStatus('success');
+        setCityName('');
 
         // If no deals exist yet, seed them near this location
         const savedDeals = readStoredDeals();
@@ -2600,7 +3354,7 @@ export default function App() {
       (error) => {
         console.error('Geolocation error:', error);
         setLocationStatus(error.code === 1 ? 'denied' : 'error');
-        setUserLocation(DEFAULT_LOCATION);
+        setCityName(error.code === 1 ? 'Location access denied' : 'Location unavailable');
         
         // Do NOT seed here to avoid fallback coordinates
       },
@@ -2629,6 +3383,10 @@ export default function App() {
 
   // Fetch city name from coordinates
   useEffect(() => {
+    if (locationStatus !== 'success') {
+      return;
+    }
+
     const fetchCity = async () => {
       try {
         const response = await fetch(
@@ -2645,14 +3403,14 @@ export default function App() {
         setCityName(city);
       } catch (error) {
         console.error('Error fetching city name:', error);
-        setCityName('Unknown Location');
+        setCityName('Current area');
       }
     };
 
     if (userLocation.lat && userLocation.lng) {
       fetchCity();
     }
-  }, [userLocation.lat, userLocation.lng]);
+  }, [locationStatus, userLocation.lat, userLocation.lng]);
 
   // Periodic refresh to move deals from "Live" to "Expired"
   useEffect(() => {
@@ -2687,6 +3445,7 @@ export default function App() {
 
   useEffect(() => {
     if (deals.length === 0) return;
+    if (!hasPreciseUserLocation) return;
 
     const nextSeenIds = new Set(seenDealIdsRef.current);
     const newDeals = deals.filter((deal) => !seenDealIdsRef.current.has(deal.id));
@@ -2709,9 +3468,11 @@ export default function App() {
     });
 
     seenDealIdsRef.current = nextSeenIds;
-  }, [deals, radius, userLocation.lat, userLocation.lng]);
+  }, [deals, radius, hasPreciseUserLocation, userLocation.lat, userLocation.lng]);
 
   useEffect(() => {
+    if (!hasPreciseUserLocation) return;
+
     deals.forEach((deal) => {
       if (deal.businessType === 'online') return;
 
@@ -2727,7 +3488,7 @@ export default function App() {
         });
       }
     });
-  }, [deals, radius, userLocation.lat, userLocation.lng]);
+  }, [deals, radius, hasPreciseUserLocation, userLocation.lat, userLocation.lng]);
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
@@ -2925,9 +3686,10 @@ export default function App() {
 
   const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt'>) => {
     const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
+    const normalizedEditingDealId = normalizeUuidOrNull(editingDealId);
     const localDeal: Deal = {
       ...dealData,
-      id: editingDealId ?? Math.random().toString(36).substr(2, 9),
+      id: normalizedEditingDealId ?? createUuid(),
       createdAt: existingDraft?.createdAt ?? Date.now(),
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
@@ -2938,11 +3700,11 @@ export default function App() {
 
     let publishedDeal = localDeal;
     let sharedWriteSucceeded = false;
-    const sharedWriteMode: SharedPublishFailure['mode'] = editingDealId ? 'update' : 'insert';
+    const sharedWriteMode: SharedPublishFailure['mode'] = normalizedEditingDealId ? 'update' : 'insert';
 
     if (supabase && hasSupabaseConfig) {
       try {
-        publishedDeal = editingDealId
+        publishedDeal = normalizedEditingDealId
           ? await updateDealInBackend(localDeal)
           : await publishDealToBackend(localDeal);
         sharedWriteSucceeded = true;
@@ -2960,7 +3722,14 @@ export default function App() {
       setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
     }
 
-    setDeals(prev => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
+    setDeals(prev => [
+      publishedDeal,
+      ...prev.filter((deal) =>
+        deal.id !== publishedDeal.id &&
+        deal.id !== localDeal.id &&
+        deal.id !== editingDealId,
+      ),
+    ]);
     setDealDraft(null);
     setPortalFieldSnapshot(null);
     setPortalAutofillStatus({
@@ -2980,6 +3749,8 @@ export default function App() {
     } else {
       setDropMode('online');
     }
+    setSelectedCategory('All');
+    setSelectedFeedFilter('all');
     setPortalSuccessMessage(sharedWriteSucceeded ? 'Your deal is live' : '');
     setIsCreating(false);
     if (!isAdminRoute) {
@@ -3510,7 +4281,7 @@ export default function App() {
     const localDeals = deals.filter((deal) => deal.businessType !== 'online');
     const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
     const dealsWithDistance = localDeals.map(deal => {
-      const dist = getEffectiveLocalDealDistance(userLocation, deal);
+      const dist = getEffectiveLocalDealDistance(userLocation, deal, hasPreciseUserLocation);
       return { ...deal, computedDistanceValue: dist, computedDistanceLabel: formatDistance(dist) };
     });
 
@@ -3589,8 +4360,9 @@ export default function App() {
       return true;
     });
 
-    const getOnlineDealHeroLabel = (offerText: string) => {
-      const normalizedOffer = offerText.trim();
+    const getOnlineDealHeroLabel = (offerText?: string | null) => {
+      const normalizedOffer = (typeof offerText === 'string' ? offerText : '').trim();
+      if (!normalizedOffer) return 'DEAL';
       const uppercaseOffer = normalizedOffer.toUpperCase();
       const percentMatch = uppercaseOffer.match(/\d+\s*%(\s*OFF)?/);
 
@@ -3707,7 +4479,7 @@ export default function App() {
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Your Location</p>
                   <p className="text-[13px] font-semibold text-slate-700">
-                    {locationStatus === 'loading' ? 'Locating...' : (cityName || 'San Francisco')}
+                    {locationDisplayName}
                   </p>
                 </div>
               </div>
@@ -4243,16 +5015,6 @@ export default function App() {
       const previewDeal = aiFinderResult?.normalizedDeal;
       const extractionDebug = aiFinderResult?.extractionDebug;
       const sourceAssets = aiFinderResult?.sourceAssets;
-      const generatedFieldRows = [
-        { label: 'Business Name', value: previewDeal?.businessName ?? '' },
-        { label: 'Deal Title', value: previewDeal?.title ?? '' },
-        { label: 'Description', value: previewDeal?.description ?? '' },
-        { label: 'Category', value: previewDeal?.category ?? '' },
-        { label: 'Deal / Discount Text', value: previewDeal?.offerText ?? '' },
-        { label: 'Website URL', value: previewDeal?.websiteUrl ?? '' },
-        { label: 'Product Link', value: previewDeal?.productUrl ?? previewDeal?.productLink ?? previewDeal?.affiliateUrl ?? '' },
-        { label: 'Image URL', value: previewDeal?.imageUrl ?? '' },
-      ];
       const portalCoverageSource = portalFieldSnapshot;
       const portalCoverage = buildPortalFieldCoverage(portalCoverageSource);
       const filledFields = portalCoverage.filled;
@@ -4267,11 +5029,18 @@ export default function App() {
       const extractionSucceeded = aiFinderResult?.extractionStatus === 'Extraction succeeded';
       const extractionFailed = aiFinderResult?.extractionStatus === 'Extraction failed';
       const canGenerateCoupon = Boolean(aiFinderDirectUrl);
-      const canFillPortal = Boolean(aiFinderResult?.generatedJson);
+      const canFillPortal = Boolean(aiFinderDirectUrl);
       const portalMappingReady = filledFields.length > 0;
       const portalMappingSucceeded = portalMappingReady && requiredMissingFields.length === 0;
       const requiredFilledCount = portalCoverage.required.filter((field) => field.filled).length;
       const optionalFilledCount = portalCoverage.optional.filter((field) => field.filled).length;
+      const assistantInputs = [
+        ['Keyword', aiFinderKeyword || 'Not set'],
+        ['Merchant', aiFinderMerchant || 'Any'],
+        ['Category', aiFinderCategory || 'Any'],
+        ['Max Price', aiFinderMaxPrice || 'None'],
+        ['Min Discount', aiFinderMinDiscount || 'None'],
+      ];
       const stageCards = [
         {
           key: 'extract',
@@ -4297,38 +5066,44 @@ export default function App() {
       ];
 
       return (
-        <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="space-y-4">
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl">
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Direct Deal Intake</p>
-              <h3 className="mt-1 text-lg font-black text-slate-900">Paste a product URL, extract product data, generate coupon fields, then fill the portal</h3>
-              <p className="mt-1 text-sm leading-6 text-slate-500">Tavily search is disabled for now. This admin tool uses a direct product URL only, keeps the cleaned product link and merchant even when extraction fails, and lets you review the result before it touches the portal.</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Quick Coupon Creator</p>
+              <h3 className="mt-1 text-lg font-black text-slate-900">Paste a product or affiliate URL, generate the coupon fields, then fill the portal</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-500">This is now the primary admin workflow. LiveDrop keeps the cleaned product link, merchant, and website domain even when deeper extraction is partial, so reliable coupon creation no longer depends on AI search success.</p>
             </div>
-            <span className={`inline-flex h-9 items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-[0.12em] ${
-              aiFinderLoading
-                ? 'bg-indigo-100 text-indigo-700'
-                : aiFinderResult?.generatedJson
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : hasAcceptedUrl
-                    ? 'bg-sky-100 text-sky-700'
-                    : 'bg-slate-100 text-slate-600'
-            }`}>
-              {aiFinderLoading ? 'Processing URL' : aiFinderResult?.generatedJson ? 'Coupon Ready' : hasAcceptedUrl ? 'URL Ready' : 'Awaiting URL'}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+                Primary Workflow
+              </span>
+              <span className={`inline-flex h-9 items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-[0.12em] ${
+                aiFinderLoading
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : aiFinderResult?.generatedJson
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : hasAcceptedUrl
+                      ? 'bg-sky-100 text-sky-700'
+                      : 'bg-slate-100 text-slate-600'
+              }`}>
+                {aiFinderLoading ? 'Processing URL' : aiFinderResult?.generatedJson ? 'Coupon Ready' : hasAcceptedUrl ? 'URL Ready' : 'Awaiting URL'}
+              </span>
+            </div>
           </div>
 
           <div className="mt-5 rounded-[1.5rem] border border-slate-100 bg-slate-50/60 p-4">
             <label className="block">
-              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product URL</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product Or Affiliate URL</span>
               <input
                 ref={aiFinderUrlInputRef}
                 type="url"
                 value={aiFinderUrl}
                 onChange={(event) => setAiFinderUrl(event.target.value)}
-                placeholder="https://www.amazon.com/... or another product page"
+                placeholder="https://www.amazon.com/... or a direct affiliate link"
                 className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
               />
-              <p className="mt-2 text-xs leading-5 text-slate-400">Direct URL only. The app will always keep the cleaned link, merchant, and website domain even if deeper extraction fails.</p>
+              <p className="mt-2 text-xs leading-5 text-slate-400">Direct URL is the trusted entry point. The app will always keep the cleaned link, merchant, and website domain, so the portal still gets the important coupon fields even if deeper extraction fails.</p>
             </label>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -4709,6 +5484,59 @@ export default function App() {
               </div>
             </div>
           ) : null}
+          </div>
+
+          <details className="group rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <summary className="flex cursor-pointer list-none flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Deal Discovery Assistant</p>
+                <h3 className="mt-1 text-lg font-black text-slate-900">Optional and experimental discovery help for finding candidate links before you return to Quick Coupon Creator</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-500">AI search is no longer the main path. It stays separate here as an optional assistant, while direct coupon creation above remains the reliable workflow for filling and publishing deals.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex h-9 items-center justify-center rounded-full bg-amber-100 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">
+                  Experimental
+                </span>
+                <span className="inline-flex h-9 items-center justify-center rounded-full bg-slate-100 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600">
+                  Optional
+                </span>
+              </div>
+            </summary>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-indigo-500">How it fits now</p>
+                <div className="mt-3 space-y-3 text-sm leading-6 text-slate-600">
+                  <p>1. Use discovery only when you need help finding a likely product or affiliate URL.</p>
+                  <p>2. Once you have a link, paste it into Quick Coupon Creator above and continue with Scan URL, Generate Deal, and Auto Fill Portal.</p>
+                  <p>3. Publish and save reliability are being prioritized around the direct-link path first, so discovery will never block coupon creation.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => aiFinderUrlInputRef.current?.focus()}
+                  className="mt-4 inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+                >
+                  Focus Quick Coupon Creator
+                </button>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Current Discovery Context</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {assistantInputs.map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{label}</p>
+                      <p className="mt-2 break-all text-sm font-semibold text-slate-700">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Status</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">Discovery remains available as an experimental assistant, but the app no longer depends on it to create a coupon, auto-fill the portal, or publish a deal.</p>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       );
     }
@@ -6170,28 +6998,93 @@ export default function App() {
           <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Backend Logs</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Backend Activity</p>
                 <h2 className="mt-1 text-lg font-black text-slate-900">Shared backend activity</h2>
               </div>
-              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{adminLogs.length} entries</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{adminActivityCards.length} entries</span>
+                {adminLogs.length > 0 ? (
+                  <button
+                    onClick={() => setShowAdvancedBackendLogs((prev) => !prev)}
+                    className="inline-flex h-8 items-center justify-center rounded-full border border-slate-200 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    {showAdvancedBackendLogs ? 'Hide Debug' : 'Advanced Debug'}
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div className="mt-4 space-y-2">
-              {adminLogs.length > 0 ? adminLogs.map((entry) => (
-                <div key={entry.id} className={`rounded-xl border px-3 py-3 ${entry.level === 'error' ? 'border-rose-100 bg-rose-50' : 'border-slate-100 bg-slate-50'}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className={`text-sm font-semibold ${entry.level === 'error' ? 'text-rose-600' : 'text-slate-700'}`}>{entry.message}</p>
-                    <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+            <div className="mt-4 space-y-3">
+              {adminActivityCards.length > 0 ? adminActivityCards.map((entry) => {
+                const tone = entry.status === 'success'
+                  ? {
+                      card: 'border-emerald-100 bg-emerald-50/70',
+                      badge: 'border-emerald-200 bg-white text-emerald-600',
+                      title: 'text-emerald-700',
+                    }
+                  : entry.status === 'warning'
+                    ? {
+                        card: 'border-amber-100 bg-amber-50/70',
+                        badge: 'border-amber-200 bg-white text-amber-600',
+                        title: 'text-amber-700',
+                      }
+                    : {
+                        card: 'border-rose-100 bg-rose-50/80',
+                        badge: 'border-rose-200 bg-white text-rose-600',
+                        title: 'text-rose-700',
+                      };
+
+                return (
+                  <div key={entry.id} className={`rounded-2xl border px-4 py-3 shadow-sm ${tone.card}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex h-7 items-center justify-center rounded-full border px-2.5 text-[10px] font-black uppercase tracking-[0.1em] ${tone.badge}`}>
+                            {entry.status}
+                          </span>
+                          <p className={`text-sm font-bold ${tone.title}`}>{entry.title}</p>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">{entry.summary}</p>
+                      </div>
+                      <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                        {new Date(entry.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                      </span>
+                    </div>
                   </div>
-                  {entry.detail ? (
-                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-white/80 px-3 py-2 text-[11px] leading-5 text-slate-600">
-                      {entry.detail}
-                    </pre>
-                  ) : null}
-                </div>
-              )) : (
-                <p className="text-sm text-slate-400">No backend logs yet.</p>
+                );
+              }) : (
+                <p className="text-sm text-slate-400">No shared backend activity yet.</p>
               )}
             </div>
+            {showAdvancedBackendLogs && adminLogs.length > 0 ? (
+              <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Advanced Debug</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-700">Raw backend logs</p>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                    Hidden by default
+                  </span>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {adminLogs.map((entry) => (
+                    <div key={`debug-${entry.id}`} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-700">{entry.message}</p>
+                        <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                          {new Date(entry.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      {entry.detail ? (
+                        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+                          {entry.detail}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-3">

@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
 
 interface CompanyLogoProps {
-  businessName: string;
+  businessName?: string;
   logoUrl?: string;
   size?: number;
   category?: string;
@@ -73,8 +73,8 @@ const CATEGORY_PALETTES: Record<string, {
   },
 };
 
-function getInitials(name: string): string {
-  const parts = name
+function getInitials(name?: string): string {
+  const parts = (name ?? '')
     .trim()
     .split(/\s+/)
     .filter(Boolean)
@@ -88,6 +88,7 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl,
   const [imageFailed, setImageFailed] = useState(false);
   const initials = useMemo(() => getInitials(businessName), [businessName]);
   const showImage = Boolean(logoUrl) && !imageFailed;
+  const label = businessName?.trim() || 'Business';
   const palette = useMemo(() => {
     return CATEGORY_PALETTES[category ?? ''] ?? {
       bg: 'from-indigo-100 via-violet-100 to-indigo-200',
@@ -104,12 +105,12 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl,
     <div
       className={`shrink-0 rounded-[1.15rem] overflow-hidden border ${palette.border} bg-gradient-to-br ${palette.bg} flex items-center justify-center ${palette.shadow} ring-1 ${palette.ring} relative`}
       style={{ width: size, height: size }}
-      aria-label={`${businessName} logo`}
+      aria-label={`${label} logo`}
     >
       {showImage ? (
         <img
           src={logoUrl}
-          alt={`${businessName} logo`}
+          alt={`${label} logo`}
           className="w-full h-full object-cover"
           onError={() => setImageFailed(true)}
         />
