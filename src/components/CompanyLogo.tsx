@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
 
 interface CompanyLogoProps {
@@ -87,7 +87,11 @@ function getInitials(name?: string): string {
 export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl, size = 44, category }) => {
   const [imageFailed, setImageFailed] = useState(false);
   const initials = useMemo(() => getInitials(businessName), [businessName]);
-  const showImage = Boolean(logoUrl) && !imageFailed;
+  const normalizedLogoUrl = useMemo(
+    () => (typeof logoUrl === 'string' ? logoUrl.trim() : ''),
+    [logoUrl],
+  );
+  const showImage = Boolean(normalizedLogoUrl) && !imageFailed;
   const label = businessName?.trim() || 'Business';
   const palette = useMemo(() => {
     return CATEGORY_PALETTES[category ?? ''] ?? {
@@ -101,22 +105,26 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl,
     };
   }, [category]);
 
+  useEffect(() => {
+    setImageFailed(false);
+  }, [normalizedLogoUrl]);
+
   return (
     <div
-      className={`shrink-0 rounded-[1.15rem] overflow-hidden border ${palette.border} bg-gradient-to-br ${palette.bg} flex items-center justify-center ${palette.shadow} ring-1 ${palette.ring} relative`}
+      className={`relative shrink-0 overflow-hidden rounded-[1rem] border ${palette.border} bg-gradient-to-br ${palette.bg} flex items-center justify-center ${palette.shadow} ring-1 ${palette.ring}`}
       style={{ width: size, height: size }}
       aria-label={`${label} logo`}
     >
       {showImage ? (
         <img
-          src={logoUrl}
+          src={normalizedLogoUrl}
           alt={`${label} logo`}
-          className="w-full h-full object-cover"
+          className="h-full w-full bg-white/90 object-contain p-[12%]"
           onError={() => setImageFailed(true)}
         />
       ) : initials ? (
         <>
-          <div className={`absolute inset-[1px] rounded-[1rem] bg-gradient-to-br from-white/35 via-transparent ${palette.overlay} pointer-events-none`} />
+          <div className={`absolute inset-[1px] rounded-[0.88rem] bg-gradient-to-br from-white/35 via-transparent ${palette.overlay} pointer-events-none`} />
           <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] pointer-events-none" />
           <span
             className={`relative ${palette.text} font-black tracking-[-0.06em]`}
@@ -127,7 +135,7 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({ businessName, logoUrl,
         </>
       ) : (
         <>
-          <div className={`absolute inset-[1px] rounded-[1rem] bg-gradient-to-br from-white/35 via-transparent ${palette.overlay} pointer-events-none`} />
+          <div className={`absolute inset-[1px] rounded-[0.88rem] bg-gradient-to-br from-white/35 via-transparent ${palette.overlay} pointer-events-none`} />
           <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] pointer-events-none" />
           <AppIcon name="store" size={Math.floor(size * 0.38)} className={`relative ${palette.icon}`} />
         </>

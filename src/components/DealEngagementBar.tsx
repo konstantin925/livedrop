@@ -62,26 +62,32 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
     },
   ];
 
-  const buttonHeight = compact ? 'h-8' : 'h-[2.2rem]';
-  const buttonText = compact ? 'text-[9px]' : 'text-[10px]';
+  const buttonHeight = compact ? 'h-8.5' : 'h-10';
+  const buttonText = compact ? 'text-[8px]' : 'text-[9px]';
   const padding = compact ? 'px-2' : 'px-2.5';
 
   return (
-    <div className={`grid grid-cols-3 gap-1.5 ${compact ? 'mt-2' : 'mt-2.5'}`}>
+    <div className={`grid grid-cols-3 gap-1.5 max-[359px]:gap-1 ${compact ? 'mt-2' : 'mt-3'}`}>
       {actions.map((action) => {
         const isPending = pendingAction === action.id;
         return (
           <button
             key={action.id}
             type="button"
-            onClick={action.onClick}
+            onClick={(event) => {
+              event.stopPropagation();
+              action.onClick();
+            }}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+            }}
             disabled={isPending}
             aria-label={`${action.label} deal`}
-            className={`inline-flex ${buttonHeight} items-center justify-center gap-1.5 rounded-[0.95rem] border border-slate-200 bg-slate-50/80 ${padding} ${buttonText} font-black uppercase tracking-[0.08em] text-slate-500 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${action.tone} ${isPending ? 'border-indigo-200 bg-indigo-50 text-indigo-600' : ''}`}
+            className={`inline-flex ${buttonHeight} min-w-0 w-full items-center justify-center gap-1 rounded-[1rem] border border-slate-200/90 bg-white/92 ${padding} ${buttonText} font-black uppercase tracking-[0.06em] text-slate-500 shadow-sm shadow-slate-200/25 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${action.tone} ${isPending ? 'border-indigo-200 bg-indigo-50 text-indigo-600 shadow-indigo-100/60' : ''}`}
           >
             <AppIcon name={action.icon} size={11} />
-            {!compact ? <span className="hidden min-[360px]:inline">{action.label}</span> : null}
-            <span className="text-slate-400 tabular-nums">{formatCount(action.count)}</span>
+            {!compact ? <span className="truncate">{action.label}</span> : null}
+            <span className={`shrink-0 tabular-nums ${compact ? 'text-slate-400/90' : 'text-slate-400'}`}>{formatCount(action.count)}</span>
           </button>
         );
       })}

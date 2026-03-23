@@ -14,10 +14,14 @@ interface ClaimModalProps {
 export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm, onViewClaims }) => {
   const [claim, setClaim] = useState<Claim | null>(null);
   const [copyStatus, setCopyStatus] = useState<ClipboardCopyResult | null>(null);
+  const [claimError, setClaimError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setClaim(null);
     setCopyStatus(null);
+    setClaimError('');
+    setIsSubmitting(false);
   }, [deal]);
 
   if (!deal) return null;
@@ -28,10 +32,28 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
   };
 
   const handleConfirm = () => {
-    const newClaim = onConfirm(deal);
-    setClaim(newClaim);
-    void handleCopyCode(newClaim.claimCode);
+    if (isSubmitting) {
+      return;
+    }
+
+    setClaimError('');
+    setIsSubmitting(true);
+
+    try {
+      const newClaim = onConfirm(deal);
+      setClaim(newClaim);
+      void handleCopyCode(newClaim.claimCode);
+    } catch (error) {
+      setClaimError(error instanceof Error ? error.message : 'Could not claim this deal right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const expiresInMinutes = Math.max(
+    0,
+    Math.floor(((Number.isFinite(deal.expiresAt) ? deal.expiresAt : Date.now()) - Date.now()) / 60000),
+  );
 
   return (
     <AnimatePresence>
@@ -48,7 +70,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
           initial={{ y: "100%" }}
           animate={{ y: 0 }}
           exit={{ y: "100%" }}
-          className="relative w-full max-w-sm bg-white border border-slate-100 rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl"
+          className="relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto rounded-t-[2.5rem] border border-slate-100 bg-white p-8 shadow-2xl sm:rounded-[2.5rem]"
         >
           <button 
             onClick={onClose}
@@ -67,15 +89,22 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
               <div className="bg-indigo-50 rounded-3xl p-6 mb-8 border border-indigo-100/50">
                 <p className="text-[10px] text-indigo-400 uppercase font-black tracking-widest mb-1">Expires in</p>
                 <p className="text-indigo-600 font-mono text-2xl font-black">
-                  {Math.max(0, Math.floor((deal.expiresAt - Date.now()) / 60000))} minutes
+                  {expiresInMinutes} minutes
                 </p>
               </div>
 
+              {claimError ? (
+                <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-amber-700">{claimError}</p>
+                </div>
+              ) : null}
+
               <button
                 onClick={handleConfirm}
-                className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200"
+                disabled={isSubmitting}
+                className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                YES, CLAIM IT!
+                {isSubmitting ? 'CLAIMING...' : 'YES, CLAIM IT!'}
               </button>
             </div>
           ) : (

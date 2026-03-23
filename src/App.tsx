@@ -16,7 +16,7 @@ import { calculateDistance, formatDistance } from './utils/distance';
 import { generateSeededDeals, generateSeededOnlineDeals } from './utils/seed';
 import { formatDateTime } from './utils/time';
 import { copyTextToClipboard, ClipboardCopyResult } from './utils/clipboard';
-import { getCategoryIconName, getCategoryLabel } from './utils/categories';
+import { getCategoryIconName, getCategoryLabel, getDefaultCategoryForMode, normalizeCategoryValue } from './utils/categories';
 import { mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
@@ -25,6 +25,7 @@ import { AuthModal } from './components/AuthModal';
 import { BusinessPaywall } from './components/BusinessPaywall';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { DealEngagementAction, DealEngagementBar } from './components/DealEngagementBar';
+import { DealArtwork } from './components/DealArtwork';
 import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupabaseUrl, supabase, supabaseConfigIssue, supabaseEdgeClient } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
@@ -67,7 +68,7 @@ const extractPriceDropPercent = (value: string) => {
     return null;
   }
 
-  return Math.round(((beforePrice - afterPrice) / beforePrice) * 100);
+  return Math.min(100, Math.max(0, Math.round(((beforePrice - afterPrice) / beforePrice) * 100)));
 };
 
 const getDropModeDiscountScore = (deal: Deal) => {
@@ -88,7 +89,7 @@ const getDropModeDiscountScore = (deal: Deal) => {
 
   const percentMatch = offerSignal.match(/(\d{1,3})\s*%/);
   if (percentMatch) {
-    return Number(percentMatch[1]);
+    return Math.min(100, Math.max(0, Number(percentMatch[1])));
   }
 
   if (offerSignal.includes('FREE')) return 58;
@@ -143,30 +144,82 @@ const isDropModeEligible = (deal: Deal) => {
 const BULK_IMPORT_SAMPLE = JSON.stringify(
   [
     {
-      businessName: 'Amazon',
-      title: 'Portable Monitor Flash Deal',
-      description: 'A slim second-screen monitor with a limited online price drop for today.',
+      businessName: 'Amazon Fire TV',
+      title: 'Amazon Fire TV Stick 4K Plus (Newest Model) with AI-Powered Fire TV Search and Wi-Fi 6',
+      description: 'Streaming stick deal with 4K support, AI-powered Fire TV search, and faster Wi-Fi 6 playback.',
       category: 'Tech',
-      offerText: '22% OFF',
-      imageUrl: 'https://images.unsplash.com/photo-1527443154391-507e9dc6c5cc?auto=format&fit=crop&w=900&q=80',
-      productUrl: 'https://example.com/portable-monitor',
-      websiteUrl: 'https://example.com/portable-monitor',
-      durationMinutes: 150,
-      claimCount: 84,
-      maxClaims: 999,
-    },
-    {
-      businessName: 'Pixel Forge',
-      title: 'Mechanical Keyboard Weekend Drop',
-      description: 'Hot-swappable boards and compact layouts are part of this limited online drop.',
-      category: 'Tech',
-      offerText: '40% OFF',
-      imageUrl: 'https://images.unsplash.com/photo-1511467687858-23d96c32e4ae?auto=format&fit=crop&w=900&q=80',
-      productUrl: 'https://example.com/keyboards',
-      websiteUrl: 'https://example.com/keyboards',
-      durationMinutes: 120,
+      offerText: '$49.99 -> $29.99',
+      originalPrice: 49.99,
+      discountPercent: 40,
+      productUrl: 'https://www.amazon.com/dp/B0F7Z4QZTT',
+      affiliateUrl: 'https://www.amazon.com/dp/B0F7Z4QZTT',
+      websiteUrl: 'https://www.amazon.com',
+      durationMinutes: 140,
       claimCount: 126,
       maxClaims: 999,
+      isOnline: true,
+    },
+    {
+      businessName: 'D-Link',
+      title: 'D-Link Pro Series Compact Full HD Pan & Tilt Wi-Fi Camera',
+      description: 'Compact indoor security camera with pan-and-tilt coverage, Full HD video, and smart home monitoring.',
+      category: 'Home',
+      offerText: '$79.99 -> $29.99',
+      originalPrice: 79.99,
+      discountPercent: 63,
+      productUrl: 'https://www.amazon.com/dp/B00PS13QSO',
+      affiliateUrl: 'https://www.amazon.com/dp/B00PS13QSO',
+      websiteUrl: 'https://www.amazon.com',
+      durationMinutes: 105,
+      claimCount: 92,
+      maxClaims: 999,
+      isOnline: true,
+    },
+    {
+      businessName: 'INNOCN',
+      title: 'INNOCN 27\" Gaming Monitor 2K QHD 320Hz IPS (27G2T)',
+      description: 'Fast-refresh QHD gaming monitor with up to 320Hz performance, 1ms response time, and IPS color.',
+      category: 'Gaming',
+      offerText: '$280.00 -> $169.98',
+      originalPrice: 280,
+      discountPercent: 39,
+      productUrl: 'https://www.amazon.com/dp/B0FPFTPPYN',
+      affiliateUrl: 'https://www.amazon.com/dp/B0FPFTPPYN',
+      websiteUrl: 'https://www.amazon.com',
+      durationMinutes: 135,
+      claimCount: 64,
+      maxClaims: 999,
+      isOnline: true,
+    },
+    {
+      businessName: 'Orgain',
+      title: 'Orgain Organic Wonder Gut Fiber Supplement Powder, Strawberry Lemonade',
+      description: 'Digestive fiber powder deal with a steep markdown and frequent coupon-style stacking on Amazon.',
+      category: 'Home',
+      offerText: '$29.99 -> $9.73',
+      originalPrice: 29.99,
+      discountPercent: 68,
+      productUrl: 'https://www.amazon.com/dp/B0CXV56J4G',
+      affiliateUrl: 'https://www.amazon.com/dp/B0CXV56J4G',
+      websiteUrl: 'https://www.amazon.com',
+      durationMinutes: 95,
+      claimCount: 51,
+      maxClaims: 999,
+      isOnline: true,
+    },
+    {
+      businessName: 'KK Lights',
+      title: 'Cordless Table Lamp Rechargeable Gold, 2-Pack 5000mAh Battery Lamps',
+      description: 'Rechargeable cordless lamp set with a gold finish and promo-style pricing for bedside or patio setups.',
+      category: 'Home',
+      offerText: 'PROMO PRICE ~ $14.99',
+      productUrl: 'https://www.amazon.com/dp/B0DJYFJGQW',
+      affiliateUrl: 'https://www.amazon.com/dp/B0DJYFJGQW',
+      websiteUrl: 'https://www.amazon.com',
+      durationMinutes: 120,
+      claimCount: 38,
+      maxClaims: 999,
+      isOnline: true,
     },
   ],
   null,
@@ -207,11 +260,82 @@ const getFeedTagIconName = (tag: 'Trending' | 'Ending Soon' | 'Just Dropped') =>
   return 'dropped' as const;
 };
 
+const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
+  'Fast Food': ['Burgers', 'Tacos', 'Sandwiches', 'Sweets'],
+  Coffee: ['Hot Coffee', 'Iced Coffee', 'Espresso', 'Bakery'],
+  Fitness: ['Gyms', 'Protein', 'Supplements', 'Activewear'],
+  Pet: ['Grooming', 'Treats', 'Toys', 'Wellness'],
+  Home: ['Cleaning', 'Books', 'Furniture', 'Services'],
+};
+
+const LOCAL_SUBCATEGORY_KEYWORDS: Record<string, Record<string, string[]>> = {
+  'Fast Food': {
+    Burgers: ['burger', 'burgers', 'cheeseburger', 'fries', 'slider'],
+    Tacos: ['taco', 'tacos', 'burrito', 'quesadilla', 'nacho'],
+    Sandwiches: ['sandwich', 'sandwiches', 'sub', 'subs', 'wrap', 'panini'],
+    Sweets: ['sweet', 'sweets', 'dessert', 'desserts', 'donut', 'donuts', 'cookie', 'cookies', 'ice cream', 'milkshake'],
+  },
+  Coffee: {
+    'Hot Coffee': ['latte', 'lattes', 'coffee', 'drip', 'cappuccino', 'mocha', 'brew'],
+    'Iced Coffee': ['iced', 'cold brew', 'coldbrew', 'frappe', 'frapp', 'frappuccino'],
+    Espresso: ['espresso', 'americano', 'macchiato', 'cortado', 'shot'],
+    Bakery: ['bagel', 'croissant', 'muffin', 'pastry', 'scone'],
+  },
+  Fitness: {
+    Gyms: ['gym', 'yoga', 'studio', 'class', 'training', 'workout', 'mat space'],
+    Protein: ['protein', 'smoothie', 'shake', 'recovery'],
+    Supplements: ['supplement', 'supplements', 'creatine', 'pre-workout', 'vitamin', 'vitamins'],
+    Activewear: ['leggings', 'shorts', 'sports bra', 'activewear', 'sneakers', 'joggers'],
+  },
+  Pet: {
+    Grooming: ['groom', 'grooming', 'wash', 'spa'],
+    Treats: ['treat', 'treats', 'snack', 'snacks', 'chew', 'chews'],
+    Toys: ['toy', 'toys', 'ball', 'rope', 'fetch'],
+    Wellness: ['vet', 'wellness', 'checkup', 'supplement', 'supplements'],
+  },
+  Home: {
+    Cleaning: ['clean', 'cleaning', 'wash', 'shine', 'detail'],
+    Books: ['book', 'books', 'bookstore', 'reading', 'novel'],
+    Furniture: ['chair', 'table', 'sofa', 'couch', 'furniture'],
+    Services: ['service', 'services', 'repair', 'install', 'delivery'],
+  },
+};
+
+const getLocalDealSubcategory = (deal: Deal) => {
+  const matchers = LOCAL_SUBCATEGORY_KEYWORDS[deal.category];
+  if (!matchers) return null;
+
+  const sourceText = [deal.title, deal.description, deal.offerText, deal.businessName]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  for (const [subcategory, keywords] of Object.entries(matchers)) {
+    if (keywords.some((keyword) => sourceText.includes(keyword))) {
+      return subcategory;
+    }
+  }
+
+  return null;
+};
+
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
   maximumFractionDigits: 0,
 });
+
+const formatPriceValue = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  if (value <= 0) {
+    return 'FREE';
+  }
+
+  return currencyFormatter.format(value);
+};
 
 const chunkItems = <T,>(items: T[], chunkSize: number) => {
   if (chunkSize <= 0) return [items];
@@ -249,6 +373,80 @@ const getDealSavingsValue = (deal: Deal) => {
   return extractPriceDropSavings(sourceSignal) ?? 0;
 };
 
+const extractPricePair = (value: string) => {
+  const priceDropMatch = value.match(/\$?\s*(\d{1,4}(?:,\d{3})?(?:\.\d{1,2})?)\s*(?:->|\u2192|Ã¢â€ â€™|to)\s*\$?\s*(\d{1,4}(?:,\d{3})?(?:\.\d{1,2})?)/i);
+  if (!priceDropMatch) return null;
+
+  const originalPrice = Number(priceDropMatch[1].replace(/,/g, ''));
+  const currentPrice = Number(priceDropMatch[2].replace(/,/g, ''));
+  if (!Number.isFinite(originalPrice) || !Number.isFinite(currentPrice)) {
+    return null;
+  }
+
+  return { originalPrice, currentPrice };
+};
+
+const extractStandalonePrice = (value: string) => {
+  const priceMatch = value.match(/\$\s*(\d{1,4}(?:,\d{3})?(?:\.\d{1,2})?)/);
+  if (!priceMatch) return null;
+
+  const parsedValue = Number(priceMatch[1].replace(/,/g, ''));
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+};
+
+const extractPercentValue = (value: string) => {
+  const percentMatch = value.match(/(\d{1,3})\s*%/i);
+  if (!percentMatch) return null;
+
+  const parsedValue = Number(percentMatch[1]);
+  return Number.isFinite(parsedValue) ? Math.min(100, Math.max(0, parsedValue)) : null;
+};
+
+const getDealPriceSnapshot = (deal: Deal) => {
+  const sourceSignal = [deal.offerText, deal.title, deal.description]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+
+  const pairedPrices = extractPricePair(sourceSignal);
+  const fallbackDiscountPercent = extractPercentValue(sourceSignal);
+
+  let currentPrice: number | null = pairedPrices?.currentPrice ?? null;
+  let originalPrice: number | null =
+    typeof deal.originalPrice === 'number' && Number.isFinite(deal.originalPrice)
+      ? deal.originalPrice
+      : pairedPrices?.originalPrice ?? null;
+  let discountPercent: number | null =
+    typeof deal.discountPercent === 'number' && Number.isFinite(deal.discountPercent)
+      ? deal.discountPercent
+      : fallbackDiscountPercent;
+
+  if (currentPrice === null) {
+    currentPrice = extractStandalonePrice(sourceSignal);
+  }
+
+  if (currentPrice === null && /\bFREE\b/i.test(sourceSignal)) {
+    currentPrice = 0;
+  }
+
+  if (currentPrice === null && originalPrice !== null && discountPercent !== null && discountPercent > 0 && discountPercent < 100) {
+    currentPrice = originalPrice * (1 - discountPercent / 100);
+  }
+
+  if (originalPrice === null && currentPrice !== null && discountPercent !== null && discountPercent > 0 && discountPercent < 100) {
+    originalPrice = currentPrice / (1 - discountPercent / 100);
+  }
+
+  if (discountPercent === null && originalPrice !== null && currentPrice !== null && originalPrice > currentPrice && originalPrice > 0) {
+    discountPercent = Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
+  }
+
+  return {
+    currentPrice,
+    originalPrice,
+    discountPercent,
+  };
+};
+
 const hasUsableCoordinates = (lat: unknown, lng: unknown) =>
   typeof lat === 'number' &&
   Number.isFinite(lat) &&
@@ -270,40 +468,9 @@ const readStoredDeals = (): Deal[] => {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
-      ? parsed
-          .filter((deal) => !isStoredManagedLocalSeedDeal(deal))
-          .map((deal) => {
-            const businessType = deal.businessType ?? 'local';
-            const rawLat =
-              typeof deal.lat === 'number'
-                ? deal.lat
-                : Number.parseFloat(typeof deal.lat === 'string' ? deal.lat : '0');
-            const rawLng =
-              typeof deal.lng === 'number'
-                ? deal.lng
-                : Number.parseFloat(typeof deal.lng === 'string' ? deal.lng : '0');
-            const hasValidLocalCoordinates =
-              businessType !== 'online' && hasUsableCoordinates(rawLat, rawLng);
-
-            return {
-              ...deal,
-              businessType,
-              status: deal.status ?? 'active',
-              currentClaims: deal.currentClaims ?? deal.claimCount ?? 0,
-              claimCount: deal.claimCount ?? deal.currentClaims ?? 0,
-              createdAt: deal.createdAt ?? Date.now(),
-              expiresAt: deal.expiresAt ?? Date.now(),
-              hasTimer: deal.hasTimer ?? true,
-              distance:
-                typeof deal.distance === 'string' && deal.distance.trim()
-                  ? deal.distance
-                  : businessType === 'online'
-                    ? 'Online'
-                    : 'Nearby',
-              lat: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLat : 0,
-              lng: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLng : 0,
-            };
-          })
+      ? sanitizeDealsCollection(
+          parsed.filter((deal) => !isStoredManagedLocalSeedDeal(deal)),
+        )
       : [];
   } catch {
     return [];
@@ -445,7 +612,39 @@ const deriveWebsiteOrigin = (value?: string | null) => {
   }
 };
 
-const getDealExternalUrl = (deal: Deal) => deal.affiliateUrl ?? deal.productUrl ?? deal.websiteUrl ?? null;
+const EXTERNAL_ACTION_COOLDOWN_MS = 900;
+
+const normalizeSafeExternalUrl = (value?: string | null) => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+const getFirstSafeExternalUrl = (...values: Array<string | null | undefined>) => {
+  for (const value of values) {
+    const normalizedUrl = normalizeSafeExternalUrl(value);
+    if (normalizedUrl) {
+      return normalizedUrl;
+    }
+  }
+
+  return null;
+};
+
+const getDealPrimaryActionUrl = (deal: Deal) =>
+  getFirstSafeExternalUrl(deal.affiliateUrl, deal.productUrl, deal.websiteUrl);
+
+const getDealExternalUrl = (deal: Deal) => getDealPrimaryActionUrl(deal);
 
 const getDealShareUrl = (deal: Deal) => {
   const externalUrl = getDealExternalUrl(deal);
@@ -455,6 +654,25 @@ const getDealShareUrl = (deal: Deal) => {
 
   const baseUrl = getAuthRedirectUrl().replace(/\/+$/, '');
   return `${baseUrl}/?deal=${encodeURIComponent(deal.id)}`;
+};
+
+const getDetailPricePrimaryLabel = (deal: Deal) => {
+  const priceSnapshot = getDealPriceSnapshot(deal);
+  return formatPriceValue(priceSnapshot.currentPrice) ?? 'Live Deal';
+};
+
+const getDetailOriginalPriceLabel = (deal: Deal) => {
+  const priceSnapshot = getDealPriceSnapshot(deal);
+  return formatPriceValue(priceSnapshot.originalPrice) ?? 'Store Price';
+};
+
+const getDetailDiscountLabel = (deal: Deal) => {
+  const priceSnapshot = getDealPriceSnapshot(deal);
+  if (priceSnapshot.discountPercent !== null) {
+    return `${priceSnapshot.discountPercent}% OFF`;
+  }
+
+  return deal.offerText || 'Limited Offer';
 };
 
 const applyDealEngagement = (deal: Deal, action: DealEngagementAction): Deal => ({
@@ -498,11 +716,15 @@ type BulkImportDealInput = {
   offerText: string;
   originalPrice?: number;
   price?: number;
+  currentPrice?: number;
+  discountAmount?: number;
   discountPercent?: number;
   affiliateUrl?: string;
   rating?: number;
   reviewCount?: number;
   merchant?: string;
+  brand?: string;
+  asin?: string;
   shippingInfo?: string;
   summary?: string;
   tags?: string[];
@@ -510,7 +732,9 @@ type BulkImportDealInput = {
   sourceQuery?: string;
   maxPriceMatched?: boolean;
   stockStatus?: string;
+  availability?: string;
   imageUrl?: string;
+  galleryImages?: string[];
   productLink?: string;
   productUrl?: string;
   websiteUrl?: string;
@@ -518,6 +742,13 @@ type BulkImportDealInput = {
   claimCount?: number;
   maxClaims?: number;
   isOnline?: boolean;
+  couponText?: string;
+  couponType?: 'percent' | 'fixed' | 'text';
+  couponValue?: number;
+  seller?: string;
+  featureBullets?: string[];
+  importedAt?: string;
+  sourceProvider?: string;
 };
 
 type AIDealFinderStage = 'idle' | 'searching' | 'results-loaded' | 'result-selected' | 'coupon-generated';
@@ -551,6 +782,40 @@ type AIDealFinderCandidate = {
   extractionStatus?: 'Raw candidate' | 'Partial extraction' | 'Enriched';
 };
 
+type AIDealFinderValidationWarning = {
+  field: string;
+  severity: 'warning' | 'error';
+  message: string;
+};
+
+type AIDealFinderValidationFieldState = {
+  field: string;
+  status: 'ready' | 'missing' | 'weak';
+  confidence: 'high' | 'medium' | 'low' | 'missing';
+  source: string | null;
+  message: string;
+};
+
+type AIDealFinderValidationResult = {
+  status: 'ready' | 'partial' | 'blocked';
+  warnings: AIDealFinderValidationWarning[];
+  missingRequiredFields: string[];
+  weakFields: string[];
+  fieldStates: AIDealFinderValidationFieldState[];
+  completionPercent: number;
+};
+
+type AIDealFinderMappedForm = {
+  payload: PortalAutofillPayload;
+  fieldMappings: Array<{
+    field: keyof PortalAutofillPayload;
+    sourceField: string | null;
+    value: string;
+    note?: string;
+  }>;
+  draft: BulkImportDealInput;
+};
+
 type AIDealFinderResult = {
   rawResults?: Array<{
     title?: string;
@@ -576,6 +841,7 @@ type AIDealFinderResult = {
   sourceAssets?: {
     websiteUrl?: string | null;
     productUrl?: string | null;
+    affiliateUrl?: string | null;
     imageUrl?: string | null;
   };
   extractionStatus?: string;
@@ -615,7 +881,9 @@ type AIDealFinderResult = {
   searchStatus?: 'Search not run' | 'Search running' | 'Search succeeded' | 'Search returned 0 results' | 'Search failed' | string;
   searchQuery?: string;
   requestPayload?: {
-    query: string;
+    query: string | null;
+    url?: string | null;
+    affiliateUrl?: string | null;
     merchant: string | null;
     category: string | null;
     maxPrice: number | null;
@@ -638,6 +906,10 @@ type AIDealFinderResult = {
     maxPrice?: number | null;
     minDiscount?: number | null;
   };
+  scanResult?: Record<string, unknown>;
+  normalizedDigest?: Record<string, unknown>;
+  validationResult?: AIDealFinderValidationResult;
+  mappedForm?: AIDealFinderMappedForm;
   message?: string;
 };
 
@@ -659,7 +931,8 @@ type PortalCoverageField = {
 type PortalAutofillPayload = {
   storeName: string;
   websiteUrl: string;
-  productLink: string;
+  productUrl: string;
+  affiliateUrl: string;
   imageUrl: string;
   dealTitle: string;
   description: string;
@@ -725,7 +998,8 @@ const buildPortalFieldCoverage = (portalState: Deal | null) => {
 
   const optional: PortalCoverageField[] = [
     { key: 'websiteUrl', label: 'Website URL', value: normalizePortalFieldValue(portalState?.websiteUrl) },
-    { key: 'productUrl', label: 'Product Link', value: normalizePortalFieldValue(portalState?.productUrl) },
+    { key: 'productUrl', label: 'Source Product URL', value: normalizePortalFieldValue(portalState?.productUrl) },
+    { key: 'affiliateUrl', label: 'Affiliate / Outbound Link', value: normalizePortalFieldValue(portalState?.affiliateUrl) },
     { key: 'imageUrl', label: 'Upload Image', value: normalizePortalFieldValue(portalState?.imageUrl) },
   ].map((field) => ({
     ...field,
@@ -745,10 +1019,46 @@ const buildPortalFieldCoverage = (portalState: Deal | null) => {
   };
 };
 
-  const buildPortalAutofillPayload = (
+const resolveImportedLinkSet = (source: {
+  websiteUrl?: string;
+  productUrl?: string;
+  productLink?: string;
+  affiliateUrl?: string;
+}) => {
+  const productUrl = getFirstSafeExternalUrl(source.productUrl, source.productLink);
+  const affiliateUrl = normalizeSafeExternalUrl(source.affiliateUrl);
+  const websiteUrl =
+    deriveWebsiteOrigin(source.websiteUrl)
+    ?? deriveWebsiteOrigin(productUrl)
+    ?? deriveWebsiteOrigin(affiliateUrl)
+    ?? '';
+
+  return {
+    productUrl: productUrl ?? '',
+    affiliateUrl: affiliateUrl ?? '',
+    websiteUrl,
+  };
+};
+
+const PORTAL_FIELD_FALLBACK_SOURCES: Record<keyof PortalAutofillPayload, string[]> = {
+  storeName: ['businessName', 'merchant', 'brand'],
+  websiteUrl: ['websiteUrl'],
+  productUrl: ['productUrl', 'productLink'],
+  affiliateUrl: ['affiliateUrl'],
+  imageUrl: ['imageUrl'],
+  dealTitle: ['title'],
+  description: ['summary', 'description'],
+  category: ['category'],
+  offerText: ['couponText', 'offerText'],
+};
+
+const buildPortalAutofillPayload = (
   source:
     | {
         businessName?: string;
+        businessType?: Deal['businessType'];
+        merchant?: string;
+        brand?: string;
         websiteUrl?: string;
         productUrl?: string;
         productLink?: string;
@@ -761,26 +1071,346 @@ const buildPortalFieldCoverage = (portalState: Deal | null) => {
       }
     | null
     | undefined,
-): PortalAutofillPayload => ({
-  storeName: normalizePortalFieldValue(source?.businessName),
-  websiteUrl: normalizePortalFieldValue(source?.websiteUrl),
-  productLink: normalizePortalFieldValue(source?.productLink ?? source?.productUrl ?? source?.affiliateUrl),
-  imageUrl: normalizePortalFieldValue(source?.imageUrl),
-  dealTitle: normalizePortalFieldValue(source?.title),
-  description: normalizePortalFieldValue(source?.description),
-  category: normalizePortalFieldValue(source?.category),
-  offerText: normalizePortalFieldValue(source?.offerText),
-});
+): PortalAutofillPayload => {
+  const mode = source?.businessType === 'local' ? 'local' : 'online';
+  const linkSet = resolveImportedLinkSet({
+    websiteUrl: source?.websiteUrl,
+    productUrl: source?.productUrl,
+    productLink: source?.productLink,
+    affiliateUrl: source?.affiliateUrl,
+  });
+
+  return {
+    storeName: normalizePortalFieldValue(source?.businessName ?? source?.merchant ?? source?.brand),
+    websiteUrl: normalizePortalFieldValue(linkSet.websiteUrl),
+    productUrl: normalizePortalFieldValue(linkSet.productUrl),
+    affiliateUrl: normalizePortalFieldValue(linkSet.affiliateUrl),
+    imageUrl: normalizePortalFieldValue(source?.imageUrl),
+    dealTitle: normalizePortalFieldValue(source?.title),
+    description: normalizePortalFieldValue(source?.description),
+    category: normalizeCategoryValue(source?.category, mode, [
+      source?.title,
+      source?.description,
+      source?.businessName,
+      source?.merchant,
+      source?.brand,
+    ]),
+    offerText: normalizePortalFieldValue(source?.offerText),
+  };
+};
 
 const TEST_COUPON_AUTOFILL: PortalAutofillPayload = {
   storeName: 'Amazon',
   websiteUrl: 'https://www.amazon.com',
-  productLink: 'https://www.amazon.com/dp/test',
+  productUrl: 'https://www.amazon.com/dp/test',
+  affiliateUrl: 'https://amzn.to/test',
   imageUrl: '',
   dealTitle: 'Test Deal',
   description: 'Test description',
   category: 'Tech',
   offerText: 'Limited-time deal',
+};
+
+const REQUIRED_PORTAL_AUTOFILL_FIELDS: Array<keyof PortalAutofillPayload> = [
+  'storeName',
+  'websiteUrl',
+  'productUrl',
+  'imageUrl',
+  'dealTitle',
+  'description',
+  'category',
+  'offerText',
+];
+
+const buildFallbackMappedFieldMappings = (
+  payload: PortalAutofillPayload,
+  deal?: BulkImportDealInput | null,
+): AIDealFinderMappedForm['fieldMappings'] =>
+  (Object.entries(payload) as Array<[keyof PortalAutofillPayload, string]>).map(([field, value]) => {
+    const sourceField = PORTAL_FIELD_FALLBACK_SOURCES[field].find((candidateField) => {
+      const sourceValue = deal?.[candidateField as keyof BulkImportDealInput];
+      return typeof sourceValue === 'string' ? sourceValue.trim().length > 0 : Boolean(sourceValue);
+    }) ?? null;
+
+    return {
+      field,
+      sourceField,
+      value,
+      note: value ? undefined : 'This field was left empty because no reliable source value was available.',
+    };
+  });
+
+const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImportDealInput | null => {
+  if (!deal) return null;
+
+  const businessType = deal.isOnline === false ? 'local' : 'online';
+  const linkSet = resolveImportedLinkSet({
+    websiteUrl: deal.websiteUrl,
+    productUrl: deal.productUrl,
+    productLink: deal.productLink,
+    affiliateUrl: deal.affiliateUrl,
+  });
+  const businessName = trimDealTextWithFallback(
+    deal.businessName ?? deal.merchant ?? deal.brand,
+    DEAL_BUSINESS_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.businessName,
+  );
+  const title = trimDealTextWithFallback(deal.title, DEAL_TITLE_FALLBACK, DEAL_MAX_TEXT_LENGTH.title);
+  const description = trimDealTextWithFallback(deal.description ?? deal.summary, DEAL_DESCRIPTION_FALLBACK, DEAL_MAX_TEXT_LENGTH.description);
+  const offerText = trimDealTextWithFallback(
+    deal.offerText ?? deal.couponText,
+    DEAL_OFFER_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.offerText,
+  );
+
+  return {
+    ...deal,
+    isOnline: businessType === 'online',
+    businessName,
+    merchant: trimDealTextValue(deal.merchant) || businessName,
+    brand: trimDealTextValue(deal.brand) || undefined,
+    title,
+    description,
+    summary: trimDealTextValue(deal.summary) || undefined,
+    offerText,
+    category: normalizeCategoryValue(deal.category, businessType, [
+      title,
+      description,
+      businessName,
+      deal.merchant,
+      deal.brand,
+      offerText,
+    ]),
+    websiteUrl: linkSet.websiteUrl || undefined,
+    productUrl: linkSet.productUrl || undefined,
+    productLink: linkSet.productUrl || undefined,
+    affiliateUrl: linkSet.affiliateUrl || undefined,
+    imageUrl: trimDealTextValue(deal.imageUrl) || undefined,
+    availability: trimDealTextValue(deal.availability) || trimDealTextValue(deal.stockStatus) || undefined,
+    stockStatus: trimDealTextValue(deal.stockStatus) || trimDealTextValue(deal.availability) || undefined,
+    sourceQuery: trimDealTextValue(deal.sourceQuery) || undefined,
+  };
+};
+
+const buildFallbackNormalizedDigest = (deal?: BulkImportDealInput | null) => {
+  const normalizedDeal = normalizeImportedDealInput(deal);
+  if (!normalizedDeal) return null;
+
+  return {
+    sourceProvider: normalizedDeal.sourceProvider ?? 'legacy-response',
+    merchant: normalizedDeal.merchant ?? normalizedDeal.businessName ?? null,
+    brand: normalizedDeal.brand ?? null,
+    productTitle: normalizedDeal.title ?? null,
+    sourceUrl: normalizedDeal.productUrl ?? normalizedDeal.sourceQuery ?? normalizedDeal.websiteUrl ?? null,
+    affiliateUrl: normalizedDeal.affiliateUrl ?? null,
+    asin: normalizedDeal.asin ?? null,
+    category: normalizedDeal.category ?? null,
+    image: normalizedDeal.imageUrl ?? null,
+    galleryImages: normalizedDeal.galleryImages ?? [],
+    currentPrice: normalizedDeal.currentPrice ?? normalizedDeal.price ?? null,
+    originalPrice: normalizedDeal.originalPrice ?? null,
+    discountAmount: normalizedDeal.discountAmount ?? null,
+    discountPercent: normalizedDeal.discountPercent ?? null,
+    couponText: normalizedDeal.couponText ?? null,
+    couponType: normalizedDeal.couponType ?? null,
+    couponValue: normalizedDeal.couponValue ?? null,
+    rating: normalizedDeal.rating ?? null,
+    reviewCount: normalizedDeal.reviewCount ?? null,
+    availability: normalizedDeal.availability ?? normalizedDeal.stockStatus ?? null,
+    shippingInfo: normalizedDeal.shippingInfo ?? null,
+    seller: normalizedDeal.seller ?? null,
+    featureBullets: normalizedDeal.featureBullets ?? [],
+    summary: normalizedDeal.summary ?? null,
+    description: normalizedDeal.description ?? null,
+    tags: normalizedDeal.tags ?? [],
+    importedAt: normalizedDeal.importedAt ?? new Date().toISOString(),
+  };
+};
+
+const buildFallbackMappedForm = (
+  deal?: BulkImportDealInput | null,
+): AIDealFinderMappedForm | null => {
+  const normalizedDeal = normalizeImportedDealInput(deal);
+  if (!normalizedDeal) return null;
+
+  const payload = buildPortalAutofillPayload(normalizedDeal);
+  return {
+    payload,
+    fieldMappings: buildFallbackMappedFieldMappings(payload, normalizedDeal),
+    draft: {
+      ...normalizedDeal,
+      businessName: payload.storeName,
+      websiteUrl: payload.websiteUrl || undefined,
+      productUrl: payload.productUrl || undefined,
+      productLink: payload.productUrl || undefined,
+      affiliateUrl: payload.affiliateUrl || undefined,
+      title: payload.dealTitle,
+      description: payload.description,
+      category: payload.category,
+      offerText: payload.offerText,
+    },
+  };
+};
+
+const buildFallbackValidationResult = (
+  result?: AIDealFinderResult | null,
+): AIDealFinderValidationResult | null => {
+  if (!result?.normalizedDeal) return null;
+
+  const mappedForm = buildFallbackMappedForm(result.normalizedDeal);
+  if (!mappedForm) return null;
+
+  const missingRequiredFields = REQUIRED_PORTAL_AUTOFILL_FIELDS.filter(
+    (field) => !mappedForm.payload[field],
+  );
+  const weakFields = [...(result.missingFields ?? [])].filter(
+    (field) => !missingRequiredFields.includes(field as keyof PortalAutofillPayload),
+  );
+
+  const fieldStates: AIDealFinderValidationFieldState[] = (Object.entries(mappedForm.payload) as Array<[keyof PortalAutofillPayload, string]>).map(([field, value]) => {
+    const isMissing = !value;
+    const isWeak = !isMissing && weakFields.includes(field);
+
+    return {
+      field,
+      status: isMissing ? 'missing' : isWeak ? 'weak' : 'ready',
+      confidence: isMissing ? 'missing' : isWeak ? 'low' : 'medium',
+      source: `legacy:${field}`,
+      message: isMissing
+        ? 'This field is still empty in the generated response.'
+        : isWeak
+          ? 'This field was generated, but should be reviewed before publishing.'
+          : 'This field is ready.',
+    };
+  });
+
+  const warnings: AIDealFinderValidationWarning[] = [
+    ...missingRequiredFields.map((field) => ({
+      field,
+      severity: 'error' as const,
+      message: 'This required portal field is still missing in the generated response.',
+    })),
+    ...weakFields.map((field) => ({
+      field,
+      severity: 'warning' as const,
+      message: 'This field came from a legacy or partial response and should be reviewed.',
+    })),
+  ];
+
+  const totalFields = fieldStates.length || 1;
+  const filledFields = fieldStates.filter((state) => state.status === 'ready').length;
+  const weakFieldCount = fieldStates.filter((state) => state.status === 'weak').length;
+  const completionPercent = Math.round(((filledFields + weakFieldCount * 0.5) / totalFields) * 100);
+
+  return {
+    status: missingRequiredFields.length > 0 ? 'blocked' : weakFields.length > 0 ? 'partial' : 'ready',
+    warnings,
+    missingRequiredFields,
+    weakFields,
+    fieldStates,
+    completionPercent,
+  };
+};
+
+const buildFallbackScanLayer = (result?: AIDealFinderResult | null) => {
+  if (!result) return null;
+  if (result.scanResult) return result.scanResult;
+  if (!result.extractionDebug && !result.sourceAssets && !result.normalizedDeal) return null;
+
+  return {
+    provider: 'legacy-response',
+    extractionStatus: result.extractionStatus ?? null,
+    extractionDebug: result.extractionDebug ?? null,
+    sourceAssets: result.sourceAssets ?? null,
+    missingFields: result.missingFields ?? [],
+    normalizedDealPreview: result.normalizedDeal
+      ? {
+          title: result.normalizedDeal.title,
+          businessName: result.normalizedDeal.businessName,
+          productUrl: result.normalizedDeal.productUrl ?? null,
+          affiliateUrl: result.normalizedDeal.affiliateUrl ?? null,
+        }
+      : null,
+  };
+};
+
+const applyAffiliateTrackingOverride = (
+  normalizedDeal: BulkImportDealInput,
+  affiliateOverride?: string | null,
+) => {
+  const nextAffiliateUrl = normalizeSafeExternalUrl(affiliateOverride);
+  if (!nextAffiliateUrl || nextAffiliateUrl === normalizedDeal.affiliateUrl) {
+    return normalizedDeal;
+  }
+
+  return {
+    ...normalizedDeal,
+    affiliateUrl: nextAffiliateUrl,
+  };
+};
+
+const applyAffiliateTrackingOverrideToResult = (
+  result: AIDealFinderResult,
+  affiliateOverride?: string | null,
+): AIDealFinderResult => {
+  const nextAffiliateUrl = normalizeSafeExternalUrl(affiliateOverride);
+  if (!nextAffiliateUrl) {
+    return result;
+  }
+
+  const nextNormalizedDeal = applyAffiliateTrackingOverride(result.normalizedDeal, nextAffiliateUrl);
+  const nextMappedForm = result.mappedForm
+    ? {
+        ...result.mappedForm,
+        payload: {
+          ...result.mappedForm.payload,
+          affiliateUrl: nextAffiliateUrl,
+        },
+        draft: applyAffiliateTrackingOverride(result.mappedForm.draft, nextAffiliateUrl),
+      }
+    : undefined;
+
+  return {
+    ...result,
+    normalizedDeal: nextNormalizedDeal,
+    generatedJson: result.generatedJson
+      ? JSON.stringify(nextMappedForm?.draft ?? nextNormalizedDeal, null, 2)
+      : result.generatedJson,
+    sourceAssets: {
+      ...result.sourceAssets,
+      affiliateUrl: nextAffiliateUrl,
+    },
+    normalizedDigest: result.normalizedDigest
+      ? {
+          ...result.normalizedDigest,
+          affiliateUrl: nextAffiliateUrl,
+        }
+      : result.normalizedDigest,
+    mappedForm: nextMappedForm,
+  };
+};
+
+const validateAffiliateTrackingInput = (value?: string | null) => {
+  const trimmed = value?.trim() ?? '';
+  if (!trimmed) {
+    return {
+      url: null,
+      error: null,
+    };
+  }
+
+  const normalizedUrl = normalizeSafeExternalUrl(trimmed);
+  if (!normalizedUrl) {
+    return {
+      url: null,
+      error: 'Paste a valid affiliate / outbound URL or leave it blank.',
+    };
+  }
+
+  return {
+    url: normalizedUrl,
+    error: null,
+  };
 };
 
 const formatFinderPrice = (value?: number | null) =>
@@ -947,7 +1577,7 @@ const validateDirectProductUrl = (value?: string | null) => {
   if (!trimmed) {
     return {
       url: null,
-      error: 'Paste a direct product URL to continue.',
+      error: 'Paste the full product page URL to continue.',
     };
   }
 
@@ -958,7 +1588,7 @@ const validateDirectProductUrl = (value?: string | null) => {
   ) {
     return {
       url: null,
-      error: 'The Product URL field contains a backend error message, not a product link. Paste a direct product or affiliate URL and try again.',
+      error: 'The source product URL field contains a backend error message, not a real product page URL.',
     };
   }
 
@@ -969,6 +1599,13 @@ const validateDirectProductUrl = (value?: string | null) => {
       throw new Error('Unsupported protocol');
     }
 
+    if (parsed.hostname.toLowerCase() === 'amzn.to') {
+      return {
+        url: null,
+        error: 'Paste the full Amazon product page URL here. Put the SiteStripe amzn.to link in the affiliate link field.',
+      };
+    }
+
     return {
       url: trimmed,
       error: null,
@@ -976,7 +1613,7 @@ const validateDirectProductUrl = (value?: string | null) => {
   } catch {
     return {
       url: null,
-      error: 'Paste a valid product or affiliate URL to continue.',
+      error: 'Paste a valid full product page URL to continue.',
     };
   }
 };
@@ -1002,6 +1639,253 @@ const parseDealTimestampOrFallback = (value: string | null | undefined, fallback
 
 const parseDealNumberOrFallback = (value: unknown, fallback: number) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+const DEAL_TITLE_FALLBACK = 'Limited-Time Deal';
+const DEAL_BUSINESS_FALLBACK = 'LiveDrop Partner';
+const DEAL_DESCRIPTION_FALLBACK = 'Fresh deal available right now.';
+const DEAL_OFFER_FALLBACK = 'Live Deal';
+const DEAL_CATEGORY_FALLBACK = 'Uncategorized';
+const DEAL_MAX_TEXT_LENGTH = {
+  businessName: 80,
+  title: 180,
+  description: 320,
+  offerText: 90,
+  stockStatus: 40,
+  distance: 32,
+} as const;
+
+const trimDealTextValue = (value: unknown) =>
+  typeof value === 'string'
+    ? value.replace(/\s+/g, ' ').trim()
+    : '';
+
+const trimDealTextWithFallback = (value: unknown, fallback: string, maxLength: number) => {
+  const normalized = trimDealTextValue(value);
+  if (!normalized) return fallback;
+  return normalized.slice(0, maxLength);
+};
+
+const parseNumberishValue = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const clampWholeNumber = (value: unknown, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+  const parsedValue = parseNumberishValue(value);
+  if (parsedValue === null) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsedValue)));
+};
+
+const clampDealCount = (value: unknown, fallback: number) =>
+  clampWholeNumber(value, fallback, 0, 999_999);
+
+const normalizeDealCategoryValue = (
+  value: unknown,
+  businessType: Deal['businessType'],
+  contextValues: Array<unknown> = [],
+) => normalizeCategoryValue(value, businessType === 'local' ? 'local' : 'online', contextValues);
+
+const getDefaultDealExpiry = (createdAt: number, businessType: Deal['businessType']) =>
+  createdAt + (businessType === 'online' ? 2 * 60 * 60 * 1000 : 60 * 60 * 1000);
+
+const getDealDataPresenceScore = (deal: Deal) => {
+  let score = 0;
+  if (deal.imageUrl) score += 3;
+  if (deal.affiliateUrl || deal.productUrl || deal.websiteUrl) score += 3;
+  if (deal.description !== DEAL_DESCRIPTION_FALLBACK) score += 2;
+  if (deal.category !== DEAL_CATEGORY_FALLBACK) score += 1;
+  if (deal.offerText !== DEAL_OFFER_FALLBACK) score += 1;
+  return score;
+};
+
+const choosePreferredDealRecord = (currentDeal: Deal, nextDeal: Deal) => {
+  const currentScore = getDealDataPresenceScore(currentDeal);
+  const nextScore = getDealDataPresenceScore(nextDeal);
+
+  if (nextScore !== currentScore) {
+    return nextScore > currentScore ? nextDeal : currentDeal;
+  }
+
+  if ((currentDeal.status ?? 'active') !== (nextDeal.status ?? 'active')) {
+    return (nextDeal.status ?? 'active') === 'active' ? nextDeal : currentDeal;
+  }
+
+  return nextDeal.createdAt >= currentDeal.createdAt ? nextDeal : currentDeal;
+};
+
+const getDealDedupKey = (deal: Deal) => {
+  const strongestUrl = getFirstSafeExternalUrl(deal.productUrl, deal.websiteUrl, deal.affiliateUrl);
+  if (strongestUrl) {
+    return `url:${strongestUrl}`;
+  }
+
+  return [
+    deal.businessType ?? 'local',
+    trimDealTextValue(deal.businessName).toLowerCase(),
+    trimDealTextValue(deal.title).toLowerCase(),
+    trimDealTextValue(deal.offerText).toLowerCase(),
+  ].join('|');
+};
+
+const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | null => {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const rawHasMeaningfulContent = [
+    input.id,
+    input.businessName,
+    input.title,
+    input.description,
+    input.offerText,
+    input.imageUrl,
+    input.affiliateUrl,
+    input.productUrl,
+    input.websiteUrl,
+  ].some((value) => trimDealTextValue(value).length > 0);
+
+  if (!rawHasMeaningfulContent) {
+    return null;
+  }
+
+  const businessType = input.businessType === 'online' ? 'online' : 'local';
+  const createdAt = clampWholeNumber(input.createdAt, Date.now(), 0);
+  const requestedHasTimer = typeof input.hasTimer === 'boolean' ? input.hasTimer : true;
+  const rawExpiresAt = clampWholeNumber(input.expiresAt, getDefaultDealExpiry(createdAt, businessType), 0);
+  const expiresAt = rawExpiresAt >= createdAt ? rawExpiresAt : getDefaultDealExpiry(createdAt, businessType);
+  const normalizedMaxClaims = clampWholeNumber(
+    input.maxClaims,
+    999,
+    0,
+    999_999,
+  );
+  const maxClaims = normalizedMaxClaims;
+  const currentClaims = maxClaims === 0
+    ? 0
+    : Math.min(clampDealCount(input.currentClaims, 0), maxClaims);
+  const claimCount = maxClaims === 0
+    ? 0
+    : Math.min(Math.max(clampDealCount(input.claimCount, currentClaims), currentClaims), maxClaims);
+  const originalPriceValue = parseNumberishValue(input.originalPrice);
+  const normalizedOriginalPrice =
+    originalPriceValue !== null && originalPriceValue >= 0 ? originalPriceValue : null;
+  const discountValue = parseNumberishValue(input.discountPercent);
+  const normalizedDiscountPercent =
+    discountValue !== null ? Math.min(100, Math.max(0, Math.round(discountValue))) : null;
+  const normalizedAffiliateUrl = normalizeSafeExternalUrl(input.affiliateUrl);
+  const normalizedProductUrl = getFirstSafeExternalUrl(input.productUrl);
+  const normalizedWebsiteUrl =
+    deriveWebsiteOrigin(input.websiteUrl)
+    ?? deriveWebsiteOrigin(normalizedProductUrl)
+    ?? deriveWebsiteOrigin(normalizedAffiliateUrl)
+    ?? undefined;
+  const normalizedBusinessName = trimDealTextWithFallback(
+    input.businessName,
+    DEAL_BUSINESS_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.businessName,
+  );
+  const normalizedTitle = trimDealTextWithFallback(
+    input.title,
+    DEAL_TITLE_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.title,
+  );
+  const normalizedDescription = trimDealTextWithFallback(
+    input.description,
+    DEAL_DESCRIPTION_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.description,
+  );
+  const normalizedOfferText = trimDealTextWithFallback(
+    input.offerText,
+    DEAL_OFFER_FALLBACK,
+    DEAL_MAX_TEXT_LENGTH.offerText,
+  );
+  const normalizedDistance = businessType === 'online'
+    ? 'Online'
+    : trimDealTextWithFallback(input.distance, 'Nearby', DEAL_MAX_TEXT_LENGTH.distance);
+  const normalizedLat = parseNumberishValue(input.lat);
+  const normalizedLng = parseNumberishValue(input.lng);
+  const hasValidLocalCoordinates =
+    businessType !== 'online' && hasUsableCoordinates(normalizedLat, normalizedLng);
+  const nextStatus = input.status === 'draft'
+    ? 'draft'
+    : expiresAt <= Date.now()
+      ? 'expired'
+      : 'active';
+
+  return {
+    id: trimDealTextValue(input.id) || createUuid(),
+    businessType,
+    status: nextStatus,
+    featured: Boolean(input.featured),
+    adminTag: input.adminTag === 'featured' || input.adminTag === 'trending' ? input.adminTag : null,
+    businessName: normalizedBusinessName,
+    logoUrl: trimDealTextValue(input.logoUrl) || undefined,
+    imageUrl: trimDealTextValue(input.imageUrl) || undefined,
+    title: normalizedTitle,
+    description: normalizedDescription,
+    offerText: normalizedOfferText,
+    likeCount: clampDealCount(input.likeCount, 0),
+    dislikeCount: clampDealCount(input.dislikeCount, 0),
+    shareCount: clampDealCount(input.shareCount, 0),
+    currentPrice: parseNumberishValue(input.currentPrice),
+    originalPrice: normalizedOriginalPrice,
+    discountPercent: normalizedDiscountPercent,
+    affiliateUrl: normalizedAffiliateUrl ?? undefined,
+    merchant: trimDealTextValue(input.merchant) || undefined,
+    brand: trimDealTextValue(input.brand) || undefined,
+    rating: parseNumberishValue(input.rating),
+    reviewCount: clampWholeNumber(input.reviewCount, 0, 0, 9_999_999),
+    availability: trimDealTextValue(input.availability) || undefined,
+    stockStatus: trimDealTextValue(input.stockStatus).slice(0, DEAL_MAX_TEXT_LENGTH.stockStatus) || undefined,
+    websiteUrl: normalizedWebsiteUrl,
+    productUrl: normalizedProductUrl ?? undefined,
+    hasTimer: requestedHasTimer && nextStatus !== 'draft',
+    distance: normalizedDistance,
+    lat: businessType === 'online' ? 0 : hasValidLocalCoordinates ? Number(normalizedLat) : 0,
+    lng: businessType === 'online' ? 0 : hasValidLocalCoordinates ? Number(normalizedLng) : 0,
+    createdAt,
+    expiresAt,
+    maxClaims,
+    currentClaims,
+    claimCount,
+    category: normalizeDealCategoryValue(input.category, businessType, [
+      input.title,
+      input.description,
+      input.offerText,
+      input.businessName,
+      input.merchant,
+      input.brand,
+    ]),
+  };
+};
+
+const sanitizeDealsCollection = (input: Array<Partial<Deal> | null | undefined>) => {
+  const dedupedDeals = new Map<string, Deal>();
+
+  input.forEach((deal) => {
+    const sanitizedDeal = sanitizeDealRecord(deal);
+    if (!sanitizedDeal) {
+      return;
+    }
+
+    const dedupeKey = getDealDedupKey(sanitizedDeal);
+    const existingDeal = dedupedDeals.get(dedupeKey);
+    dedupedDeals.set(
+      dedupeKey,
+      existingDeal ? choosePreferredDealRecord(existingDeal, sanitizedDeal) : sanitizedDeal,
+    );
+  });
+
+  return [...dedupedDeals.values()].sort((left, right) => right.createdAt - left.createdAt);
+};
 
 const inferDealBusinessType = (row: Partial<DealRow>, fallback?: Deal['businessType']) => {
   if (row.business_type === 'local' || row.business_type === 'online') {
@@ -1047,28 +1931,32 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
   const rawLng = parseDealNumberOrFallback(row.lng, fallback?.lng ?? 0);
   const hasValidLocalCoordinates = businessType !== 'online' && hasUsableCoordinates(rawLat, rawLng);
 
-  return {
+  return sanitizeDealRecord({
     id: row.id ?? fallback?.id ?? createUuid(),
     businessType,
     status: row.status ?? fallback?.status ?? 'active',
     featured: row.featured ?? fallback?.featured ?? false,
     adminTag: row.admin_tag ?? fallback?.adminTag ?? null,
-    businessName: row.business_name ?? row.merchant ?? fallback?.businessName ?? 'Unknown Merchant',
+    businessName: row.business_name ?? row.merchant ?? fallback?.businessName ?? DEAL_BUSINESS_FALLBACK,
     logoUrl: row.logo_url ?? fallback?.logoUrl ?? undefined,
     imageUrl: row.image_url ?? row.image ?? fallback?.imageUrl ?? undefined,
-    title: row.title ?? fallback?.title ?? 'Untitled Deal',
-    description: row.description ?? fallback?.description ?? '',
-    offerText: row.offer_text ?? fallback?.offerText ?? 'Special offer',
+    title: row.title ?? fallback?.title ?? DEAL_TITLE_FALLBACK,
+    description: row.description ?? fallback?.description ?? DEAL_DESCRIPTION_FALLBACK,
+    offerText: row.offer_text ?? fallback?.offerText ?? DEAL_OFFER_FALLBACK,
     likeCount: row.like_count ?? fallback?.likeCount ?? 0,
     dislikeCount: row.dislike_count ?? fallback?.dislikeCount ?? 0,
     shareCount: row.share_count ?? fallback?.shareCount ?? 0,
     originalPrice: row.original_price ?? fallback?.originalPrice ?? null,
     discountPercent: row.discount_percent ?? fallback?.discountPercent ?? null,
-    affiliateUrl: row.affiliate_url ?? row.product_link ?? fallback?.affiliateUrl ?? fallback?.productUrl ?? undefined,
+    affiliateUrl: row.affiliate_url ?? fallback?.affiliateUrl ?? undefined,
+    merchant: row.merchant ?? fallback?.merchant ?? undefined,
+    brand: fallback?.brand ?? undefined,
+    rating: fallback?.rating ?? null,
     reviewCount: row.review_count ?? fallback?.reviewCount ?? null,
+    availability: fallback?.availability ?? undefined,
     stockStatus: row.stock_status ?? fallback?.stockStatus ?? undefined,
     websiteUrl: row.website_url ?? fallback?.websiteUrl ?? undefined,
-    productUrl: row.product_link ?? row.product_url ?? row.affiliate_url ?? fallback?.productUrl ?? fallback?.affiliateUrl ?? undefined,
+    productUrl: row.product_url ?? row.product_link ?? fallback?.productUrl ?? undefined,
     hasTimer: typeof row.has_timer === 'boolean' ? row.has_timer : fallback?.hasTimer ?? Boolean(row.expires_at),
     distance: row.distance ?? fallback?.distance ?? (businessType === 'online' ? 'Online' : 'Nearby'),
     lat: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLat : 0,
@@ -1078,12 +1966,22 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     maxClaims,
     currentClaims,
     claimCount,
-    category: row.category ?? fallback?.category ?? 'Tech',
-  };
+    category: normalizeDealCategoryValue(
+      row.category ?? fallback?.category ?? DEAL_CATEGORY_FALLBACK,
+      businessType,
+      [
+        row.title ?? fallback?.title,
+        row.description ?? fallback?.description,
+        row.offer_text ?? fallback?.offerText,
+        row.business_name ?? row.merchant ?? fallback?.businessName,
+      ],
+    ),
+  })!;
 };
 
 const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
-  const productLink = deal.affiliateUrl ?? deal.productUrl ?? null;
+  const sourceProductUrl = deal.productUrl ?? null;
+  const affiliateUrl = deal.affiliateUrl ?? null;
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
 
   return {
@@ -1105,12 +2003,12 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     share_count: deal.shareCount ?? 0,
     original_price: deal.originalPrice ?? null,
     discount_percent: deal.discountPercent ?? null,
-    affiliate_url: productLink,
+    affiliate_url: affiliateUrl,
     review_count: deal.reviewCount ?? null,
     stock_status: deal.stockStatus ?? null,
     website_url: deal.websiteUrl ?? null,
-    product_link: productLink,
-    product_url: deal.productUrl ?? productLink,
+    product_link: sourceProductUrl,
+    product_url: sourceProductUrl,
     has_timer: deal.hasTimer ?? true,
     distance: deal.distance,
     lat: deal.lat,
@@ -1149,7 +2047,8 @@ const asAdminLogStringArray = (value: unknown) =>
 
 const humanizeAdminFieldName = (field: string) => {
   const overrides: Record<string, string> = {
-    affiliate_url: 'affiliate URL',
+    affiliate_url: 'affiliate link',
+    affiliateUrl: 'affiliate link',
     business_name: 'store name',
     image_url: 'image',
     imageUrl: 'image',
@@ -1157,8 +2056,10 @@ const humanizeAdminFieldName = (field: string) => {
     offerText: 'offer text',
     original_price: 'original price',
     originalPrice: 'original price',
-    product_link: 'product link',
-    productLink: 'product link',
+    product_link: 'source product URL',
+    product_url: 'source product URL',
+    productLink: 'source product URL',
+    productUrl: 'source product URL',
     review_count: 'review count',
     reviewCount: 'review count',
     website_url: 'website URL',
@@ -1772,17 +2673,16 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
       typeof item.businessName !== 'string' ||
       typeof item.title !== 'string' ||
       typeof item.description !== 'string' ||
-      typeof item.category !== 'string' ||
       typeof item.offerText !== 'string'
     ) {
       throw new Error(`Deal at index ${index} is missing required fields.`);
     }
 
-    return {
+    return normalizeImportedDealInput({
       businessName: item.businessName.trim(),
       title: item.title.trim(),
       description: item.description.trim(),
-      category: item.category.trim(),
+      category: typeof item.category === 'string' ? item.category.trim() : '',
       offerText: item.offerText.trim(),
       originalPrice:
         Number.isFinite(item.originalPrice) && Number(item.originalPrice) >= 0
@@ -1791,6 +2691,14 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
       price:
         Number.isFinite(item.price) && Number(item.price) >= 0
           ? Number(item.price)
+          : undefined,
+      currentPrice:
+        Number.isFinite(item.currentPrice) && Number(item.currentPrice) >= 0
+          ? Number(item.currentPrice)
+          : undefined,
+      discountAmount:
+        Number.isFinite(item.discountAmount) && Number(item.discountAmount) >= 0
+          ? Number(item.discountAmount)
           : undefined,
       discountPercent:
         Number.isFinite(item.discountPercent) && Number(item.discountPercent) >= 0
@@ -1806,6 +2714,8 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
           ? Number(item.reviewCount)
           : undefined,
       merchant: typeof item.merchant === 'string' ? item.merchant.trim() : undefined,
+      brand: typeof item.brand === 'string' ? item.brand.trim() : undefined,
+      asin: typeof item.asin === 'string' ? item.asin.trim() : undefined,
       shippingInfo: typeof item.shippingInfo === 'string' ? item.shippingInfo.trim() : undefined,
       summary: typeof item.summary === 'string' ? item.summary.trim() : undefined,
       tags: Array.isArray(item.tags)
@@ -1818,7 +2728,11 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
       sourceQuery: typeof item.sourceQuery === 'string' ? item.sourceQuery.trim() : undefined,
       maxPriceMatched: typeof item.maxPriceMatched === 'boolean' ? item.maxPriceMatched : undefined,
       stockStatus: typeof item.stockStatus === 'string' ? item.stockStatus.trim() : undefined,
+      availability: typeof item.availability === 'string' ? item.availability.trim() : undefined,
       imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl.trim() : undefined,
+      galleryImages: Array.isArray(item.galleryImages)
+        ? item.galleryImages.filter((value) => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+        : undefined,
       productLink: typeof item.productLink === 'string' ? item.productLink.trim() : undefined,
       productUrl: typeof item.productUrl === 'string' ? item.productUrl.trim() : undefined,
       websiteUrl: typeof item.websiteUrl === 'string' ? item.websiteUrl.trim() : undefined,
@@ -1835,7 +2749,22 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
           ? Number(item.maxClaims)
           : undefined,
       isOnline: typeof item.isOnline === 'boolean' ? item.isOnline : undefined,
-    };
+      couponText: typeof item.couponText === 'string' ? item.couponText.trim() : undefined,
+      couponType:
+        item.couponType === 'percent' || item.couponType === 'fixed' || item.couponType === 'text'
+          ? item.couponType
+          : undefined,
+      couponValue:
+        Number.isFinite(item.couponValue) && Number(item.couponValue) >= 0
+          ? Number(item.couponValue)
+          : undefined,
+      seller: typeof item.seller === 'string' ? item.seller.trim() : undefined,
+      featureBullets: Array.isArray(item.featureBullets)
+        ? item.featureBullets.filter((value) => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+        : undefined,
+      importedAt: typeof item.importedAt === 'string' ? item.importedAt.trim() : undefined,
+      sourceProvider: typeof item.sourceProvider === 'string' ? item.sourceProvider.trim() : undefined,
+    })!;
   });
 };
 
@@ -1845,10 +2774,11 @@ export default function App() {
     typeof window !== 'undefined' ? normalizeRoutePath(window.location.pathname) : '/',
   );
   const [role, setRole] = useState<UserRole>('customer');
-  const [deals, setDeals] = useState<Deal[]>([]);
+  const [deals, setRawDeals] = useState<Deal[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [catalogCoupons, setCatalogCoupons] = useState<CatalogCoupon[]>([]);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
+  const [selectedDetailDealId, setSelectedDetailDealId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [dealDraft, setDealDraft] = useState<Deal | null>(null);
   const [portalFieldSnapshot, setPortalFieldSnapshot] = useState<Deal | null>(null);
@@ -1866,10 +2796,24 @@ export default function App() {
   });
   const [userLocation, setUserLocation] = useState<UserLocation>(DEFAULT_LOCATION);
   const [radius, setRadius] = useState<number>(5);
+  const setDeals = (value: React.SetStateAction<Deal[]>) => {
+    setRawDeals((previousDeals) => {
+      const resolvedDeals = typeof value === 'function'
+        ? (value as (currentDeals: Deal[]) => Deal[])(previousDeals)
+        : value;
+
+      return sanitizeDealsCollection(Array.isArray(resolvedDeals) ? resolvedDeals : []);
+    });
+  };
+  const selectedDetailDeal = useMemo(
+    () => deals.find((deal) => deal.id === selectedDetailDealId) ?? null,
+    [deals, selectedDetailDealId],
+  );
   const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
   const [dropModeEnabled, setDropModeEnabled] = useState(false);
   const [dropModeShuffleSeed, setDropModeShuffleSeed] = useState<number>(() => Date.now());
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedLocalSubcategory, setSelectedLocalSubcategory] = useState<string>('All');
   const [onlineCategoryPage, setOnlineCategoryPage] = useState(0);
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
@@ -1884,8 +2828,14 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [toastNotifications, setToastNotifications] = useState<AppNotification[]>([]);
   const seenDealIdsRef = useRef<Set<string>>(new Set());
+  const latestDealsRef = useRef<Deal[]>([]);
+  const latestClaimsRef = useRef<Claim[]>([]);
   const latestUserLocationRef = useRef<UserLocation>(DEFAULT_LOCATION);
   const latestHasPreciseLocationRef = useRef(false);
+  const dealEngagementLocksRef = useRef<Set<string>>(new Set());
+  const recentExternalActionRef = useRef<{ key: string; at: number } | null>(null);
+  const locationRequestIdRef = useRef(0);
+  const reverseGeocodeRequestIdRef = useRef(0);
   const [portalSuccessMessage, setPortalSuccessMessage] = useState<string>('');
   const [session, setSession] = useState<Session | null>(null);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -1907,6 +2857,7 @@ export default function App() {
   const [selectedBulkImportIndex, setSelectedBulkImportIndex] = useState(0);
   const [aiFinderKeyword, setAiFinderKeyword] = useState('');
   const [aiFinderUrl, setAiFinderUrl] = useState('');
+  const [aiFinderAffiliateUrl, setAiFinderAffiliateUrl] = useState('');
   const [aiFinderMerchant, setAiFinderMerchant] = useState('Any');
   const [aiFinderCategory, setAiFinderCategory] = useState('Tech');
   const [aiFinderMaxPrice, setAiFinderMaxPrice] = useState('');
@@ -1946,19 +2897,19 @@ export default function App() {
   const hasPortalAccess = LOCAL_ADMIN_MODE || isBusinessSubscribed;
   const isAdminRoute = routePath === '/admin';
   const isDashboardRoute = routePath === '/dashboard';
-  const hasPreciseUserLocation = locationStatus === 'success';
+  const hasPreciseUserLocation = hasUsableUserLocation(userLocation);
   const locationDisplayName =
-    locationStatus === 'loading'
+    locationStatus === 'loading' && !hasPreciseUserLocation
       ? 'Locating...'
-      : locationStatus === 'denied'
+      : locationStatus === 'denied' && !hasPreciseUserLocation
         ? 'Location access denied'
-        : locationStatus === 'error'
+        : locationStatus === 'error' && !hasPreciseUserLocation
           ? 'Location unavailable'
           : (cityName || 'Current area');
 
   useEffect(() => {
     latestUserLocationRef.current = userLocation;
-    latestHasPreciseLocationRef.current = hasPreciseUserLocation && hasUsableUserLocation(userLocation);
+    latestHasPreciseLocationRef.current = hasPreciseUserLocation;
   }, [hasPreciseUserLocation, userLocation]);
   const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
   const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
@@ -1975,7 +2926,11 @@ export default function App() {
       .filter((entry): entry is AdminActivityCard => Boolean(entry)),
     [adminLogs],
   );
-  const aiFinderDirectUrl = aiFinderUrl.trim();
+  const aiFinderSourceValidation = useMemo(
+    () => validateDirectProductUrl(aiFinderUrl),
+    [aiFinderUrl],
+  );
+  const aiFinderDirectUrl = aiFinderSourceValidation.url ?? '';
   const aiFinderHasDirectUrlFallback = aiFinderUseDirectUrlFallback && Boolean(aiFinderDirectUrl);
   const aiFinderSelectedSourceUrl = aiFinderDirectUrl;
 
@@ -1993,12 +2948,39 @@ export default function App() {
 
   const applyDealsState = (nextDeals: Deal[]) => {
     setDeals(nextDeals);
-    seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
   };
+
+  useEffect(() => {
+    seenDealIdsRef.current = new Set(deals.map((deal) => deal.id));
+    latestDealsRef.current = deals;
+  }, [deals]);
+
+  useEffect(() => {
+    latestClaimsRef.current = claims;
+  }, [claims]);
 
   useEffect(() => {
     setOnlineCategoryPage(0);
   }, [dropMode, selectedCategory, selectedFeedFilter]);
+
+  useEffect(() => {
+    if (dropMode !== 'local' || selectedCategory === 'All') {
+      setSelectedLocalSubcategory('All');
+      return;
+    }
+
+    const availableSubcategories = LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? [];
+    if (!availableSubcategories.includes(selectedLocalSubcategory)) {
+      setSelectedLocalSubcategory('All');
+    }
+  }, [dropMode, selectedCategory, selectedLocalSubcategory]);
+
+  useEffect(() => {
+    if (currentView === 'deal-detail' && selectedDetailDealId && !selectedDetailDeal) {
+      setCurrentView('live-deals');
+      setSelectedDetailDealId(null);
+    }
+  }, [currentView, selectedDetailDeal, selectedDetailDealId]);
 
   useEffect(() => {
     if (!pendingPortalAutofill || !portalFieldSnapshot) {
@@ -2330,10 +3312,10 @@ export default function App() {
   };
 
   const activateAIFinderDirectUrlFallback = () => {
-    const directUrl = aiFinderUrl.trim();
+    const directUrl = aiFinderDirectUrl;
 
     if (!directUrl) {
-      const message = 'Paste a product URL in Advanced Filters to use the fallback path.';
+      const message = aiFinderSourceValidation.error || 'Paste a valid product URL in Advanced Filters to use the fallback path.';
       setAiFinderError(message);
       setAiFinderMessage("Tavily is a discovery tool. If search results are weak or empty, paste a specific product URL instead.");
       setShowSearchMeter(true);
@@ -2354,13 +3336,13 @@ export default function App() {
     const validation = validateDirectProductUrl(selectedSourceUrl);
 
     if (!validation.url) {
-      const message = validation.error || 'Paste a direct product URL to continue.';
+      const message = validation.error || 'Paste the full product page URL to continue.';
       console.warn('[LiveDrop] Invalid Quick Coupon Creator URL input', {
         attemptedValue: selectedSourceUrl,
         reason: message,
       });
       setAiFinderError(message);
-      setAiFinderMessage('Quick Coupon Creator only works from a real product or affiliate URL.');
+      setAiFinderMessage('Quick Coupon Creator only works from a real source product URL.');
       return null;
     }
 
@@ -2370,6 +3352,11 @@ export default function App() {
   const navigateToPath = (path: string) => {
     if (typeof window === 'undefined') return;
     const nextPath = normalizeRoutePath(path);
+    if (nextPath === routePath) {
+      return;
+    }
+
+    setNotificationsOpen(false);
     console.info('[LiveDrop] Navigating', {
       from: routePath,
       to: nextPath,
@@ -2861,6 +3848,8 @@ export default function App() {
   ) => {
     const keyword = aiFinderKeyword.trim();
     const sourceUrlInput = options?.overrideUrl?.trim() || aiFinderUrl.trim();
+    const affiliateTrackingValidation = validateAffiliateTrackingInput(aiFinderAffiliateUrl);
+    const affiliateTrackingUrl = affiliateTrackingValidation.url;
     const sourceValidation = validateDirectProductUrl(sourceUrlInput);
 
     setAiFinderRuntime({
@@ -2882,15 +3871,26 @@ export default function App() {
       throw new Error(message);
     }
 
+    if (affiliateTrackingValidation.error) {
+      setAiFinderError(affiliateTrackingValidation.error);
+      setAiFinderMessage('Fix the affiliate / outbound link before continuing, or leave it blank.');
+      setAiFinderRuntime((prev) => ({
+        ...prev,
+        currentAction: 'idle',
+        lastError: affiliateTrackingValidation.error!,
+      }));
+      throw new Error(affiliateTrackingValidation.error);
+    }
+
     if (!sourceValidation.url) {
-      const message = sourceValidation.error || 'Paste a direct product URL to continue.';
+      const message = sourceValidation.error || 'Paste the full product page URL to continue.';
       console.warn('[LiveDrop] Quick Coupon Creator validation blocked request', {
         attemptedValue: sourceUrlInput,
         mode,
         reason: message,
       });
       setAiFinderError(message);
-      setAiFinderMessage('Quick Coupon Creator only accepts a valid direct product or affiliate URL.');
+      setAiFinderMessage('Quick Coupon Creator needs the full product page URL in the source field before it can import anything.');
       setAiFinderRuntime((prev) => ({
         ...prev,
         currentAction: 'idle',
@@ -2908,7 +3908,11 @@ export default function App() {
 
     setAiFinderLoading(true);
     setAiFinderError('');
-    setAiFinderMessage(mode === 'extract' ? 'URL accepted. Starting extraction...' : 'Generating coupon fields from the product URL...');
+    setAiFinderMessage(
+      mode === 'extract'
+        ? 'Source URL accepted. Starting extraction...'
+        : 'Generating coupon fields from the source product URL...',
+    );
     setAiFinderStage('searching');
     setAiFinderSearchSnapshot(null);
     setAiFinderCandidates([]);
@@ -2919,6 +3923,7 @@ export default function App() {
       phase: mode,
       keyword: keyword || undefined,
       url: sourceUrl,
+      affiliateUrl: affiliateTrackingUrl || undefined,
     };
 
     try {
@@ -2955,30 +3960,42 @@ export default function App() {
         throw new Error('Direct URL extraction returned an incomplete response.');
       }
 
+      const normalizedResult: AIDealFinderResult = affiliateTrackingUrl
+        ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingUrl)
+        : result;
+
       setAiFinderRuntime((prev) => ({
         ...prev,
         responseReceived: true,
         currentAction: 'completed',
       }));
-      setAiFinderResult(result);
+      setAiFinderResult(normalizedResult);
 
       if (mode === 'extract') {
-        const extractionSucceeded = result.extractionStatus === 'Extraction succeeded';
+        const extractionSucceeded = normalizedResult.extractionStatus === 'Extraction succeeded';
         setAiFinderStage(extractionSucceeded ? 'result-selected' : 'idle');
         setAiFinderMessage(
           extractionSucceeded
             ? 'Stage 1 complete. Source data was extracted and is ready for normalization.'
-            : 'Stage 1 completed with partial data. Basic URL fields were mapped and you can still continue to Generate Deal.',
+            : 'Stage 1 completed with partial data. Source and affiliate link fields were still mapped so you can continue to Generate Deal.',
         );
       } else {
-        const extractionSucceeded = result.extractionStatus === 'Extraction succeeded';
+        const extractionSucceeded = normalizedResult.extractionStatus === 'Extraction succeeded';
+        const effectiveMappedForm = normalizedResult.mappedForm ?? buildFallbackMappedForm(normalizedResult.normalizedDeal);
+        const effectiveValidationResult = normalizedResult.validationResult ?? buildFallbackValidationResult(normalizedResult);
+        const hasBlockingMappedFields =
+          (effectiveValidationResult?.missingRequiredFields.length ?? 0) > 0;
+        const hasReviewWarnings =
+          (effectiveValidationResult?.warnings.length ?? normalizedResult.missingFields.length ?? 0) > 0;
         setAiFinderStage('coupon-generated');
         setAiFinderMessage(
-          extractionSucceeded
+          hasBlockingMappedFields
+            ? 'Deal JSON generated, but some required portal fields are still missing. Review the mapped values before autofill.'
+            : extractionSucceeded && !hasReviewWarnings
             ? 'Stage 2 complete. A normalized deal object is ready for portal mapping.'
-            : 'Stage 2 completed with fallback data. The normalized deal object is ready, but some source fields are still missing.',
+            : 'Deal JSON generated with partial source data. Review the mapped values before autofill.',
         );
-        syncGeneratedDealToPortalFields(result);
+        syncGeneratedDealToPortalFields(normalizedResult);
         setBulkImportMessage(
           extractionSucceeded
             ? 'Generated coupon JSON inserted into the portal intake box.'
@@ -2991,17 +4008,18 @@ export default function App() {
         mode === 'extract' ? 'Deal extracted successfully' : 'Coupon generated',
         formatAdminLogDetail({
           sourceMerchant:
-            result.normalizedDeal.merchant ??
-            result.normalizedDeal.businessName ??
+            normalizedResult.normalizedDeal.merchant ??
+            normalizedResult.normalizedDeal.businessName ??
             '',
-          productTitle: result.normalizedDeal.title ?? '',
-          missingOptionalFields: result.missingFields,
-          extractionStatus: result.extractionStatus ?? '',
+          productTitle: normalizedResult.normalizedDeal.title ?? '',
+          missingOptionalFields: normalizedResult.missingFields,
+          extractionStatus: normalizedResult.extractionStatus ?? '',
           sourceUrl,
+          affiliateUrl: affiliateTrackingUrl,
         }),
       );
 
-      return result;
+      return normalizedResult;
     } catch (error) {
       const message = await extractAIDealFinderErrorMessage(error);
       setAiFinderError(message);
@@ -3051,13 +4069,23 @@ export default function App() {
     const sourceUrl = ensureAIFinderSourceSelection(overrideUrl);
     if (!sourceUrl) return;
 
+    const affiliateTrackingValidation = validateAffiliateTrackingInput(aiFinderAffiliateUrl);
+    if (affiliateTrackingValidation.error) {
+      setAiFinderError(affiliateTrackingValidation.error);
+      return;
+    }
+
     try {
       const result = aiFinderResult?.generatedJson
         ? aiFinderResult
         : await runAIDealFinder('generate', { overrideUrl: sourceUrl });
-      const mappedPortalPayload = buildPortalAutofillPayload(result.normalizedDeal);
-      openPortalWithAutofillPayload(mappedPortalPayload, result.normalizedDeal, {
-        serializedDeal: result.generatedJson,
+      const portalReadyResult = affiliateTrackingValidation.url
+        ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingValidation.url)
+        : result;
+      const portalReadyDeal = portalReadyResult.mappedForm?.draft ?? portalReadyResult.normalizedDeal;
+      const mappedPortalPayload = portalReadyResult.mappedForm?.payload ?? buildPortalAutofillPayload(portalReadyDeal);
+      openPortalWithAutofillPayload(mappedPortalPayload, portalReadyDeal, {
+        serializedDeal: JSON.stringify(portalReadyDeal, null, 2),
         message: 'Applying normalized deal data to the Business Portal form...',
       });
     } catch (error) {
@@ -3073,7 +4101,8 @@ export default function App() {
       category: TEST_COUPON_AUTOFILL.category,
       offerText: TEST_COUPON_AUTOFILL.offerText,
       websiteUrl: TEST_COUPON_AUTOFILL.websiteUrl,
-      productLink: TEST_COUPON_AUTOFILL.productLink,
+      productUrl: TEST_COUPON_AUTOFILL.productUrl,
+      affiliateUrl: TEST_COUPON_AUTOFILL.affiliateUrl,
       isOnline: true,
     };
 
@@ -3124,6 +4153,12 @@ export default function App() {
       return;
     }
 
+    const affiliateTrackingValidation = validateAffiliateTrackingInput(aiFinderAffiliateUrl);
+    if (affiliateTrackingValidation.error) {
+      setAiFinderError(affiliateTrackingValidation.error);
+      return;
+    }
+
     setAiFinderLoading(true);
     setAiFinderError('');
     setAiFinderMessage('');
@@ -3135,12 +4170,14 @@ export default function App() {
         url: (
           selectedAIFinderUrl ||
           (
-            aiFinderResult.normalizedDeal.affiliateUrl ??
             aiFinderResult.normalizedDeal.productUrl ??
+            aiFinderResult.normalizedDeal.sourceQuery ??
+            aiFinderResult.normalizedDeal.affiliateUrl ??
             aiFinderResult.normalizedDeal.websiteUrl ??
             aiFinderUrl.trim()
           )
         ) || undefined,
+        affiliateUrl: affiliateTrackingValidation.url ?? aiFinderResult.normalizedDeal.affiliateUrl ?? undefined,
         merchant: aiFinderMerchant === 'Any' ? undefined : aiFinderMerchant,
         category: aiFinderCategory || undefined,
         maxPrice: aiFinderMaxPrice.trim() ? Number(aiFinderMaxPrice) : null,
@@ -3171,10 +4208,14 @@ export default function App() {
         throw new Error('Enhance Deal returned an incomplete response.');
       }
 
-      setAiFinderResult(result);
-      setBulkImportJson(result.generatedJson);
+      const normalizedResult = affiliateTrackingValidation.url
+        ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingValidation.url)
+        : result;
+
+      setAiFinderResult(normalizedResult);
+      setBulkImportJson(normalizedResult.generatedJson);
       setBulkImportMessage('Enhanced deal JSON is ready and synced into the portal intake box.');
-      setAiFinderMessage(result.resultQuality === 'enriched' ? 'Deal upgraded with full product-page data.' : 'Enhancement attempted. Partial data is still available.');
+      setAiFinderMessage(normalizedResult.resultQuality === 'enriched' ? 'Deal upgraded with full product-page data.' : 'Enhancement attempted. Partial data is still available.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Enhance Deal failed.';
       setAiFinderError(message);
@@ -3185,32 +4226,37 @@ export default function App() {
   };
 
   const createDraftFromBulkImport = (item: BulkImportDealInput, index = 0): Deal => {
-    const durationMinutes = item.durationMinutes && item.durationMinutes > 0 ? item.durationMinutes : 120;
-    const currentClaims = item.claimCount && item.claimCount >= 0 ? item.claimCount : 0;
-    const maxClaims = item.maxClaims && item.maxClaims > 0 ? item.maxClaims : 999;
+    const normalizedItem = normalizeImportedDealInput(item) ?? item;
+    const durationMinutes = normalizedItem.durationMinutes && normalizedItem.durationMinutes > 0 ? normalizedItem.durationMinutes : 120;
+    const currentClaims = normalizedItem.claimCount && normalizedItem.claimCount >= 0 ? normalizedItem.claimCount : 0;
+    const maxClaims = normalizedItem.maxClaims && normalizedItem.maxClaims > 0 ? normalizedItem.maxClaims : 999;
     const createdAt = Date.now() - index * 60 * 1000;
-    const businessType = item.isOnline === false ? 'local' : 'online';
-    const affiliateUrl = item.affiliateUrl || undefined;
-    const productLink = item.productLink || item.productUrl || undefined;
-    const websiteUrl = item.websiteUrl || deriveWebsiteOrigin(productLink || affiliateUrl) || undefined;
-    const productUrl = productLink || affiliateUrl || item.websiteUrl || undefined;
+    const businessType = normalizedItem.isOnline === false ? 'local' : 'online';
+    const sourceProductUrl = normalizedItem.productUrl || normalizedItem.productLink || undefined;
+    const affiliateUrl = normalizedItem.affiliateUrl || undefined;
+    const websiteUrl = normalizedItem.websiteUrl || deriveWebsiteOrigin(sourceProductUrl) || deriveWebsiteOrigin(affiliateUrl) || undefined;
 
     return {
       id: createUuid(),
       businessType,
       status: 'draft',
-      businessName: item.businessName,
-      title: item.title,
-      description: item.description,
-      offerText: item.offerText,
-      originalPrice: item.originalPrice ?? null,
-      discountPercent: item.discountPercent ?? null,
+      businessName: normalizedItem.businessName,
+      title: normalizedItem.title,
+      description: normalizedItem.description,
+      offerText: normalizedItem.offerText,
+      currentPrice: normalizedItem.currentPrice ?? normalizedItem.price ?? null,
+      originalPrice: normalizedItem.originalPrice ?? null,
+      discountPercent: normalizedItem.discountPercent ?? extractPriceDropPercent(normalizedItem.offerText) ?? null,
       affiliateUrl,
-      reviewCount: item.reviewCount ?? null,
-      stockStatus: item.stockStatus ?? null,
-      imageUrl: item.imageUrl || undefined,
+      merchant: normalizedItem.merchant ?? normalizedItem.businessName,
+      brand: normalizedItem.brand ?? null,
+      rating: normalizedItem.rating ?? null,
+      reviewCount: normalizedItem.reviewCount ?? null,
+      availability: normalizedItem.availability ?? normalizedItem.stockStatus ?? null,
+      stockStatus: normalizedItem.stockStatus ?? normalizedItem.availability ?? null,
+      imageUrl: normalizedItem.imageUrl || undefined,
       websiteUrl,
-      productUrl,
+      productUrl: sourceProductUrl,
       hasTimer: true,
       distance: businessType === 'online' ? 'Online' : '1 mi',
       lat: businessType === 'online' ? 0 : (hasPreciseUserLocation ? userLocation.lat : DEFAULT_LOCATION.lat),
@@ -3220,7 +4266,13 @@ export default function App() {
       maxClaims,
       currentClaims,
       claimCount: currentClaims,
-      category: item.category,
+      category: normalizeCategoryValue(normalizedItem.category, businessType, [
+        normalizedItem.title,
+        normalizedItem.description,
+        normalizedItem.businessName,
+        normalizedItem.merchant,
+        normalizedItem.brand,
+      ]),
     };
   };
 
@@ -3230,7 +4282,7 @@ export default function App() {
       openPortal?: boolean;
     },
   ) => {
-    const serializedDeal = result.generatedJson || JSON.stringify(result.normalizedDeal, null, 2);
+    const serializedDeal = result.generatedJson || JSON.stringify(result.mappedForm?.draft ?? result.normalizedDeal, null, 2);
     const parsedDeals = parseBulkImportDeals(serializedDeal);
     const nextDraft = createDraftFromBulkImport(parsedDeals[0], 0);
 
@@ -3663,22 +4715,34 @@ export default function App() {
 
   // Geolocation fetching
   const fetchLocation = () => {
-    setLocationStatus('loading');
-    setCityName('');
+    const requestId = locationRequestIdRef.current + 1;
+    locationRequestIdRef.current = requestId;
     const previousLocation = latestUserLocationRef.current;
     const hadPreviousPreciseLocation =
       latestHasPreciseLocationRef.current && hasUsableUserLocation(previousLocation);
     const previousCityName = cityName;
+    setLocationStatus('loading');
+    if (!hadPreviousPreciseLocation) {
+      setCityName('');
+    }
 
-    const clearManagedSeedDeals = () => {
-      setDeals((prevDeals) => {
-        const nextDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-        seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
-        return nextDeals;
-      });
-    };
+      const clearManagedSeedDeals = () => {
+        setDeals((prevDeals) => {
+          const nextDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
+          return nextDeals;
+        });
+      };
 
     const handleLocationFailure = (status: 'denied' | 'error', nextCityName: string) => {
+      if (locationRequestIdRef.current !== requestId) {
+        console.info('[LiveDrop] Ignoring stale geolocation failure', {
+          requestId,
+          activeRequestId: locationRequestIdRef.current,
+          status,
+        });
+        return;
+      }
+
       if (hadPreviousPreciseLocation) {
         console.warn('[LiveDrop] Geolocation refresh failed, keeping last known precise location', {
           status,
@@ -3696,12 +4760,23 @@ export default function App() {
       setUserLocation(DEFAULT_LOCATION);
       latestUserLocationRef.current = DEFAULT_LOCATION;
       latestHasPreciseLocationRef.current = false;
+      reverseGeocodeRequestIdRef.current += 1;
       setLocationStatus(status);
       setCityName(nextCityName);
       clearManagedSeedDeals();
     };
 
     const handleLocationSuccess = (position: GeolocationPosition) => {
+      if (locationRequestIdRef.current !== requestId) {
+        console.info('[LiveDrop] Ignoring stale geolocation success', {
+          requestId,
+          activeRequestId: locationRequestIdRef.current,
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        return;
+      }
+
       const newLocation = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
@@ -3716,7 +4791,6 @@ export default function App() {
       setDeals((prevDeals) => {
         const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
         const nextDeals = composeDealsWithLocationContext(preservedDeals, newLocation, true);
-        seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
         return nextDeals;
       });
     };
@@ -3729,6 +4803,15 @@ export default function App() {
     navigator.geolocation.getCurrentPosition(
       handleLocationSuccess,
       (error) => {
+        if (locationRequestIdRef.current !== requestId) {
+          console.info('[LiveDrop] Ignoring stale geolocation error', {
+            requestId,
+            activeRequestId: locationRequestIdRef.current,
+            code: error.code,
+          });
+          return;
+        }
+
         console.error('Geolocation error:', error);
 
         if (error.code !== 1) {
@@ -3737,6 +4820,15 @@ export default function App() {
           navigator.geolocation.getCurrentPosition(
             handleLocationSuccess,
             (retryError) => {
+              if (locationRequestIdRef.current !== requestId) {
+                console.info('[LiveDrop] Ignoring stale balanced geolocation error', {
+                  requestId,
+                  activeRequestId: locationRequestIdRef.current,
+                  code: retryError.code,
+                });
+                return;
+              }
+
               console.error('Balanced geolocation retry failed:', retryError);
               handleLocationFailure(
                 retryError.code === 1 ? 'denied' : 'error',
@@ -3765,7 +4857,6 @@ export default function App() {
     setDeals((prevDeals) => {
       const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
       const nextDeals = composeDealsWithLocationContext(preservedDeals, nextLocation, true);
-      seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
       return nextDeals;
     });
 
@@ -3781,7 +4872,6 @@ export default function App() {
     const runMockDealRefresh = () => {
       setDeals((prevDeals) => {
         const nextDeals = syncSharedOnlineDeals(prevDeals);
-        seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
         return nextDeals;
       });
     };
@@ -3804,9 +4894,14 @@ export default function App() {
 
   // Fetch city name from coordinates
   useEffect(() => {
-    if (locationStatus !== 'success') {
+    if (locationStatus !== 'success' || !hasUsableUserLocation(userLocation)) {
+      reverseGeocodeRequestIdRef.current += 1;
       return;
     }
+
+    const geocodeRequestId = reverseGeocodeRequestIdRef.current + 1;
+    reverseGeocodeRequestIdRef.current = geocodeRequestId;
+    let cancelled = false;
 
     const fetchCity = async () => {
       try {
@@ -3819,18 +4914,29 @@ export default function App() {
             },
           }
         );
+        if (!response.ok) {
+          throw new Error(`Reverse geocode failed with status ${response.status}`);
+        }
         const data = await response.json();
+        if (cancelled || reverseGeocodeRequestIdRef.current !== geocodeRequestId) {
+          return;
+        }
         const city = data.address.city || data.address.town || data.address.village || data.address.suburb || data.address.county || 'Unknown City';
         setCityName(city);
       } catch (error) {
         console.error('Error fetching city name:', error);
+        if (cancelled || reverseGeocodeRequestIdRef.current !== geocodeRequestId) {
+          return;
+        }
         setCityName('Current area');
       }
     };
 
-    if (hasUsableUserLocation(userLocation)) {
-      fetchCity();
-    }
+    void fetchCity();
+
+    return () => {
+      cancelled = true;
+    };
   }, [locationStatus, userLocation.lat, userLocation.lng]);
 
   // Periodic refresh to move deals from "Live" to "Expired"
@@ -4123,22 +5229,24 @@ export default function App() {
   };
 
   const handleDealEngagement = async (deal: Deal, action: DealEngagementAction) => {
-    if (dealEngagementPending[deal.id]) {
+    if (dealEngagementPending[deal.id] || dealEngagementLocksRef.current.has(deal.id)) {
       return;
     }
 
-    if (action === 'share') {
-      const didShare = await shareDeal(deal);
-      if (!didShare) {
-        return;
-      }
-    }
-
-    const updatedDeal = applyDealEngagement(deal, action);
+    dealEngagementLocksRef.current.add(deal.id);
     setDealEngagementPending((prev) => ({ ...prev, [deal.id]: action }));
-    replaceDealInState(updatedDeal);
 
     try {
+      if (action === 'share') {
+        const didShare = await shareDeal(deal);
+        if (!didShare) {
+          return;
+        }
+      }
+
+      const updatedDeal = applyDealEngagement(deal, action);
+      replaceDealInState(updatedDeal);
+
       if (hasSupabaseConfig) {
         const persistedDeal = await upsertDealInBackend(updatedDeal);
         replaceDealInState(persistedDeal, deal.id);
@@ -4150,6 +5258,7 @@ export default function App() {
         error,
       });
     } finally {
+      dealEngagementLocksRef.current.delete(deal.id);
       setDealEngagementPending((prev) => ({ ...prev, [deal.id]: null }));
     }
   };
@@ -4160,41 +5269,70 @@ export default function App() {
   const forceRefreshDealsView = () => setDeals((prevDeals) => [...prevDeals]);
 
   const confirmClaim = (deal: Deal): Claim => {
-    const existingClaim = claims.find(c => c.dealId === deal.id);
+    const liveDeal = latestDealsRef.current.find((candidate) => candidate.id === deal.id) ?? deal;
+    const existingClaim = latestClaimsRef.current.find(c => c.dealId === liveDeal.id);
     if (existingClaim) {
       return existingClaim;
     }
 
-    if (deal.currentClaims >= deal.maxClaims || deal.expiresAt <= Date.now()) {
+    const liveClaimCount = liveDeal.claimCount ?? liveDeal.currentClaims;
+    if (liveClaimCount >= liveDeal.maxClaims || liveDeal.expiresAt <= Date.now()) {
       throw new Error('This deal can no longer be claimed.');
     }
 
     const newClaim: Claim = {
-      id: Math.random().toString(36).substr(2, 9),
-      dealId: deal.id,
-      dealTitle: deal.title,
-      businessName: deal.businessName,
-      logoUrl: deal.logoUrl,
-      category: deal.category,
+      id: createUuid(),
+      dealId: liveDeal.id,
+      dealTitle: liveDeal.title,
+      businessName: liveDeal.businessName,
+      logoUrl: liveDeal.logoUrl,
+      category: liveDeal.category,
       claimCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
       claimedAt: Date.now(),
-      expiresAt: deal.expiresAt,
+      expiresAt: liveDeal.expiresAt,
       status: 'active'
     };
 
-    setClaims(prev => [newClaim, ...prev]);
+    latestClaimsRef.current = [newClaim, ...latestClaimsRef.current];
+    latestDealsRef.current = latestDealsRef.current.map((candidateDeal) =>
+      candidateDeal.id === liveDeal.id
+        ? {
+            ...candidateDeal,
+            currentClaims: Math.min(candidateDeal.maxClaims, candidateDeal.currentClaims + 1),
+            claimCount: Math.min(candidateDeal.maxClaims, (candidateDeal.claimCount ?? candidateDeal.currentClaims) + 1),
+          }
+        : candidateDeal,
+    );
+    setClaims(prev => prev.some((claim) => claim.dealId === liveDeal.id) ? prev : [newClaim, ...prev]);
     setDeals(prev =>
       prev.map(d =>
-        d.id === deal.id
-          ? { ...d, currentClaims: d.currentClaims + 1, claimCount: (d.claimCount ?? d.currentClaims) + 1 }
+        d.id === liveDeal.id
+          ? {
+              ...d,
+              currentClaims: Math.min(d.maxClaims, d.currentClaims + 1),
+              claimCount: Math.min(d.maxClaims, (d.claimCount ?? d.currentClaims) + 1),
+            }
           : d
       )
     );
-    handleSaveToCatalog(deal);
+    handleSaveToCatalog(liveDeal);
     return newClaim;
   };
 
   const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt'>) => {
+    if (dealData.businessType !== 'online' && !hasUsableCoordinates(dealData.lat, dealData.lng)) {
+      const locationError = 'Enable location access before publishing a local drop so LiveDrop can save a real nearby location.';
+      console.warn('[LiveDrop] Blocked local publish without usable coordinates', {
+        lat: dealData.lat,
+        lng: dealData.lng,
+        businessName: dealData.businessName,
+        title: dealData.title,
+      });
+      setDealsError(locationError);
+      setPortalSuccessMessage('');
+      return;
+    }
+
     const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
     const normalizedEditingDealId = normalizeUuidOrNull(editingDealId);
     const localDeal: Deal = {
@@ -4401,7 +5539,6 @@ export default function App() {
       });
 
       const mergedDeals = [...nextMap.values()].sort((left, right) => right.createdAt - left.createdAt);
-      seenDealIdsRef.current = new Set(mergedDeals.map((deal) => deal.id));
       return mergedDeals;
     });
   };
@@ -4654,6 +5791,8 @@ export default function App() {
 
   const handleViewClaims = () => {
     setSelectedDeal(null);
+    setSelectedDetailDealId(null);
+    setNotificationsOpen(false);
     setCurrentView('my-claims');
   };
 
@@ -4664,14 +5803,14 @@ export default function App() {
 
     const canRetryPublish = Boolean(lastSharedPublishFailure) && (hasAdminAccess || currentView === 'business-portal' || isAdminRoute);
 
-    return (
-      <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <p>{dealsError}</p>
-            {lastSharedPublishFailure ? (
-              <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
-                Last backend error: {lastSharedPublishFailure.reason}
+      return (
+        <div className="rounded-[1.45rem] border border-amber-100 bg-amber-50 px-4 py-3 shadow-sm shadow-amber-100/40">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold leading-6 text-amber-700">{dealsError}</p>
+              {lastSharedPublishFailure ? (
+                <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
+                  Last backend error: {lastSharedPublishFailure.reason}
               </p>
             ) : null}
           </div>
@@ -4898,11 +6037,13 @@ export default function App() {
   };
 
   const handleOpenBusinessPortal = () => {
+    setNotificationsOpen(false);
     if (LOCAL_ADMIN_MODE) {
       setRole('business');
       setSubscriptionStatus('active');
       setSubscriptionPlan(BUSINESS_PLAN_ID);
       setSubscriptionMessage('');
+      setSelectedDetailDealId(null);
       setCurrentView('business-portal');
       return;
     }
@@ -4914,6 +6055,7 @@ export default function App() {
     }
 
     setSubscriptionMessage('');
+    setSelectedDetailDealId(null);
     setCurrentView('business-portal');
   };
 
@@ -4944,7 +6086,104 @@ export default function App() {
       return;
     }
 
-    window.location.href = data.url;
+    const checkoutUrl = normalizeSafeExternalUrl(data.url);
+    if (!checkoutUrl) {
+      setSubscriptionMessage('Checkout returned an invalid redirect. Please try again.');
+      setSubscriptionLoading(false);
+      return;
+    }
+
+    window.location.assign(checkoutUrl);
+  };
+
+  const openExternalUrl = (
+    rawUrl: string | null | undefined,
+    options?: {
+      dedupeKey?: string;
+      missingMessage?: string;
+      blockedMessage?: string;
+    },
+  ) => {
+    const externalUrl = normalizeSafeExternalUrl(rawUrl);
+    if (!externalUrl) {
+      if (options?.missingMessage) {
+        pushToast(options.missingMessage, 'share');
+      }
+      return false;
+    }
+
+    const dedupeKey = options?.dedupeKey ?? externalUrl;
+    const now = Date.now();
+    const lastAction = recentExternalActionRef.current;
+    if (lastAction && lastAction.key === dedupeKey && now - lastAction.at < EXTERNAL_ACTION_COOLDOWN_MS) {
+      return false;
+    }
+
+    recentExternalActionRef.current = {
+      key: dedupeKey,
+      at: now,
+    };
+
+    const openedWindow = window.open(externalUrl, '_blank', 'noopener,noreferrer');
+    if (!openedWindow) {
+      pushToast(options?.blockedMessage ?? 'Browser blocked this link from opening.', 'share');
+      return false;
+    }
+
+    openedWindow.opener = null;
+    return true;
+  };
+
+  const openExternalDealLink = (deal: Deal) => {
+    const externalUrl = getDealPrimaryActionUrl(deal);
+    if (!externalUrl) {
+      pushToast('Deal link unavailable right now.', 'share');
+      return;
+    }
+
+    console.info('[LiveDrop] Opening deal link', {
+      dealId: deal.id,
+      title: deal.title,
+      affiliateUrl: deal.affiliateUrl ?? null,
+      websiteUrl: deal.websiteUrl ?? null,
+      productUrl: deal.productUrl ?? null,
+      externalUrl,
+    });
+
+    openExternalUrl(externalUrl, {
+      dedupeKey: `deal:${deal.id}:${externalUrl}`,
+      missingMessage: 'Deal link unavailable right now.',
+      blockedMessage: 'Allow pop-ups to open this deal.',
+    });
+  };
+
+  const openDealProductDetails = (deal: Deal) => {
+    console.info('[LiveDrop] Opening internal product details view', {
+      dealId: deal.id,
+      title: deal.title,
+      affiliateUrl: deal.affiliateUrl ?? null,
+      websiteUrl: deal.websiteUrl ?? null,
+      productUrl: deal.productUrl ?? null,
+    });
+
+    handleOpenDealDetail(deal);
+  };
+
+  const handleOpenDealDetail = (deal: Deal) => {
+    if (currentView === 'deal-detail' && selectedDetailDealId === deal.id) {
+      return;
+    }
+
+    setNotificationsOpen(false);
+    setDropMode(deal.businessType === 'online' ? 'online' : 'local');
+    setSelectedDetailDealId(deal.id);
+    setCurrentView('deal-detail');
+  };
+
+  const handleCloseDealDetail = () => {
+    setNotificationsOpen(false);
+    setCurrentView('live-deals');
+    setSelectedDetailDealId(null);
   };
 
   const handleSaveToCatalog = (deal: Deal) => {
@@ -4970,6 +6209,8 @@ export default function App() {
 
   const handleOpenCatalog = () => {
     refreshCatalogState();
+    setSelectedDetailDealId(null);
+    setNotificationsOpen(false);
     setCurrentView('catalog');
   };
 
@@ -4981,14 +6222,27 @@ export default function App() {
     const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
     const dealsWithDistance = localDeals.map(deal => {
       const dist = getEffectiveLocalDealDistance(userLocation, deal, hasPreciseUserLocation);
-      return { ...deal, computedDistanceValue: dist, computedDistanceLabel: formatDistance(dist) };
+      return {
+        ...deal,
+        computedDistanceValue: dist,
+        computedDistanceLabel: formatDistance(dist),
+        localSubcategory: getLocalDealSubcategory(deal),
+      };
     });
+    const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? []);
+    const shouldShowLocalSubcategories =
+      dropMode === 'local' && selectedCategory !== 'All' && localSubcategoryOptions.length > 0;
 
     const activeLocalDeals = dealsWithDistance
       .filter(d =>
         d.expiresAt > now &&
         d.computedDistanceValue <= radius &&
-        (selectedCategory === 'All' || d.category === selectedCategory)
+        (selectedCategory === 'All' || d.category === selectedCategory) &&
+        (
+          selectedCategory === 'All'
+          || selectedLocalSubcategory === 'All'
+          || d.localSubcategory === selectedLocalSubcategory
+        )
       )
       .sort((a, b) => a.computedDistanceValue - b.computedDistanceValue);
 
@@ -5112,16 +6366,37 @@ export default function App() {
     };
 
     const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
-    const controlHeightClass = 'h-9';
-    const controlRadiusClass = 'rounded-xl';
-    const controlPaddingClass = 'px-2.5';
-    const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.12em]';
+    const controlHeightClass = 'h-9.5';
+    const controlRadiusClass = 'rounded-[0.95rem]';
+    const controlPaddingClass = 'px-3';
+    const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.1em]';
+    const localEmptyStateMessage =
+      selectedLocalSubcategory !== 'All' && selectedFeedFilter !== 'all'
+        ? `No ${selectedFeedFilter.replace('-', ' ')} ${selectedLocalSubcategory.toLowerCase()} deals within ${radius} miles.`
+        : selectedLocalSubcategory !== 'All'
+          ? `No ${selectedLocalSubcategory.toLowerCase()} deals within ${radius} miles.`
+          : selectedFeedFilter === 'all'
+            ? `No live deals within ${radius} miles.`
+            : `No ${selectedFeedFilter.replace('-', ' ')} deals within ${radius} miles.`;
+    const handleSelectActiveCategory = (category: string) => {
+      if (dropMode === 'local') {
+        setSelectedLocalSubcategory('All');
+      }
+      setSelectedCategory(category);
+    };
     const handleLocalFeedMode = () => {
+      setNotificationsOpen(false);
+      setDropModeEnabled(false);
       setDropMode('local');
       setSelectedCategory('All');
+      setSelectedLocalSubcategory('All');
       setSelectedFeedFilter('all');
     };
     const handleOnlineFeedMode = () => {
+      setNotificationsOpen(false);
+      if (dropMode !== 'online') {
+        setDropModeEnabled(false);
+      }
       setDropMode('online');
       setSelectedCategory('All');
       setSelectedFeedFilter('all');
@@ -5139,218 +6414,256 @@ export default function App() {
     };
 
     const renderOnlineDealCard = (deal: Deal) => {
-      const externalUrl = getDealExternalUrl(deal);
+      const primaryActionUrl = getDealPrimaryActionUrl(deal);
+      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
+      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
+      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
+      const displayOfferText = deal.offerText?.trim() || 'Live Deal';
 
       return (
         <div
           key={deal.id}
-          className={`overflow-hidden rounded-[1.5rem] bg-white transition-all duration-200 ${
-            isDropModeActive
-              ? 'border border-indigo-100/80 shadow-[0_18px_38px_rgba(15,23,42,0.07)] ring-1 ring-indigo-100/40'
-              : 'border border-slate-100 shadow-sm shadow-slate-200/40'
-          }`}
-        >
-        <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
-          {deal.imageUrl ? (
-            <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-[1.02]" />
-          ) : (
-            <div className="flex h-full items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100 text-slate-300">
-              <AppIcon name="online" size={28} />
-            </div>
-          )}
-          {isDropModeActive ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
-          ) : null}
-          <div className="pointer-events-none absolute left-3 top-3">
-            <span className={`inline-flex items-center px-3 py-1.5 text-[14px] font-black uppercase tracking-[0.08em] text-white ${
+          role="button"
+          tabIndex={0}
+          aria-label={`Open details for ${deal.title}`}
+          onClick={() => handleOpenDealDetail(deal)}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleOpenDealDetail(deal);
+            }
+          }}
+            className={`overflow-hidden rounded-[1.45rem] bg-white transition-all duration-200 ${
               isDropModeActive
-                ? 'min-h-[42px] rounded-[1.05rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-4 py-2 text-[16px] shadow-[0_16px_30px_rgba(99,102,241,0.34)] ring-1 ring-white/30 backdrop-blur-sm'
-                : 'min-h-[34px] rounded-[0.95rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 shadow-[0_10px_24px_rgba(99,102,241,0.28)]'
-            }`}>
-              {getOnlineDealHeroLabel(deal.offerText)}
-            </span>
-          </div>
-          {isDropModeActive && deal.hasTimer ? (
-            <div className="pointer-events-none absolute bottom-3 left-3">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-slate-950/70 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white backdrop-blur-sm">
-                <AppIcon name="clock" size={11} />
-                Ends soon
+                ? 'border border-indigo-100/80 shadow-[0_14px_32px_rgba(15,23,42,0.08)] ring-1 ring-indigo-100/40'
+                : 'border border-slate-100 shadow-[0_10px_24px_rgba(148,163,184,0.14)]'
+            } cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2`}
+          >
+          <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
+            <DealArtwork
+              src={deal.imageUrl}
+              alt={displayTitle}
+              fit="contain"
+              iconSize={28}
+              imageClassName="p-3 transition-transform duration-500 hover:scale-[1.02]"
+            />
+            {isDropModeActive ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
+            ) : null}
+            <div className="pointer-events-none absolute left-3 top-3">
+              <span className={`inline-flex max-w-[74%] items-center px-3 py-1.5 text-center text-[13px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white ${
+                isDropModeActive
+                  ? 'min-h-[42px] rounded-[1.05rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-4 py-2 text-[16px] shadow-[0_16px_30px_rgba(99,102,241,0.34)] ring-1 ring-white/30 backdrop-blur-sm'
+                  : 'min-h-[34px] rounded-[0.95rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 shadow-[0_10px_24px_rgba(99,102,241,0.28)]'
+              }`}>
+                {getOnlineDealHeroLabel(displayOfferText)}
               </span>
             </div>
-          ) : null}
-        </div>
-        <div className={isDropModeActive ? 'p-3.5' : 'p-3'}>
-          <div className="mb-2.5 flex items-start justify-between gap-2.5">
-            <div>
-              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                {getOnlineDropTag(deal.id) ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
-                  <AppIcon name={getFeedTagIconName(getOnlineDropTag(deal.id)!)} size={11} />
-                  {getOnlineDropTag(deal.id)}
+            {isDropModeActive && deal.hasTimer ? (
+              <div className="pointer-events-none absolute bottom-3 left-3">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-slate-950/70 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white backdrop-blur-sm">
+                  <AppIcon name="clock" size={11} />
+                  Ends soon
                 </span>
-                ) : null}
-                {isDropModeActive ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600">
-                    <AppIcon name="spark" size={11} />
-                    Drop Mode Pick
-                  </span>
-                ) : null}
               </div>
-              <p className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-indigo-500">
-                <AppIcon name={getCategoryIconName(deal.category)} size={12} />
-                {getCategoryLabel(deal.category)}
-              </p>
-              <h3 className="mt-1 text-[1.02rem] font-extrabold leading-[1.2] text-slate-900">{deal.title}</h3>
-              <p className="mt-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">{deal.businessName}</p>
+            ) : null}
+          </div>
+          <div className="p-3.5">
+            <div className="mb-2.5 flex items-start justify-between gap-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                  {getOnlineDropTag(deal.id) ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
+                      <AppIcon name={getFeedTagIconName(getOnlineDropTag(deal.id)!)} size={11} />
+                      {getOnlineDropTag(deal.id)}
+                    </span>
+                  ) : null}
+                  {isDropModeActive ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600">
+                      <AppIcon name="spark" size={11} />
+                      Drop Mode Pick
+                    </span>
+                  ) : null}
+                </div>
+                <p className="inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">
+                  <AppIcon name={getCategoryIconName(deal.category)} size={12} />
+                  {getCategoryLabel(deal.category)}
+                </p>
+                <h3 className="mt-1 line-clamp-2 break-words text-[1.02rem] font-extrabold leading-[1.2] text-slate-900">{displayTitle}</h3>
+                <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
+              </div>
+              {deal.hasTimer ? (
+                <Timer
+                  expiresAt={deal.expiresAt}
+                  onExpire={forceRefreshDealsView}
+                  className={isDropModeActive ? 'rounded-full bg-indigo-50 px-2.5 py-1 text-sm text-indigo-600 shadow-sm shadow-indigo-100/70' : 'text-sm'}
+                />
+              ) : null}
             </div>
-            {deal.hasTimer ? (
-              <Timer
-                expiresAt={deal.expiresAt}
-                onExpire={forceRefreshDealsView}
-                className={isDropModeActive ? 'rounded-full bg-indigo-50 px-2.5 py-1 text-sm text-indigo-600 shadow-sm shadow-indigo-100/70' : 'text-sm'}
+            <div className={`mb-2.5 border border-indigo-100 px-3 py-2 ${
+              isDropModeActive
+                ? 'rounded-[1rem] bg-gradient-to-r from-indigo-50 via-violet-50/85 to-sky-50/80 py-2.5 shadow-inner shadow-white/60'
+                : 'rounded-[0.95rem] bg-indigo-50/80'
+            }`}>
+              <p className="line-clamp-2 break-words text-[1rem] font-black text-indigo-600">{displayOfferText}</p>
+              {isDropModeActive ? (
+                <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Limited-time price drop</p>
+              ) : null}
+            </div>
+            <p className={`mb-3 line-clamp-3 break-words text-[12px] text-slate-500 ${isDropModeActive ? 'leading-[1.6]' : 'leading-[1.55]'}`}>{displayDescription}</p>
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <DealEngagementBar
+                deal={deal}
+                pendingAction={dealEngagementPending[deal.id] ?? null}
+                onLike={handleLikeDeal}
+                onDislike={handleDislikeDeal}
+                onShare={handleShareDeal}
               />
+            </div>
+            {isAdminRoute && showDebug ? (
+              <p className="mb-3 mt-3 truncate rounded-[0.9rem] bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-400">
+                Link: {primaryActionUrl ?? 'No link saved'}
+              </p>
             ) : null}
+            <div className="mt-3 grid grid-cols-1 gap-2 min-[390px]:grid-cols-2">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openDealProductDetails(deal);
+                }}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
+              >
+                <AppIcon name="deal" size={15} />
+                <span>Product Details</span>
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openExternalDealLink(deal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                  primaryActionUrl
+                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985]'
+                    : 'cursor-not-allowed bg-slate-300 shadow-none'
+                }`}
+              >
+                <AppIcon name="deal" size={15} />
+                <span>Get Deal</span>
+              </button>
+            </div>
           </div>
-          <div className={`mb-2 border border-indigo-100 px-3 py-2 ${
-            isDropModeActive
-              ? 'rounded-[1rem] bg-gradient-to-r from-indigo-50 via-violet-50/85 to-sky-50/80 py-2.5 shadow-inner shadow-white/60'
-              : 'rounded-[0.95rem] bg-indigo-50/80'
-          }`}>
-            <p className="text-[1.02rem] font-black text-indigo-600">{deal.offerText}</p>
-            {isDropModeActive ? (
-              <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Limited-time price drop</p>
-            ) : null}
-          </div>
-          <p className={`mb-3 text-[12px] text-slate-500 ${isDropModeActive ? 'leading-[1.6]' : 'leading-[1.55]'}`}>{deal.description}</p>
-          <DealEngagementBar
-            deal={deal}
-            pendingAction={dealEngagementPending[deal.id] ?? null}
-            onLike={handleLikeDeal}
-            onDislike={handleDislikeDeal}
-            onShare={handleShareDeal}
-          />
-          {isAdminRoute && showDebug ? (
-            <p className="mb-3 mt-3 truncate rounded-[0.9rem] bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-400">
-              Link: {externalUrl ?? 'No link saved'}
-            </p>
-          ) : null}
-          {externalUrl ? (
-            <a
-              href={externalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => {
-                console.info('[LiveDrop] Opening deal link', {
-                  dealId: deal.id,
-                  title: deal.title,
-                  affiliateUrl: deal.affiliateUrl ?? null,
-                  websiteUrl: deal.websiteUrl ?? null,
-                  productUrl: deal.productUrl ?? null,
-                  externalUrl,
-                });
-              }}
-              className="group mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] bg-slate-900 px-4 text-[13px] font-black text-white transition-all shadow-lg shadow-slate-200/50 hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-xl hover:shadow-slate-300/50 active:translate-y-0 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
-            >
-              <AppIcon name="external" size={16} className="transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              <span>View Deal</span>
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="mt-3 inline-flex h-10 w-full cursor-not-allowed items-center justify-center gap-2 rounded-[1rem] bg-slate-300 px-4 text-[13px] font-black text-white shadow-none"
-            >
-              <AppIcon name="external" size={16} />
-              View Deal
-            </button>
-          )}
         </div>
-      </div>
-    );
+      );
     };
 
     const renderCompactCategoryOnlineDealCard = (deal: Deal) => {
-      const externalUrl = getDealExternalUrl(deal);
+      const primaryActionUrl = getDealPrimaryActionUrl(deal);
+      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
+      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
+      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
+      const displayOfferText = deal.offerText?.trim() || 'Live Deal';
 
       return (
         <div
           key={deal.id}
-          className="overflow-hidden rounded-[1.25rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/35 transition-all duration-200"
+          role="button"
+          tabIndex={0}
+          aria-label={`Open details for ${deal.title}`}
+          onClick={() => handleOpenDealDetail(deal)}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleOpenDealDetail(deal);
+            }
+          }}
+          className="overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
         >
-        <div className="relative aspect-[1/1] overflow-hidden bg-slate-100">
-          {deal.imageUrl ? (
-            <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover" />
-          ) : (
-            <div className="flex h-full items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100 text-slate-300">
-              <AppIcon name="online" size={24} />
+          <div className="relative aspect-[1/1] overflow-hidden bg-slate-100">
+            <DealArtwork
+              src={deal.imageUrl}
+              alt={displayTitle}
+              fit="contain"
+              iconSize={24}
+              imageClassName="p-2"
+            />
+            <div className="pointer-events-none absolute left-2 top-2">
+              <span className="inline-flex min-h-[28px] max-w-[76%] items-center rounded-[0.9rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-center text-[10px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white shadow-[0_10px_20px_rgba(99,102,241,0.22)]">
+                {getOnlineDealHeroLabel(displayOfferText)}
+              </span>
             </div>
-          )}
-          <div className="pointer-events-none absolute left-2 top-2">
-            <span className="inline-flex min-h-[28px] items-center rounded-[0.85rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.08em] text-white shadow-[0_10px_20px_rgba(99,102,241,0.22)]">
-              {getOnlineDealHeroLabel(deal.offerText)}
-            </span>
+            {deal.hasTimer ? (
+              <div className="pointer-events-none absolute bottom-2 left-2">
+                <Timer
+                  expiresAt={deal.expiresAt}
+                  onExpire={forceRefreshDealsView}
+                  className="rounded-full bg-white/92 px-2 py-1 text-[11px] font-black text-indigo-600 shadow-sm"
+                />
+              </div>
+            ) : null}
           </div>
-          {deal.hasTimer ? (
-            <div className="pointer-events-none absolute bottom-2 left-2">
-              <Timer
-                expiresAt={deal.expiresAt}
-                onExpire={forceRefreshDealsView}
-                className="rounded-full bg-white/92 px-2 py-1 text-[11px] font-black text-indigo-600 shadow-sm"
+          <div className="space-y-2.5 p-3">
+            <div className="space-y-1">
+              <p className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.14em] text-indigo-500">
+                <AppIcon name={getCategoryIconName(deal.category)} size={10} />
+                {getCategoryLabel(deal.category)}
+              </p>
+              <h3 className="line-clamp-2 break-words text-[0.92rem] font-extrabold leading-[1.2] text-slate-900">{displayTitle}</h3>
+              <p className="truncate text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
+            </div>
+            <p className="line-clamp-2 break-words text-[11px] leading-[1.5] text-slate-500">{displayDescription}</p>
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <DealEngagementBar
+                deal={deal}
+                compact
+                pendingAction={dealEngagementPending[deal.id] ?? null}
+                onLike={handleLikeDeal}
+                onDislike={handleDislikeDeal}
+                onShare={handleShareDeal}
               />
             </div>
-          ) : null}
-        </div>
-        <div className="space-y-2.5 p-2.5">
-          <div className="space-y-1">
-            <p className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">
-              <AppIcon name={getCategoryIconName(deal.category)} size={10} />
-              {getCategoryLabel(deal.category)}
-            </p>
-            <h3 className="line-clamp-2 text-[0.92rem] font-extrabold leading-[1.2] text-slate-900">{deal.title}</h3>
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{deal.businessName}</p>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openDealProductDetails(deal);
+                }}
+                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
+              >
+                <AppIcon name="deal" size={13} />
+                <span>Product Details</span>
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openExternalDealLink(deal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-9 w-full items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[11px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                  primaryActionUrl
+                    ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600'
+                    : 'cursor-not-allowed bg-slate-300 shadow-none'
+                }`}
+              >
+                <AppIcon name="deal" size={13} />
+                <span>Get Deal</span>
+              </button>
+            </div>
           </div>
-          <p className="line-clamp-2 text-[11px] leading-[1.45] text-slate-500">{deal.description}</p>
-          <DealEngagementBar
-            deal={deal}
-            compact
-            pendingAction={dealEngagementPending[deal.id] ?? null}
-            onLike={handleLikeDeal}
-            onDislike={handleDislikeDeal}
-            onShare={handleShareDeal}
-          />
-          {externalUrl ? (
-            <a
-              href={externalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => {
-                console.info('[LiveDrop] Opening deal link', {
-                  dealId: deal.id,
-                  title: deal.title,
-                  affiliateUrl: deal.affiliateUrl ?? null,
-                  websiteUrl: deal.websiteUrl ?? null,
-                  productUrl: deal.productUrl ?? null,
-                  externalUrl,
-                });
-              }}
-              className="group inline-flex h-9 w-full items-center justify-center gap-2 rounded-[0.95rem] bg-slate-900 px-3 text-[12px] font-black text-white transition-all shadow-md shadow-slate-200/40 hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-lg hover:shadow-slate-300/45 active:translate-y-0 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
-            >
-              <AppIcon name="external" size={14} className="transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              <span>View Deal</span>
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="inline-flex h-9 w-full cursor-not-allowed items-center justify-center gap-2 rounded-[0.95rem] bg-slate-300 px-3 text-[12px] font-black text-white"
-            >
-              <AppIcon name="external" size={14} />
-              View Deal
-            </button>
-          )}
         </div>
-      </div>
-    );
+      );
     };
 
     return (
@@ -5410,7 +6723,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-1.5 rounded-[1.25rem] bg-slate-100/90 p-1">
+          <div className="grid grid-cols-2 gap-1.5 rounded-[1.35rem] bg-slate-100/90 p-1">
           {[
             { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleLocalFeedMode },
             { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleOnlineFeedMode },
@@ -5418,32 +6731,32 @@ export default function App() {
             <button
               key={option.id}
               onClick={option.onClick}
-              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1rem] ${controlPaddingClass} text-[10px] font-black transition-all ${
+              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1rem] ${controlPaddingClass} text-[9px] min-[360px]:text-[10px] font-black transition-all ${
                 dropMode === option.id
-                  ? 'bg-white text-indigo-600 shadow-sm shadow-slate-200/50'
-                  : 'bg-transparent text-slate-500'
-              }`}
-            >
-              <AppIcon name={option.icon} size={16} />
-              {option.label}
+                    ? 'bg-white text-indigo-600 shadow-sm shadow-slate-200/50'
+                    : 'bg-transparent text-slate-500'
+                }`}
+              >
+                <AppIcon name={option.icon} size={16} />
+                {option.label}
             </button>
           ))}
         </div>
 
         {/* Location & Radius Header */}
         {dropMode === 'local' ? (
-          <div className="bg-white border border-slate-100 rounded-[1.45rem] p-3 shadow-sm shadow-slate-200/40 mb-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <div className={`p-2 rounded-xl ${locationStatus === 'success' ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
-                  <AppIcon name="pin" size={18} className={locationStatus === 'loading' ? 'animate-spin' : ''} />
-                </div>
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Your Location</p>
-                  <p className="text-[13px] font-semibold text-slate-700">
-                    {locationDisplayName}
-                  </p>
-                  {locationStatus !== 'success' ? (
+            <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white p-3.5 shadow-sm shadow-slate-200/35">
+              <div className="mb-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`rounded-[0.95rem] p-2 ${hasPreciseUserLocation ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
+                    <AppIcon name="pin" size={18} className={locationStatus === 'loading' ? 'animate-spin' : ''} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Your Location</p>
+                    <p className="text-[13px] font-semibold text-slate-700">
+                      {locationDisplayName}
+                    </p>
+                  {!hasPreciseUserLocation ? (
                     <p className="mt-0.5 text-[11px] font-medium text-slate-400">
                       Enable location for accurate nearby deals.
                     </p>
@@ -5460,8 +6773,8 @@ export default function App() {
             </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-              <span className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">Search Radius</span>
-              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-[0.9rem]">
+              <span className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Search Radius</span>
+              <div className="flex items-center gap-1 rounded-[0.95rem] bg-slate-50 p-1">
                 {RADIUS_OPTIONS.map(r => (
                   <button
                     key={r}
@@ -5479,15 +6792,15 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="rounded-[1.45rem] border border-slate-100 bg-white p-3 shadow-sm shadow-slate-200/40 mb-3">
-            <div className="flex items-center justify-between gap-3">
+          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white p-3.5 shadow-sm shadow-slate-200/35">
+            <div className="flex items-start justify-between gap-2.5">
               <div className="flex min-w-0 items-center gap-2.5">
-                <div className="rounded-[1rem] bg-indigo-50 p-2.5 text-indigo-600">
+                <div className="rounded-[1rem] bg-indigo-50 p-2.5 text-indigo-600 shadow-inner shadow-white/70">
                   <AppIcon name="online" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Online</p>
-                  <p className="text-[13px] font-semibold text-slate-700">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Online</p>
+                  <p className="text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.45] text-slate-700">
                     {isDropModeActive
                       ? 'Curated for speed: bigger savings, shorter windows.'
                       : 'Turn on Drop Mode for the fastest, best-value online drops.'}
@@ -5495,7 +6808,7 @@ export default function App() {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <span className={`text-[9px] font-black uppercase tracking-[0.16em] ${isDropModeActive ? 'text-indigo-600' : 'text-slate-400'}`}>
+                <span className={`text-[8px] min-[360px]:text-[9px] font-black uppercase tracking-[0.12em] ${isDropModeActive ? 'text-indigo-600' : 'text-slate-400'}`}>
                   {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
                 </span>
                 <button
@@ -5503,7 +6816,7 @@ export default function App() {
                   onClick={handleDropModeToggle}
                   aria-pressed={isDropModeActive}
                   aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                  className={`group relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-[1.05rem] border transition-all ${
+                  className={`group relative flex h-11 w-11 min-[360px]:h-12 min-[360px]:w-12 items-center justify-center overflow-hidden rounded-[1.05rem] border transition-all ${
                     isDropModeActive
                       ? 'border-fuchsia-300 bg-slate-950 text-white shadow-[0_0_0_1px_rgba(129,140,248,0.35),0_14px_32px_rgba(79,70,229,0.24)]'
                       : 'border-slate-200 bg-slate-50 text-indigo-600 shadow-sm shadow-slate-200/50'
@@ -5517,7 +6830,7 @@ export default function App() {
                   <img
                     src={brandBoltLogo}
                     alt=""
-                    className={`relative z-10 h-[22px] w-[22px] object-contain transition-transform ${isDropModeActive ? 'scale-110 drop-shadow-[0_0_12px_rgba(129,140,248,0.7)]' : 'scale-100 group-hover:scale-105'}`}
+                    className={`relative z-10 h-5 w-5 min-[360px]:h-[22px] min-[360px]:w-[22px] object-contain transition-transform ${isDropModeActive ? 'scale-110 drop-shadow-[0_0_12px_rgba(129,140,248,0.7)]' : 'scale-100 group-hover:scale-105'}`}
                   />
                 </button>
               </div>
@@ -5526,24 +6839,24 @@ export default function App() {
         )}
 
         {isOnlineMode ? (
-          <div className="relative mb-2 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-4 py-3.5 shadow-[0_14px_32px_rgba(148,163,184,0.12)]">
+          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-3.5 max-[359px]:px-3 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
-            <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg]">
-              <AppIcon name={onlineHeroIconName} size={58} strokeWidth={1.35} />
+            <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
+              <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
-            <span className={`absolute right-4 top-3.5 inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${
+            <span className={`absolute right-3 top-3 inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:right-4 min-[360px]:top-3.5 min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
               isDropModeActive
                 ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
                 : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
             }`}>
               {sortedOnlineDealsByTab.length} Drops
             </span>
-            <div className="relative z-10 min-w-0 pr-20">
-              <p className="text-[8px] font-black uppercase tracking-[0.22em] text-slate-400/90">Online</p>
-              <h2 className="mt-2 text-[1.3rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
+            <div className="relative z-10 min-w-0 pr-[4.4rem] min-[360px]:pr-20">
+              <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
+              <h2 className="mt-2 text-[1.18rem] min-[360px]:text-[1.3rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
                 {onlineHeadline}
               </h2>
-              <p className="mt-1.5 max-w-[13.75rem] text-[11.5px] font-medium leading-[1.5] text-slate-500/95">
+              <p className="mt-1.5 max-w-[12.2rem] min-[360px]:max-w-[13.75rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.5] text-slate-500/95">
                 {onlineCategoryDescription}
               </p>
             </div>
@@ -5559,16 +6872,18 @@ export default function App() {
           </div>
         )}
 
-        <div className="overflow-x-auto pb-0.5 -mx-0.5">
+        <div className="overflow-x-auto pb-1 -mx-0.5">
           <div className="flex min-w-max items-center gap-1.5 px-1">
             {activeCategoryOptions.map(category => (
               <button
                 key={category}
-                onClick={() => setSelectedCategory(category)}
-                className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all duration-200 ${
+                type="button"
+                aria-pressed={selectedCategory === category}
+                onClick={() => handleSelectActiveCategory(category)}
+                className={`inline-flex shrink-0 ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all duration-200 ${
                   selectedCategory === category
                     ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/40 ring-2 ring-indigo-100/70'
-                    : 'border-transparent bg-slate-50 text-slate-500 hover:text-slate-700'
+                    : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                 }`}
               >
                 <span className="inline-flex items-center gap-1.5">
@@ -5580,7 +6895,48 @@ export default function App() {
           </div>
         </div>
 
-        <div className="overflow-x-auto pb-0.5 -mx-0.5">
+        {dropMode === 'local' ? (
+          <div
+            aria-hidden={!shouldShowLocalSubcategories}
+            className={`overflow-hidden transition-all duration-200 ease-out ${
+              shouldShowLocalSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
+            }`}
+          >
+            <div className="overflow-x-auto -mx-0.5">
+              <div className="flex min-w-max items-center gap-1.5 px-1 pt-1">
+                <button
+                  type="button"
+                  aria-pressed={selectedLocalSubcategory === 'All'}
+                  onClick={() => setSelectedLocalSubcategory('All')}
+                  className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                    selectedLocalSubcategory === 'All'
+                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                  }`}
+                >
+                  All {getCategoryLabel(selectedCategory)}
+                </button>
+                {localSubcategoryOptions.map((subcategory) => (
+                  <button
+                    key={subcategory}
+                    type="button"
+                    aria-pressed={selectedLocalSubcategory === subcategory}
+                    onClick={() => setSelectedLocalSubcategory(subcategory)}
+                    className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                      selectedLocalSubcategory === subcategory
+                        ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                        : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                    }`}
+                  >
+                    {subcategory}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="overflow-x-auto pb-1 -mx-0.5">
           <div className="flex min-w-max items-center gap-1.5 px-1">
             {[
               { id: 'all', label: 'All' },
@@ -5594,7 +6950,7 @@ export default function App() {
                 className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
                   selectedFeedFilter === filter.id
                     ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
-                    : 'border-transparent bg-slate-50 text-slate-500 hover:text-slate-700'
+                    : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                 }`}
               >
                 <span className="inline-flex items-center gap-1.5">
@@ -5606,7 +6962,7 @@ export default function App() {
           </div>
         </div>
 
-        <section className="space-y-2">
+        <section className="space-y-2.5">
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               filteredActiveLocalDeals.map(deal => (
@@ -5628,14 +6984,12 @@ export default function App() {
                 />
               ))
             ) : (
-              <div className="text-center py-10 bg-white rounded-[1.7rem] border border-dashed border-slate-200 shadow-sm shadow-slate-200/30">
+              <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
                   <AppIcon name="alert" size={28} />
                 </div>
                 <p className="text-slate-500 font-semibold">
-                  {selectedFeedFilter === 'all'
-                    ? `No live deals within ${radius} miles.`
-                    : `No ${selectedFeedFilter.replace('-', ' ')} deals within ${radius} miles.`}
+                  {localEmptyStateMessage}
                 </p>
                 <p className="text-slate-300 text-xs mt-1.5">Try changing filters or check back later.</p>
                 <button 
@@ -5656,18 +7010,18 @@ export default function App() {
             isOnlineCategoryView ? (
               pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
-                  <div className="rounded-[1.6rem] border border-slate-100 bg-slate-50/55 p-2.5 transition-all duration-200">
-                    <div className="grid grid-cols-2 gap-2.5">
+                  <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
+                    <div className="grid grid-cols-1 gap-2.5 min-[360px]:grid-cols-2">
                       {visibleCategoryOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
                     </div>
                   </div>
                   {totalCategoryOnlinePages > 1 ? (
-                    <div className="flex items-center justify-between gap-3 rounded-[1.3rem] border border-slate-100 bg-white px-3 py-2 shadow-sm shadow-slate-200/35">
+                    <div className="flex items-center justify-between gap-2 rounded-[1.3rem] border border-slate-100 bg-white px-2.5 py-2 min-[360px]:gap-3 min-[360px]:px-3 shadow-sm shadow-slate-200/35">
                       <button
                         type="button"
                         onClick={() => setOnlineCategoryPage((current) => Math.max(0, current - 1))}
                         disabled={safeOnlineCategoryPage === 0}
-                        className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-[0.95rem] px-3 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${
+                        className={`inline-flex h-9 items-center justify-center gap-1 rounded-[0.95rem] px-2.5 text-[9px] min-[360px]:gap-1.5 min-[360px]:px-3 min-[360px]:text-[10px] font-black uppercase tracking-[0.12em] transition-all ${
                           safeOnlineCategoryPage === 0
                             ? 'cursor-not-allowed bg-slate-100 text-slate-300'
                             : 'bg-slate-900 text-white shadow-sm shadow-slate-200/60 hover:bg-slate-800'
@@ -5676,7 +7030,7 @@ export default function App() {
                         <AppIcon name="play" size={11} className="rotate-180" />
                         Prev
                       </button>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         {categoryOnlineDealPages.map((_, pageIndex) => (
                           <button
                             key={`online-category-page-${pageIndex}`}
@@ -5695,7 +7049,7 @@ export default function App() {
                         type="button"
                         onClick={() => setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1))}
                         disabled={safeOnlineCategoryPage >= totalCategoryOnlinePages - 1}
-                        className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-[0.95rem] px-3 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${
+                        className={`inline-flex h-9 items-center justify-center gap-1 rounded-[0.95rem] px-2.5 text-[9px] min-[360px]:gap-1.5 min-[360px]:px-3 min-[360px]:text-[10px] font-black uppercase tracking-[0.12em] transition-all ${
                           safeOnlineCategoryPage >= totalCategoryOnlinePages - 1
                             ? 'cursor-not-allowed bg-slate-100 text-slate-300'
                             : 'bg-slate-900 text-white shadow-sm shadow-slate-200/60 hover:bg-slate-800'
@@ -5708,7 +7062,7 @@ export default function App() {
                   ) : null}
                 </div>
               ) : (
-                <div className="text-center py-10 bg-white rounded-[1.7rem] border border-dashed border-slate-200 shadow-sm shadow-slate-200/30">
+                <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
                   <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
                     <AppIcon name="alert" size={28} />
                   </div>
@@ -5726,7 +7080,7 @@ export default function App() {
                   {sortedOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
                 </div>
               ) : (
-                <div className="text-center py-10 bg-white rounded-[1.7rem] border border-dashed border-slate-200 shadow-sm shadow-slate-200/30">
+                <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
                   <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
                     <AppIcon name="alert" size={28} />
                   </div>
@@ -5761,6 +7115,237 @@ export default function App() {
             </div>
           </div>
         )}
+      </div>
+    );
+  };
+
+  const renderDealDetail = () => {
+    if (!selectedDetailDeal) {
+      return (
+        <div className="rounded-[1.8rem] border border-slate-100 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/35">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[1.4rem] bg-slate-50 text-slate-300">
+            <AppIcon name="deal" size={24} />
+          </div>
+          <p className="mt-4 text-sm font-bold text-slate-500">That deal is no longer available.</p>
+          <button
+            type="button"
+            onClick={handleCloseDealDetail}
+            className="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-[0.95rem] bg-slate-900 px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white"
+          >
+            <AppIcon name="play" size={13} className="rotate-180" />
+            Back to Live
+          </button>
+        </div>
+      );
+    }
+
+    const detailExternalUrl = getDealExternalUrl(selectedDetailDeal);
+    const priceSnapshot = getDealPriceSnapshot(selectedDetailDeal);
+    const currentPriceLabel = getDetailPricePrimaryLabel(selectedDetailDeal);
+    const originalPriceLabel = getDetailOriginalPriceLabel(selectedDetailDeal);
+    const discountLabel = getDetailDiscountLabel(selectedDetailDeal);
+    const isSavedToCatalog = catalogCoupons.some((coupon) => coupon.dealId === selectedDetailDeal.id && coupon.status === 'active');
+    const canSaveToCatalogDeal = canSaveDealToCatalog(selectedDetailDeal);
+    const relatedDeals = deals
+      .filter((deal) =>
+        deal.id !== selectedDetailDeal.id
+        && deal.businessType === 'online'
+        && deal.category === selectedDetailDeal.category
+        && deal.expiresAt > Date.now(),
+      )
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, 3);
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleCloseDealDetail}
+            className="inline-flex h-10 items-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500 shadow-sm shadow-slate-200/35 transition-colors hover:bg-slate-50"
+          >
+            <AppIcon name="play" size={12} className="rotate-180" />
+            Back
+          </button>
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-50 px-2.5 py-1 text-[9px] min-[360px]:px-3 min-[360px]:text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">
+              <AppIcon name={getCategoryIconName(selectedDetailDeal.category)} size={12} />
+              {getCategoryLabel(selectedDetailDeal.category)}
+            </span>
+        </div>
+
+        <div className="overflow-hidden rounded-[2rem] border border-slate-100 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+          <div className="relative aspect-[1/1] overflow-hidden bg-[linear-gradient(180deg,rgba(248,250,252,0.92),rgba(241,245,249,0.98))]">
+            <DealArtwork
+              src={selectedDetailDeal.imageUrl}
+              alt={selectedDetailDeal.title}
+              fit="contain"
+              iconSize={52}
+              imageClassName="p-4"
+            />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
+            <div className="pointer-events-none absolute left-4 top-4">
+              <span className="inline-flex min-h-[34px] items-center rounded-[0.95rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-3 py-1.5 text-[12px] font-black uppercase tracking-[0.08em] text-white shadow-[0_12px_28px_rgba(99,102,241,0.28)]">
+                {selectedDetailDeal.offerText}
+              </span>
+            </div>
+            {selectedDetailDeal.hasTimer ? (
+              <div className="pointer-events-none absolute bottom-4 left-4">
+                <Timer
+                  expiresAt={selectedDetailDeal.expiresAt}
+                  onExpire={forceRefreshDealsView}
+                  className="rounded-full bg-white/92 px-3 py-1.5 text-[12px] font-black text-indigo-600 shadow-sm"
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-4 p-4">
+            <div className="flex items-start gap-3">
+              <CompanyLogo
+                businessName={selectedDetailDeal.businessName}
+                logoUrl={selectedDetailDeal.logoUrl}
+                category={selectedDetailDeal.category}
+                size={44}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{selectedDetailDeal.businessName}</p>
+                <h1 className="mt-1 text-[1.28rem] font-black leading-[1.12] tracking-[-0.04em] text-slate-900">
+                  {selectedDetailDeal.title}
+                </h1>
+                <p className="mt-2 text-[12px] leading-[1.55] text-slate-500">{selectedDetailDeal.description}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 min-[360px]:grid-cols-3">
+              <div className="rounded-[1.2rem] border border-indigo-100 bg-indigo-50/90 px-3 py-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">Current</p>
+                <p className="mt-2 text-[1.08rem] font-black tracking-[-0.04em] text-indigo-700">{currentPriceLabel}</p>
+              </div>
+              <div className="rounded-[1.2rem] border border-slate-100 bg-slate-50/90 px-3 py-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Original</p>
+                <p className="mt-2 text-[1rem] font-black tracking-[-0.03em] text-slate-700">
+                  {originalPriceLabel}
+                </p>
+              </div>
+              <div className="rounded-[1.2rem] border border-violet-100 bg-violet-50/90 px-3 py-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-violet-500">Discount</p>
+                <p className="mt-2 text-[1rem] font-black tracking-[-0.03em] text-violet-700">{discountLabel}</p>
+              </div>
+            </div>
+
+            {(priceSnapshot.currentPrice !== null || priceSnapshot.originalPrice !== null || priceSnapshot.discountPercent !== null) ? (
+              <p className="text-[11px] font-medium leading-[1.5] text-slate-400">
+                {priceSnapshot.currentPrice !== null ? `Current deal price ${formatPriceValue(priceSnapshot.currentPrice) ?? currentPriceLabel}. ` : ''}
+                {priceSnapshot.originalPrice !== null ? `Original price ${formatPriceValue(priceSnapshot.originalPrice) ?? originalPriceLabel}. ` : ''}
+                {priceSnapshot.discountPercent !== null ? `${priceSnapshot.discountPercent}% off right now.` : ''}
+              </p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => openExternalDealLink(selectedDetailDeal)}
+              disabled={!detailExternalUrl}
+              className={`inline-flex h-12 w-full items-center justify-center gap-2 rounded-[1.15rem] px-4 text-[13px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg ${
+                detailExternalUrl
+                  ? 'bg-slate-900 shadow-slate-200/55 hover:bg-slate-800'
+                  : 'cursor-not-allowed bg-slate-300 shadow-none'
+              }`}
+            >
+              <AppIcon name="external" size={16} />
+              Get Deal
+            </button>
+
+            <div className="grid grid-cols-1 gap-2 min-[390px]:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => handleLikeDeal(selectedDetailDeal)}
+                disabled={dealEngagementPending[selectedDetailDeal.id] === 'like'}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/85 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-60"
+              >
+                <AppIcon name="like" size={12} />
+                Like
+                <span className="text-slate-400">{Math.max(0, selectedDetailDeal.likeCount ?? 0)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDislikeDeal(selectedDetailDeal)}
+                disabled={dealEngagementPending[selectedDetailDeal.id] === 'dislike'}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/85 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-60"
+              >
+                <AppIcon name="dislike" size={12} />
+                Dislike
+                <span className="text-slate-400">{Math.max(0, selectedDetailDeal.dislikeCount ?? 0)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isSavedToCatalog && canSaveToCatalogDeal) {
+                    handleSaveToCatalog(selectedDetailDeal);
+                  }
+                }}
+                disabled={!canSaveToCatalogDeal || isSavedToCatalog}
+                className={`inline-flex h-10 items-center justify-center gap-2 rounded-[1rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                  isSavedToCatalog
+                    ? 'border-emerald-100 bg-emerald-50 text-emerald-600'
+                    : canSaveToCatalogDeal
+                      ? 'border-slate-200 bg-slate-50/85 text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600'
+                      : 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-300'
+                }`}
+              >
+                <AppIcon name="catalog" size={12} />
+                {isSavedToCatalog ? 'Saved' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleShareDeal(selectedDetailDeal)}
+                disabled={dealEngagementPending[selectedDetailDeal.id] === 'share'}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/85 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-sky-200 hover:bg-sky-50 hover:text-sky-600 disabled:opacity-60"
+              >
+                <AppIcon name="share" size={12} />
+                Share
+                <span className="text-slate-400">{Math.max(0, selectedDetailDeal.shareCount ?? 0)}</span>
+              </button>
+            </div>
+
+            {catalogSaveFeedback[selectedDetailDeal.id] ? (
+              <p className="text-center text-xs font-semibold text-emerald-600">{catalogSaveFeedback[selectedDetailDeal.id]}</p>
+            ) : null}
+          </div>
+        </div>
+
+        {relatedDeals.length > 0 ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Related Deals</p>
+              <h2 className="mt-1 text-lg font-black text-slate-900">More in {getCategoryLabel(selectedDetailDeal.category)}</h2>
+            </div>
+            <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2">
+              {relatedDeals.map((deal) => (
+                <button
+                  key={`related-deal-${deal.id}`}
+                  type="button"
+                  onClick={() => handleOpenDealDetail(deal)}
+                  className="overflow-hidden rounded-[1.4rem] border border-slate-100 bg-white text-left shadow-sm shadow-slate-200/35 transition-transform hover:-translate-y-0.5"
+                >
+                  <div className="aspect-[1/1] overflow-hidden bg-slate-100">
+                    <DealArtwork
+                      src={deal.imageUrl}
+                      alt={deal.title}
+                      fit="contain"
+                      iconSize={24}
+                      imageClassName="p-2"
+                    />
+                  </div>
+                  <div className="space-y-1.5 p-3">
+                    <p className="text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">{deal.businessName}</p>
+                    <h3 className="line-clamp-2 text-[0.88rem] font-extrabold leading-[1.2] text-slate-900">{deal.title}</h3>
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600">{deal.offerText}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -6203,7 +7788,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 min-[360px]:grid-cols-3">
           {catalogStatCards.map((stat) => (
             <div key={stat.label} className={`rounded-[1.35rem] border px-3 py-3 ${stat.tone}`}>
               <p className="text-[9px] font-black uppercase tracking-[0.14em] opacity-80">{stat.label}</p>
@@ -6521,6 +8106,16 @@ export default function App() {
       const optionalMissingFields = portalCoverage.missingOptional;
       const completionPercent = portalCoverage.completionPercent;
       const normalizedJson = aiFinderResult?.generatedJson || (previewDeal ? JSON.stringify(previewDeal, null, 2) : '');
+      const effectiveScanLayer = buildFallbackScanLayer(aiFinderResult);
+      const effectiveNormalizedDigest = aiFinderResult?.normalizedDigest ?? buildFallbackNormalizedDigest(previewDeal);
+      const effectiveMappedForm = aiFinderResult?.mappedForm ?? buildFallbackMappedForm(previewDeal);
+      const effectiveValidationResult = aiFinderResult?.validationResult ?? buildFallbackValidationResult(aiFinderResult);
+      const rawScanJson = effectiveScanLayer ? JSON.stringify(effectiveScanLayer, null, 2) : '';
+      const normalizedDigestJson = effectiveNormalizedDigest ? JSON.stringify(effectiveNormalizedDigest, null, 2) : '';
+      const mappedFormJson = effectiveMappedForm ? JSON.stringify(effectiveMappedForm, null, 2) : '';
+      const validationWarnings = effectiveValidationResult?.warnings ?? [];
+      const validationFieldStates = effectiveValidationResult?.fieldStates ?? [];
+      const mappedFieldMappings = effectiveMappedForm?.fieldMappings ?? [];
       const priceText = formatFinderPrice(previewDeal?.price);
       const originalPriceText = formatFinderPrice(previewDeal?.originalPrice);
       const hasAcceptedUrl = Boolean(aiFinderDirectUrl);
@@ -6531,6 +8126,10 @@ export default function App() {
       const canFillPortal = Boolean(aiFinderDirectUrl);
       const portalMappingReady = filledFields.length > 0;
       const portalMappingSucceeded = portalMappingReady && requiredMissingFields.length === 0;
+      const hasScanLayerData = Boolean(effectiveScanLayer);
+      const hasNormalizedDigestData = Boolean(effectiveNormalizedDigest);
+      const hasMappedFormData = Boolean(effectiveMappedForm);
+      const validationStatus = effectiveValidationResult?.status ?? (aiFinderResult ? 'partial' : 'blocked');
       const requiredFilledCount = portalCoverage.required.filter((field) => field.filled).length;
       const optionalFilledCount = portalCoverage.optional.filter((field) => field.filled).length;
       const assistantInputs = [
@@ -6545,24 +8144,35 @@ export default function App() {
           key: 'extract',
           label: 'Stage 1',
           title: 'Extract',
-          status: extractionSucceeded ? 'Ready' : extractionFailed ? 'Partial' : hasAcceptedUrl ? 'Pending' : 'Awaiting URL',
-          tone: extractionSucceeded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : extractionFailed ? 'bg-amber-100 text-amber-700 border-amber-200' : hasAcceptedUrl ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+          status: hasScanLayerData ? (extractionSucceeded ? 'Ready' : extractionFailed ? 'Partial' : 'Ready') : hasAcceptedUrl ? 'Pending' : 'Awaiting URL',
+          tone: hasScanLayerData
+            ? extractionSucceeded
+              ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+              : 'bg-amber-100 text-amber-700 border-amber-200'
+            : hasAcceptedUrl
+              ? 'bg-sky-100 text-sky-700 border-sky-200'
+              : 'bg-slate-100 text-slate-600 border-slate-200',
         },
         {
           key: 'normalize',
           label: 'Stage 2',
           title: 'Normalize',
-          status: aiFinderResult?.generatedJson ? 'Ready' : aiFinderResult?.normalizedDeal ? 'Preview Ready' : 'Pending',
-          tone: aiFinderResult?.generatedJson ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : aiFinderResult?.normalizedDeal ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+          status: aiFinderResult?.generatedJson ? 'Ready' : hasNormalizedDigestData ? 'Preview Ready' : 'Pending',
+          tone: aiFinderResult?.generatedJson ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : hasNormalizedDigestData ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-100 text-slate-600 border-slate-200',
         },
         {
           key: 'map',
           label: 'Stage 3',
           title: 'Map to Portal',
-          status: portalMappingSucceeded ? 'Ready' : portalMappingReady ? 'Partial' : 'Pending',
-          tone: portalMappingSucceeded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : portalMappingReady ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200',
+          status: hasMappedFormData ? (validationStatus === 'blocked' ? 'Review' : 'Ready') : 'Pending',
+          tone: hasMappedFormData
+            ? validationStatus === 'blocked'
+              ? 'bg-amber-100 text-amber-700 border-amber-200'
+              : 'bg-emerald-100 text-emerald-700 border-emerald-200'
+            : 'bg-slate-100 text-slate-600 border-slate-200',
         },
       ];
+      const jsonPanelBodyClassName = 'max-h-[360px] min-h-[220px] w-full overflow-auto overscroll-contain px-4 py-4 text-xs leading-6 text-slate-200 whitespace-pre-wrap break-words';
 
       return (
         <div className="space-y-4">
@@ -6570,8 +8180,8 @@ export default function App() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl">
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Quick Coupon Creator</p>
-              <h3 className="mt-1 text-lg font-black text-slate-900">Paste a product or affiliate URL, generate the coupon fields, then fill the portal</h3>
-              <p className="mt-1 text-sm leading-6 text-slate-500">This is now the primary admin workflow. LiveDrop keeps the cleaned product link, merchant, and website domain even when deeper extraction is partial, so reliable coupon creation no longer depends on AI search success.</p>
+              <h3 className="mt-1 text-lg font-black text-slate-900">Paste the full product URL, add the affiliate link, then fill the portal</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-500">LiveDrop now keeps the source product URL separate from the outbound affiliate link, so import pulls clean Amazon product data while Get Deal buttons still use the SiteStripe tracking URL.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
@@ -6592,18 +8202,35 @@ export default function App() {
           </div>
 
           <div className="mt-5 rounded-[1.5rem] border border-slate-100 bg-slate-50/60 p-4">
-            <label className="block">
-              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product Or Affiliate URL</span>
-              <input
-                ref={aiFinderUrlInputRef}
-                type="url"
-                value={aiFinderUrl}
-                onChange={(event) => setAiFinderUrl(event.target.value)}
-                placeholder="https://www.amazon.com/... or a direct affiliate link"
-                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
-              />
-              <p className="mt-2 text-xs leading-5 text-slate-400">Direct URL is the trusted entry point. The app will always keep the cleaned link, merchant, and website domain, so the portal still gets the important coupon fields even if deeper extraction fails.</p>
-            </label>
+            <div className="grid gap-3">
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Source Product URL</span>
+                <input
+                  ref={aiFinderUrlInputRef}
+                  type="url"
+                  value={aiFinderUrl}
+                  onChange={(event) => setAiFinderUrl(event.target.value)}
+                  placeholder="https://www.amazon.com/dp/..."
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+                {aiFinderUrl.trim() && !aiFinderDirectUrl ? (
+                  <p className="mt-2 text-xs font-semibold leading-5 text-amber-600">{aiFinderSourceValidation.error}</p>
+                ) : (
+                  <p className="mt-2 text-xs leading-5 text-slate-400">Use the full product page URL here. LiveDrop imports the title, image, merchant, price, and source metadata from this page.</p>
+                )}
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Affiliate / Outbound Link</span>
+                <input
+                  type="url"
+                  value={aiFinderAffiliateUrl}
+                  onChange={(event) => setAiFinderAffiliateUrl(event.target.value)}
+                  placeholder="https://amzn.to/... or another tracking link"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-400">Optional, but recommended. If provided, every Get Deal or outbound CTA will use this tracking link instead of the raw product page URL.</p>
+              </label>
+            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button
@@ -6687,6 +8314,151 @@ export default function App() {
 
           {aiFinderResult ? (
             <div className="mt-5 space-y-4">
+              <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
+                <div className="flex min-w-0 h-full flex-col overflow-hidden rounded-[1.75rem] border border-slate-100 bg-white shadow-sm">
+                  <div className="shrink-0 border-b border-slate-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Scan Layer</p>
+                    <p className="mt-1 text-sm text-slate-500">Raw provider scan output before normalization touches anything.</p>
+                  </div>
+                  <div className="min-h-0 flex-1 p-4">
+                    <div className="overflow-hidden rounded-[1.2rem] border border-slate-900 bg-slate-950 shadow-inner shadow-black/20">
+                      <pre className={jsonPanelBodyClassName}>{rawScanJson || 'No raw scan result yet.'}</pre>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex min-w-0 h-full flex-col overflow-hidden rounded-[1.75rem] border border-slate-100 bg-white shadow-sm">
+                  <div className="shrink-0 border-b border-slate-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Normalize / Digest Layer</p>
+                    <p className="mt-1 text-sm text-slate-500">Stable internal deal schema after provider-specific scan data is digested.</p>
+                  </div>
+                  <div className="min-h-0 flex-1 p-4">
+                    <div className="overflow-hidden rounded-[1.2rem] border border-slate-900 bg-slate-950 shadow-inner shadow-black/20">
+                      <pre className={jsonPanelBodyClassName}>{normalizedDigestJson || 'No normalized digest yet.'}</pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:items-stretch">
+                <div className="flex min-w-0 h-full flex-col overflow-hidden rounded-[1.75rem] border border-slate-100 bg-white shadow-sm">
+                  <div className="shrink-0 border-b border-slate-100 px-5 py-5">
+                    <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Validation Layer</p>
+                      <p className="mt-1 text-sm text-slate-500">Warnings stay separate so weak or missing fields never get silently invented.</p>
+                    </div>
+                    <span className={`inline-flex h-8 shrink-0 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${
+                      validationStatus === 'ready'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : validationStatus === 'partial'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-rose-100 text-rose-700'
+                    }`}>
+                      {validationStatus}
+                    </span>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 space-y-4 overflow-auto px-5 pb-5 pt-4">
+                    {validationWarnings.length > 0 ? validationWarnings.map((warning, index) => (
+                      <div key={`${warning.field}-${index}`} className={`min-w-0 rounded-xl border px-3 py-3 ${
+                        warning.severity === 'error'
+                          ? 'border-rose-100 bg-rose-50/80'
+                          : 'border-amber-100 bg-amber-50/80'
+                      }`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className={`min-w-0 break-words text-[10px] font-black uppercase tracking-[0.12em] ${
+                            warning.severity === 'error' ? 'text-rose-600' : 'text-amber-600'
+                          }`}>
+                            {warning.field}
+                          </p>
+                          <span className={`inline-flex h-6 shrink-0 items-center justify-center rounded-full px-2.5 text-[8px] font-black uppercase tracking-[0.08em] ${
+                            warning.severity === 'error'
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {warning.severity}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">{warning.message}</p>
+                      </div>
+                    )) : (
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 px-3 py-3">
+                        <p className="text-sm font-semibold text-emerald-700">
+                          {aiFinderResult?.validationResult
+                            ? 'No validation warnings. The normalized digest is ready for form mapping.'
+                            : 'No blocking validation issues were derived from this response. Review the mapped values before autofill.'}
+                        </p>
+                      </div>
+                    )}
+
+                    {validationFieldStates.length > 0 ? (
+                      <div className="overflow-hidden rounded-2xl border border-slate-100">
+                        <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Field States</p>
+                      </div>
+                      <div className="max-h-[260px] overflow-auto divide-y divide-slate-100">
+                        {validationFieldStates.map((state) => (
+                          <div key={state.field} className="min-w-0 px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="min-w-0 break-words text-sm font-semibold text-slate-700">{state.field}</p>
+                              <span className={`inline-flex h-6 shrink-0 items-center justify-center rounded-full px-2.5 text-[8px] font-black uppercase tracking-[0.08em] ${
+                                state.status === 'ready'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : state.status === 'weak'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {state.status}
+                              </span>
+                            </div>
+                            <p className="mt-1 break-words text-xs leading-5 text-slate-500">{state.message}</p>
+                            <p className="mt-1 break-words text-[11px] font-medium text-slate-400">Source: {state.source ?? 'Missing'} | Confidence: {state.confidence}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="flex min-w-0 h-full flex-col overflow-hidden rounded-[1.75rem] border border-slate-100 bg-white shadow-sm">
+                  <div className="shrink-0 border-b border-slate-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Form Mapping Layer</p>
+                    <p className="mt-1 text-sm text-slate-500">Final mapped values that feed the real visible Business Portal inputs.</p>
+                  </div>
+                  {mappedFieldMappings.length > 0 ? (
+                    <div className="mx-4 mt-4 overflow-hidden rounded-[1.2rem] border border-slate-100 bg-slate-50/60">
+                      <div className="max-h-[280px] overflow-auto divide-y divide-slate-100">
+                      {mappedFieldMappings.map((mapping) => (
+                        <div key={mapping.field} className="min-w-0 px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="min-w-0 break-words text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{mapping.field}</p>
+                            <span className={`inline-flex h-6 shrink-0 items-center justify-center rounded-full px-2.5 text-[8px] font-black uppercase tracking-[0.08em] ${
+                              mapping.value ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {mapping.value ? 'Mapped' : 'Empty'}
+                            </span>
+                          </div>
+                          <p className="mt-2 break-all text-sm leading-6 text-slate-700">{mapping.value || 'Left empty on purpose'}</p>
+                          <p className="mt-1 break-words text-[11px] font-medium text-slate-400">Source: {mapping.sourceField ?? 'No reliable source'}</p>
+                          {mapping.note ? (
+                            <p className="mt-1 break-words text-xs leading-5 text-slate-500">{mapping.note}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="min-h-0 flex-1 p-4">
+                    <div className="overflow-hidden rounded-[1.2rem] border border-slate-900 bg-slate-950 shadow-inner shadow-black/20">
+                      <pre className={jsonPanelBodyClassName}>{mappedFormJson || 'No mapped form output yet.'}</pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="overflow-hidden rounded-[1.75rem] border border-indigo-100/80 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-5 shadow-sm shadow-indigo-100/40">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
@@ -6775,11 +8547,15 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+                <div className="mt-5 min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
                   <div className="border-b border-white/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
                     Normalized Deal JSON
                   </div>
-                  <pre className="max-h-[360px] overflow-auto px-4 py-4 text-xs leading-6 text-slate-200">{normalizedJson}</pre>
+                  <div className="p-4">
+                    <div className="overflow-hidden rounded-[1.2rem] border border-slate-800/90 bg-slate-950 shadow-inner shadow-black/20">
+                      <pre className={jsonPanelBodyClassName}>{normalizedJson}</pre>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -6802,7 +8578,7 @@ export default function App() {
                         <p className="mt-1 font-semibold text-slate-700">{previewDeal?.businessName ?? 'Missing'}</p>
                       </div>
                       <div className="rounded-xl bg-white px-3 py-2">
-                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Source Product URL</p>
                         <p className="mt-1 break-all font-semibold text-slate-700">{sourceAssets?.productUrl ?? previewDeal?.productUrl ?? 'Missing source asset'}</p>
                       </div>
                     </div>
@@ -6819,8 +8595,12 @@ export default function App() {
                         <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.websiteUrl ?? previewDeal?.websiteUrl ?? 'Missing source asset'}</p>
                       </div>
                       <div>
-                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Source Product URL</p>
                         <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.productUrl ?? previewDeal?.productUrl ?? 'Missing source asset'}</p>
+                      </div>
+                      <div>
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Affiliate / Outbound Link</p>
+                        <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.affiliateUrl ?? previewDeal?.affiliateUrl ?? 'Not provided'}</p>
                       </div>
                       <div>
                         <p className="font-black uppercase tracking-[0.08em] text-slate-500">Image URL</p>
@@ -7006,7 +8786,7 @@ export default function App() {
               <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
                 <p className="text-[10px] font-black uppercase tracking-[0.12em] text-indigo-500">How it fits now</p>
                 <div className="mt-3 space-y-3 text-sm leading-6 text-slate-600">
-                  <p>1. Use discovery only when you need help finding a likely product or affiliate URL.</p>
+                  <p>1. Use discovery only when you need help finding a likely product URL or outbound affiliate link.</p>
                   <p>2. Once you have a link, paste it into Quick Coupon Creator above and continue with Scan URL, Generate Deal, and Auto Fill Portal.</p>
                   <p>3. Publish and save reliability are being prioritized around the direct-link path first, so discovery will never block coupon creation.</p>
                 </div>
@@ -7242,6 +9022,7 @@ export default function App() {
             <div className="mt-4 grid gap-3 xl:grid-cols-2">
               {resultCards.map((candidate) => {
                 const isSelected = selectedAIFinderUrl === candidate.url;
+                const candidateSourceUrl = getFirstSafeExternalUrl(candidate.productLink, candidate.url);
                 const priceLabel = formatFinderPrice(candidate.price);
                 const originalPriceLabel = formatFinderPrice(candidate.originalPrice);
                 const discountLabel = candidate.discountPercent ? `${candidate.discountPercent}% OFF` : null;
@@ -7374,15 +9155,31 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => window.open(candidate.productLink ?? candidate.url, '_blank', 'noopener,noreferrer')}
-                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 hover:border-indigo-200 hover:text-indigo-600"
+                        onClick={() => {
+                          openExternalUrl(candidateSourceUrl, {
+                            dedupeKey: `ai-finder:${candidate.url}`,
+                            missingMessage: 'Source link unavailable right now.',
+                            blockedMessage: 'Allow pop-ups to open this source link.',
+                          });
+                        }}
+                        disabled={!candidateSourceUrl}
+                        className={`inline-flex h-9 items-center justify-center rounded-xl border px-3 text-[10px] font-black uppercase tracking-[0.1em] ${
+                          candidateSourceUrl
+                            ? 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:text-indigo-600'
+                            : 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-300'
+                        }`}
                       >
                         Open Source
                       </button>
                       <button
                         type="button"
                         onClick={async () => {
-                          const copyResult = await copyTextToClipboard(candidate.productLink ?? candidate.url);
+                          if (!candidateSourceUrl) {
+                            setAiFinderError('Could not copy source link automatically.');
+                            return;
+                          }
+
+                          const copyResult = await copyTextToClipboard(candidateSourceUrl);
                           if (copyResult === 'success') {
                             setAiFinderMessage('Source link copied to clipboard.');
                             setAiFinderError('');
@@ -7679,7 +9476,7 @@ export default function App() {
         ) : null}
         {aiFinderResult && hasMissingSourceAsset ? (
           <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-            Missing source asset: {!sourceAssets?.productUrl ? 'product link' : 'image'} could not be extracted yet.
+            Missing source asset: {!sourceAssets?.productUrl ? 'source product URL' : 'image'} could not be extracted yet.
             {previewDeal?.sourceType === 'url' ? ' Fallback portal data was preserved from the pasted URL. Add the missing image manually if needed.' : ''}
           </div>
         ) : null}
@@ -7843,8 +9640,12 @@ export default function App() {
                       <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.websiteUrl ?? 'Missing source asset'}</p>
                     </div>
                     <div>
-                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Product Link</p>
+                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Source Product URL</p>
                       <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.productUrl ?? 'Missing source asset'}</p>
+                    </div>
+                    <div>
+                      <p className="font-black uppercase tracking-[0.08em] text-slate-500">Affiliate / Outbound Link</p>
+                      <p className="mt-1 break-all leading-5 text-slate-700">{sourceAssets?.affiliateUrl ?? 'Not provided'}</p>
                     </div>
                     <div>
                       <p className="font-black uppercase tracking-[0.08em] text-slate-500">Image URL</p>
@@ -8691,6 +10492,14 @@ export default function App() {
     <Layout
       currentView={currentView}
       onViewChange={(view) => {
+        setNotificationsOpen(false);
+
+        if (view === currentView) {
+          return;
+        }
+
+        setSelectedDetailDealId(null);
+
         if (view === 'catalog') {
           handleOpenCatalog();
           return;
@@ -8712,7 +10521,7 @@ export default function App() {
       isAuthenticated={Boolean(session)}
       userEmail={authUser?.email}
       userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
-      isDropModeHighlighted={currentView === 'live-deals' && dropMode === 'online' && dropModeEnabled}
+      isDropModeHighlighted={false}
       onOpenAuth={() => {
         setAuthError('');
         setAuthInfo('');
@@ -8721,6 +10530,7 @@ export default function App() {
       onSignOut={handleSignOut}
     >
       {currentView === 'live-deals' && renderLiveDeals()}
+      {currentView === 'deal-detail' && renderDealDetail()}
       {currentView === 'catalog' && renderCatalog()}
       {currentView === 'my-claims' && renderMyClaims()}
       {currentView === 'business-portal' && renderBusinessPortal()}

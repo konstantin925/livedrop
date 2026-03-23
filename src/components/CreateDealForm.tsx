@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Deal, UserLocation } from '../types';
-import { CATEGORY_OPTIONS, ONLINE_CATEGORY_OPTIONS } from '../constants';
-import { getCategoryIconName, getCategoryLabel } from '../utils/categories';
+import { getCategoryIconName, getCategoryLabel, getDefaultCategoryForMode, getCategoryOptionsForMode, normalizeCategoryValue } from '../utils/categories';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
 
@@ -17,7 +16,8 @@ interface CreateDealFormProps {
     payload: {
       storeName: string;
       websiteUrl: string;
-      productLink: string;
+      productUrl: string;
+      affiliateUrl: string;
       imageUrl: string;
       dealTitle: string;
       description: string;
@@ -33,6 +33,51 @@ type OfferType = 'percentage' | 'fixed' | 'custom';
 type BusinessMode = 'local' | 'online';
 
 const normalizeTextValue = (value: string | null | undefined) => (typeof value === 'string' ? value : '');
+const normalizeUrlValue = (value: string | null | undefined) => {
+  const trimmed = normalizeTextValue(value).trim();
+  if (!trimmed) return '';
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+};
+
+const deriveWebsiteOrigin = (value: string | null | undefined) => {
+  const normalized = normalizeUrlValue(value);
+  if (!normalized) return '';
+
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return '';
+  }
+};
+
+const resolveFormLinkState = (formData: {
+  websiteUrl: string;
+  productUrl: string;
+  affiliateUrl: string;
+}) => {
+  const productUrl = normalizeUrlValue(formData.productUrl);
+  const affiliateUrl = normalizeUrlValue(formData.affiliateUrl);
+  const websiteUrl =
+    deriveWebsiteOrigin(formData.websiteUrl)
+    || deriveWebsiteOrigin(productUrl)
+    || deriveWebsiteOrigin(affiliateUrl);
+
+  return {
+    websiteUrl,
+    productUrl,
+    affiliateUrl,
+  };
+};
 
 function readBusinessDefaults() {
   try {
@@ -115,21 +160,33 @@ const getInitialFormData = (
   if (initialData) {
     const inferredOfferType = getOfferTypeFromDeal(initialData);
     const durationFields = getDurationFieldsFromDeal(initialData);
+    const businessMode = (initialData.businessType ?? 'local') as BusinessMode;
     const inferredRadiusMiles = initialData.businessType === 'online'
       ? '1'
       : (() => {
           const radiusMatch = normalizeTextValue(initialData.distance).match(/(\d+(\.\d+)?)/);
           return radiusMatch?.[1] ?? '1';
         })();
-
-    return {
-      businessMode: (initialData.businessType ?? 'local') as BusinessMode,
-      businessName: normalizeTextValue(initialData.businessName),
+    const linkState = resolveFormLinkState({
       websiteUrl: normalizeTextValue(initialData.websiteUrl),
       productUrl: normalizeTextValue(initialData.productUrl),
+      affiliateUrl: normalizeTextValue(initialData.affiliateUrl),
+    });
+
+    return {
+      businessMode,
+      businessName: normalizeTextValue(initialData.businessName),
+      websiteUrl: linkState.websiteUrl,
+      productUrl: linkState.productUrl,
+      affiliateUrl: linkState.affiliateUrl,
       title: normalizeTextValue(initialData.title),
       description: normalizeTextValue(initialData.description),
-      category: normalizeTextValue(initialData.category),
+      category: normalizeCategoryValue(initialData.category, businessMode, [
+        initialData.title,
+        initialData.description,
+        initialData.businessName,
+        initialData.offerText,
+      ]),
       offerType: inferredOfferType,
       discountValue: getDiscountValueFromDeal(initialData),
       customOfferText: inferredOfferType === 'custom' ? normalizeTextValue(initialData.offerText) : '',
@@ -148,9 +205,13 @@ const getInitialFormData = (
     businessName: savedDefaults?.businessName ?? '',
     websiteUrl: '',
     productUrl: '',
+    affiliateUrl: '',
     title: '',
     description: '',
-    category: savedDefaults?.category ?? 'Fast Food',
+    category: normalizeCategoryValue(
+      savedDefaults?.category,
+      (savedDefaults?.businessMode ?? 'local') as BusinessMode,
+    ),
     offerType: 'percentage' as OfferType,
     discountValue: '30',
     customOfferText: '',
@@ -185,21 +246,32 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     if (!autofillRequest) return;
 
     const nextOfferType = getOfferTypeFromText(autofillRequest.payload.offerText);
+    const linkState = resolveFormLinkState({
+      websiteUrl: autofillRequest.payload.websiteUrl,
+      productUrl: autofillRequest.payload.productUrl,
+      affiliateUrl: autofillRequest.payload.affiliateUrl,
+    });
 
     setFormData((prev) => {
       const nextState = {
         ...prev,
         businessMode: 'online' as BusinessMode,
         businessName: normalizeTextValue(autofillRequest.payload.storeName),
-        websiteUrl: normalizeTextValue(autofillRequest.payload.websiteUrl),
-        productUrl: normalizeTextValue(autofillRequest.payload.productLink),
+        websiteUrl: linkState.websiteUrl,
+        productUrl: linkState.productUrl,
+        affiliateUrl: linkState.affiliateUrl,
         title: normalizeTextValue(autofillRequest.payload.dealTitle),
         description: normalizeTextValue(autofillRequest.payload.description),
-        category: normalizeTextValue(autofillRequest.payload.category) || prev.category,
+        category: normalizeCategoryValue(autofillRequest.payload.category, 'online', [
+          autofillRequest.payload.dealTitle,
+          autofillRequest.payload.description,
+          autofillRequest.payload.storeName,
+          autofillRequest.payload.offerText,
+        ]),
         offerType: nextOfferType,
         discountValue: getDiscountValueFromText(autofillRequest.payload.offerText),
         customOfferText: nextOfferType === 'custom' ? normalizeTextValue(autofillRequest.payload.offerText) : '',
-        imageUrl: normalizeTextValue(autofillRequest.payload.imageUrl) || prev.imageUrl,
+        imageUrl: normalizeTextValue(autofillRequest.payload.imageUrl),
       };
 
       console.info('[LiveDrop] CreateDealForm applied autofill request', {
@@ -220,6 +292,23 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       : Number(formData.durationPreset);
 
   const radiusMiles = Number(formData.radiusMiles || 0);
+  const normalizedLinkState = useMemo(
+    () => resolveFormLinkState(formData),
+    [formData.affiliateUrl, formData.productUrl, formData.websiteUrl],
+  );
+  const normalizedCategory = useMemo(
+    () => normalizeCategoryValue(formData.category, formData.businessMode, [
+      formData.title,
+      formData.description,
+      formData.businessName,
+      formData.customOfferText,
+    ]),
+    [formData.businessMode, formData.businessName, formData.category, formData.customOfferText, formData.description, formData.title],
+  );
+  const availableCategoryOptions = useMemo(
+    () => getCategoryOptionsForMode(formData.businessMode),
+    [formData.businessMode],
+  );
 
   const offerText = useMemo(() => {
     if (formData.offerType === 'percentage') return `${formData.discountValue}% OFF`;
@@ -243,12 +332,12 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       offerText: offerText.trim(),
       originalPrice: initialData?.originalPrice ?? null,
       discountPercent: initialData?.discountPercent ?? null,
-      affiliateUrl: initialData?.affiliateUrl,
+      affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
       imageUrl: normalizeTextValue(formData.imageUrl).trim() || undefined,
-      websiteUrl: normalizeTextValue(formData.websiteUrl).trim() || undefined,
-      productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
+      websiteUrl: normalizedLinkState.websiteUrl || undefined,
+      productUrl: normalizedLinkState.productUrl || undefined,
       hasTimer: formData.durationPreset !== 'none',
       distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
@@ -258,7 +347,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       maxClaims: Math.max(Number(formData.quantity || 0), 0),
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
-      category: normalizeTextValue(formData.category).trim(),
+      category: normalizedCategory,
     };
   }, [
     durationMinutes,
@@ -269,10 +358,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     formData.description,
     formData.durationPreset,
     formData.imageUrl,
-    formData.productUrl,
     formData.quantity,
     formData.title,
-    formData.websiteUrl,
     initialData?.affiliateUrl,
     initialData?.discountPercent,
     initialData?.id,
@@ -280,6 +367,10 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     initialData?.reviewCount,
     initialData?.status,
     initialData?.stockStatus,
+    normalizedCategory,
+    normalizedLinkState.affiliateUrl,
+    normalizedLinkState.productUrl,
+    normalizedLinkState.websiteUrl,
     offerText,
     radiusMiles,
     safeLocalLocation.lat,
@@ -306,15 +397,16 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
       imageUrl: normalizeTextValue(formData.imageUrl) || undefined,
-      websiteUrl: normalizeTextValue(formData.websiteUrl).trim() || undefined,
-      productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
+      websiteUrl: normalizedLinkState.websiteUrl || undefined,
+      productUrl: normalizedLinkState.productUrl || undefined,
+      affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       hasTimer: formData.durationPreset !== 'none',
       createdAt: Date.now(),
       expiresAt: Date.now() + Math.max(durationMinutes, 1) * 60 * 1000,
       maxClaims: Math.max(Number(formData.quantity || 0), 0),
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
-      category: formData.category,
+      category: normalizedCategory,
     };
   }, [
     durationMinutes,
@@ -325,10 +417,12 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     formData.description,
     formData.durationPreset,
     formData.imageUrl,
-    formData.productUrl,
     formData.quantity,
     formData.title,
-    formData.websiteUrl,
+    normalizedCategory,
+    normalizedLinkState.affiliateUrl,
+    normalizedLinkState.productUrl,
+    normalizedLinkState.websiteUrl,
     offerText,
     radiusMiles,
     safeLocalLocation.lat,
@@ -353,14 +447,27 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       return;
     }
 
+    if (!normalizedCategory.trim()) {
+      setSubmitError('Please choose a category.');
+      return;
+    }
+
     if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
       setSubmitError('Discount value must be greater than 0.');
       return;
     }
 
     if (formData.businessMode === 'online') {
-      if (!normalizeTextValue(formData.websiteUrl).trim() || !normalizeTextValue(formData.productUrl).trim()) {
-        setSubmitError('Website URL and product link are required for online drops.');
+      if (!normalizedLinkState.websiteUrl || !normalizedLinkState.productUrl) {
+        setSubmitError('Website URL and source product URL are required for online drops.');
+        return;
+      }
+      if (!normalizeTextValue(formData.productUrl).trim() || !normalizedLinkState.productUrl) {
+        setSubmitError('Paste a valid full product page URL for online drops.');
+        return;
+      }
+      if (normalizeTextValue(formData.affiliateUrl).trim() && !normalizedLinkState.affiliateUrl) {
+        setSubmitError('Paste a valid affiliate / outbound URL or leave that field blank.');
         return;
       }
       if (!normalizeTextValue(formData.imageUrl).trim()) {
@@ -405,8 +512,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       description: normalizeTextValue(formData.description).trim(),
       offerText,
       imageUrl: normalizeTextValue(formData.imageUrl).trim() || undefined,
-      websiteUrl: normalizeTextValue(formData.websiteUrl).trim() || undefined,
-      productUrl: normalizeTextValue(formData.productUrl).trim() || undefined,
+      websiteUrl: normalizedLinkState.websiteUrl || undefined,
+      productUrl: normalizedLinkState.productUrl || undefined,
+      affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       hasTimer: formData.durationPreset !== 'none',
       distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
@@ -415,13 +523,13 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       maxClaims: Number(formData.quantity),
       currentClaims: Number(formData.currentClaims),
       claimCount: Number(formData.currentClaims),
-      category: formData.category,
+      category: normalizedCategory,
       logoUrl: undefined,
     });
 
     localStorage.setItem(BUSINESS_DEFAULTS_KEY, JSON.stringify({
       businessName: normalizeTextValue(formData.businessName).trim(),
-      category: formData.category,
+      category: normalizedCategory,
       businessMode: formData.businessMode,
     }));
   };
@@ -466,7 +574,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
                 onClick={() => setFormData(prev => ({
                   ...prev,
                   businessMode: option.id as BusinessMode,
-                  category: option.id === 'online' ? 'Tech' : 'Fast Food',
+                  category: normalizeCategoryValue(
+                    prev.category,
+                    option.id as BusinessMode,
+                    [prev.title, prev.description, prev.businessName, prev.customOfferText],
+                  ) || getDefaultCategoryForMode(option.id as BusinessMode),
                 }))}
                 className={`rounded-[1.5rem] border px-4 py-4 text-left transition-all ${
                   active
@@ -566,7 +678,6 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
               <div className="relative">
                 <AppIcon name="online" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
                 <input
-                  required
                   type="url"
                   placeholder="https://yourstore.com"
                   className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
@@ -574,21 +685,44 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
                   onChange={e => setFormData({ ...formData, websiteUrl: e.target.value })}
                 />
               </div>
+              <p className="px-1 text-xs leading-5 text-slate-400">
+                Store homepage. If left incomplete, LiveDrop will derive the origin from the product or affiliate URL.
+              </p>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Product Link</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Source Product URL</label>
               <div className="relative">
                 <AppIcon name="link" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
                 <input
                   required
                   type="url"
-                  placeholder="https://yourstore.com/product"
+                  placeholder="https://www.amazon.com/dp/..."
                   className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
                   value={formData.productUrl}
                   onChange={e => setFormData({ ...formData, productUrl: e.target.value })}
                 />
               </div>
+              <p className="px-1 text-xs leading-5 text-slate-400">
+                Use the full product page URL here for import, reference, and product detail extraction.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Affiliate / Outbound Link</label>
+              <div className="relative">
+                <AppIcon name="external" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+                <input
+                  type="url"
+                  placeholder="https://amzn.to/... or another tracking link"
+                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                  value={formData.affiliateUrl}
+                  onChange={e => setFormData({ ...formData, affiliateUrl: e.target.value })}
+                />
+              </div>
+              <p className="px-1 text-xs leading-5 text-slate-400">
+                LiveDrop uses this link for Get Deal buttons, redirects, and commission tracking when it is provided.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -745,10 +879,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
               <select
                 required
                 className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                value={formData.category}
+                value={normalizedCategory}
                 onChange={e => setFormData({ ...formData, category: e.target.value })}
               >
-                {ONLINE_CATEGORY_OPTIONS.filter(option => option !== 'All').map(option => (
+                <option value="">Select category</option>
+                {availableCategoryOptions.map(option => (
                   <option key={option} value={option}>
                     {getCategoryLabel(option)}
                   </option>
@@ -805,10 +940,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
             <select
               required
               className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-              value={formData.category}
+              value={normalizedCategory}
               onChange={e => setFormData({ ...formData, category: e.target.value })}
             >
-              {CATEGORY_OPTIONS.filter(option => option !== 'All').map(option => (
+              <option value="">Select category</option>
+              {availableCategoryOptions.map(option => (
                 <option key={option} value={option}>
                   {getCategoryLabel(option)}
                 </option>

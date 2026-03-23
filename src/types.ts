@@ -13,10 +13,15 @@ export interface Deal {
   likeCount?: number;
   dislikeCount?: number;
   shareCount?: number;
+  currentPrice?: number | null;
   originalPrice?: number | null;
   discountPercent?: number | null;
   affiliateUrl?: string;
+  merchant?: string | null;
+  brand?: string | null;
+  rating?: number | null;
   reviewCount?: number | null;
+  availability?: string | null;
   stockStatus?: string | null;
   websiteUrl?: string;
   productUrl?: string;
@@ -90,4 +95,4 @@ export interface UserProfileState {
   stripeSubscriptionId: string | null;
 }
 
-export type View = 'live-deals' | 'my-claims' | 'catalog' | 'business-portal';
+export type View = 'live-deals' | 'deal-detail' | 'my-claims' | 'catalog' | 'business-portal';

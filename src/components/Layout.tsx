@@ -39,12 +39,12 @@ export const Layout: React.FC<LayoutProps> = ({
   isDropModeHighlighted = false,
 }) => {
   const mainContentStyle: React.CSSProperties = {
-    paddingBottom: 'calc(4.75rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
+    paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
   };
 
   const bottomNavStyle: React.CSSProperties = {
-    bottom: 'max(env(safe-area-inset-bottom, 0px), 0.4rem)',
-    paddingBottom: 'calc(0.375rem + env(safe-area-inset-bottom, 0px))',
+    bottom: 'max(env(safe-area-inset-bottom, 0px), 0px)',
+    paddingBottom: 'calc(0.55rem + env(safe-area-inset-bottom, 0px))',
   };
 
   const getNotificationIcon = (type: AppNotification['type']) => {
@@ -55,36 +55,30 @@ export const Layout: React.FC<LayoutProps> = ({
   };
 
   return (
-    <div className="min-h-[100dvh] bg-slate-50 text-slate-900 flex flex-col max-w-[390px] mx-auto shadow-[0_24px_70px_rgba(15,23,42,0.12)] overflow-hidden border-x border-slate-200/80">
+    <div className="relative isolate mx-auto flex min-h-[100dvh] w-full max-w-[430px] flex-col overflow-x-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98)_20%,rgba(241,245,249,0.9))] text-slate-900 shadow-[0_22px_58px_rgba(15,23,42,0.11)] sm:border-x sm:border-slate-200/70">
       {/* Header */}
-      <header className="px-4 py-3 pt-5 flex justify-between items-center border-b border-slate-100/80 bg-white/84 backdrop-blur-xl sticky top-0 z-50">
-        <div className="flex flex-col justify-center items-start">
+      <header className="sticky top-0 z-50 flex items-center justify-between gap-2.5 border-b border-white/70 bg-white/88 px-3.5 py-3 pt-5 backdrop-blur-xl max-[359px]:gap-2 max-[359px]:px-3 max-[359px]:pt-4">
+        <div className="min-w-0 flex flex-1 flex-col items-start justify-center">
           <div className="flex items-center leading-none">
-            <div className="flex items-baseline gap-1 leading-none">
-              <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-slate-800">LIVE</h1>
-              <h1 className="text-[1.42rem] font-black tracking-[-0.055em] text-indigo-600">DROP</h1>
+            <div className="min-w-0 flex items-baseline gap-0.5 leading-none">
+              <h1 className="text-[1.34rem] font-black tracking-[-0.055em] text-slate-800 max-[359px]:text-[1.18rem] min-[390px]:text-[1.42rem]">LIVE</h1>
+              <h1 className="text-[1.34rem] font-black tracking-[-0.055em] text-indigo-600 max-[359px]:text-[1.18rem] min-[390px]:text-[1.42rem]">DROP</h1>
             </div>
-            <span
-              className={`-ml-1 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-all ${
-                isDropModeHighlighted
-                  ? 'bg-indigo-950/95 shadow-[0_0_0_1px_rgba(129,140,248,0.32),0_12px_30px_rgba(79,70,229,0.28)]'
-                  : ''
-              }`}
-            >
+            <span className="-ml-0.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[radial-gradient(circle,rgba(99,102,241,0.12),rgba(99,102,241,0)_72%)] max-[359px]:h-10 max-[359px]:w-10 min-[390px]:h-12 min-[390px]:w-12">
               <img
                 src={brandBoltLogo}
                 alt="LiveDrop logo"
-                className={`h-10 w-10 object-contain transition-all ${isDropModeHighlighted ? 'drop-shadow-[0_0_12px_rgba(129,140,248,0.72)]' : ''}`}
+                className="h-9 w-9 object-contain max-[359px]:h-8 max-[359px]:w-8 min-[390px]:h-10 min-[390px]:w-10"
               />
             </span>
           </div>
-          <p className="-mt-0.5 text-[0.6rem] font-medium leading-none tracking-[0.12em] text-slate-400">
+          <p className="-mt-0.5 text-[0.55rem] font-semibold leading-none tracking-[0.14em] text-slate-400 max-[359px]:text-[0.5rem] min-[390px]:text-[0.6rem]">
             don&apos;t miss the drop
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1 max-[359px]:gap-0.5">
           {isAuthenticated ? (
-            <div className="hidden sm:flex items-center gap-2 rounded-full bg-slate-100 pl-2 pr-3 py-1.5">
+            <div className="hidden items-center gap-2 rounded-full border border-slate-200/80 bg-white/92 py-1.5 pl-2 pr-3 shadow-sm shadow-slate-200/35 sm:flex">
               {userAvatarUrl ? (
                 <img src={userAvatarUrl} alt="Profile" className="w-7 h-7 rounded-full object-cover" />
               ) : (
@@ -100,37 +94,38 @@ export const Layout: React.FC<LayoutProps> = ({
           ) : (
             <button
               onClick={onOpenAuth}
-              className="hidden sm:inline-flex rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-[0.14em] px-3 py-2 shadow-lg shadow-indigo-100/70"
+              className="hidden h-10 items-center rounded-full bg-indigo-600 px-3.5 text-[10px] font-black uppercase tracking-[0.14em] text-white shadow-lg shadow-indigo-100/70 sm:inline-flex"
             >
               Sign In
             </button>
           )}
-          <button onClick={onToggleNotifications} className="relative bg-slate-100/90 hover:bg-slate-100 p-2 rounded-full text-slate-500 transition-colors">
+          <button onClick={onToggleNotifications} className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 transition-colors hover:bg-slate-50 max-[359px]:h-9 max-[359px]:w-9">
             <AppIcon name="bell" size={18} />
             {unreadNotificationCount > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-indigo-600 text-white text-[9px] font-black flex items-center justify-center">
+              <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[9px] font-black text-white shadow-[0_8px_18px_rgba(79,70,229,0.28)]">
                 {unreadNotificationCount}
               </span>
             ) : null}
           </button>
-          <div className="bg-slate-100/90 p-2 rounded-full text-slate-500">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9">
             <AppIcon name="pin" size={18} />
           </div>
           {isAuthenticated ? (
-            <button onClick={onSignOut} className="sm:hidden bg-slate-100/90 p-2 rounded-full text-slate-500">
+            <button onClick={onSignOut} className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9 sm:hidden">
               <AppIcon name="logout" size={18} />
             </button>
           ) : (
-            <button onClick={onOpenAuth} className="sm:hidden bg-indigo-600 px-2.5 py-2 rounded-full text-white text-[10px] font-black uppercase tracking-[0.14em] shadow-lg shadow-indigo-100/70">
-              Sign In
+            <button onClick={onOpenAuth} className="inline-flex h-10 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.12em] text-white shadow-lg shadow-indigo-100/70 max-[359px]:h-9 max-[359px]:px-2.5 sm:hidden">
+              <span className="hidden min-[380px]:inline">Sign In</span>
+              <span className="min-[380px]:hidden">Sign</span>
             </button>
           )}
         </div>
       </header>
 
       {notificationsOpen ? (
-        <div className="absolute top-[78px] right-3 left-3 z-[90]">
-          <div className="rounded-[1.75rem] border border-slate-100 bg-white shadow-2xl shadow-slate-200/70 p-3.5 max-h-[50vh] overflow-y-auto">
+        <div className="absolute left-2.5 right-2.5 top-[76px] z-[90] max-[359px]:left-2 max-[359px]:right-2 max-[359px]:top-[70px]">
+          <div className="max-h-[50vh] overflow-y-auto rounded-[1.75rem] border border-slate-100/90 bg-white/98 p-3.5 shadow-[0_20px_48px_rgba(15,23,42,0.16)]">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-[13px] font-black uppercase tracking-[0.16em] text-slate-900">Notifications</h2>
               <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
@@ -171,17 +166,17 @@ export const Layout: React.FC<LayoutProps> = ({
       ) : null}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto px-3 py-2" style={mainContentStyle}>
+      <main className="flex-1 overflow-y-auto px-3.5 py-3 max-[359px]:px-2.5" style={mainContentStyle}>
         {children}
       </main>
 
       {/* Navigation */}
       <nav
-        className="fixed left-0 right-0 max-w-[390px] mx-auto bg-white/94 backdrop-blur-xl border-t border-slate-100 px-4 pt-1.5 flex justify-between items-center z-50"
+        className="fixed left-0 right-0 z-50 mx-auto flex w-full max-w-[430px] items-center justify-between border-t border-white/80 bg-white/94 px-3 pt-1.5 shadow-[0_-8px_26px_rgba(15,23,42,0.06)] backdrop-blur-xl max-[359px]:px-2.5"
         style={bottomNavStyle}
       >
         <NavButton 
-          active={currentView === 'live-deals'} 
+          active={currentView === 'live-deals' || currentView === 'deal-detail'} 
           onClick={() => onViewChange('live-deals')}
           icon={<AppIcon name="play" size={18} className="text-current" />}
           label="Live"
@@ -221,14 +216,14 @@ interface NavButtonProps {
 const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, badge }) => (
   <button 
     onClick={onClick}
-    className={`relative flex min-w-[56px] flex-col items-center gap-0.5 rounded-2xl px-1.5 py-0.5 transition-all ${active ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-500'}`}
+    className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[1.1rem] px-1 py-2 transition-all ${active ? 'bg-indigo-50/90 text-indigo-600 shadow-sm shadow-indigo-100/60' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-500'}`}
   >
     {icon}
     {badge ? (
-      <span className="absolute -top-1 -right-2 min-w-5 h-5 px-1 rounded-full bg-indigo-600 text-white text-[9px] font-black flex items-center justify-center">
+      <span className="absolute -right-0.5 top-0 flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[9px] font-black text-white shadow-[0_8px_18px_rgba(79,70,229,0.28)]">
         {badge}
       </span>
     ) : null}
-    <span className={`text-[8px] font-bold uppercase tracking-[0.08em] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
+    <span className={`max-w-full truncate text-[7.5px] font-black uppercase tracking-[0.12em] max-[359px]:text-[6.5px] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
   </button>
 );
