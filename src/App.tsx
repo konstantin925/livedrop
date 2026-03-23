@@ -29,6 +29,7 @@ import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupa
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
 import brandBoltLogo from './assets/logo-bolt.svg';
+import { Analytics } from '@vercel/analytics/react';
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
@@ -8609,6 +8610,7 @@ export default function App() {
         error={authError}
         info={authInfo}
       />
+      <Analytics />
     </AppErrorBoundary>
   );
 }
