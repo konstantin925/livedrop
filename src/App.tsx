@@ -249,22 +249,61 @@ const getDealSavingsValue = (deal: Deal) => {
   return extractPriceDropSavings(sourceSignal) ?? 0;
 };
 
+const hasUsableCoordinates = (lat: unknown, lng: unknown) =>
+  typeof lat === 'number' &&
+  Number.isFinite(lat) &&
+  typeof lng === 'number' &&
+  Number.isFinite(lng) &&
+  !(lat === 0 && lng === 0);
+
+const hasUsableUserLocation = (location?: UserLocation | null) =>
+  Boolean(location && hasUsableCoordinates(location.lat, location.lng));
+
+const isStoredManagedLocalSeedDeal = (deal: Partial<Deal>) =>
+  (deal.businessType ?? 'local') !== 'online' &&
+  typeof deal.id === 'string' &&
+  deal.id.startsWith('seed-');
+
 const readStoredDeals = (): Deal[] => {
   try {
     const raw = localStorage.getItem(DEALS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
-      ? parsed.map((deal) => ({
-          ...deal,
-          businessType: deal.businessType ?? 'local',
-          status: deal.status ?? 'active',
-          currentClaims: deal.currentClaims ?? deal.claimCount ?? 0,
-          claimCount: deal.claimCount ?? deal.currentClaims ?? 0,
-          createdAt: deal.createdAt ?? Date.now(),
-          expiresAt: deal.expiresAt ?? Date.now(),
-          hasTimer: deal.hasTimer ?? true,
-        }))
+      ? parsed
+          .filter((deal) => !isStoredManagedLocalSeedDeal(deal))
+          .map((deal) => {
+            const businessType = deal.businessType ?? 'local';
+            const rawLat =
+              typeof deal.lat === 'number'
+                ? deal.lat
+                : Number.parseFloat(typeof deal.lat === 'string' ? deal.lat : '0');
+            const rawLng =
+              typeof deal.lng === 'number'
+                ? deal.lng
+                : Number.parseFloat(typeof deal.lng === 'string' ? deal.lng : '0');
+            const hasValidLocalCoordinates =
+              businessType !== 'online' && hasUsableCoordinates(rawLat, rawLng);
+
+            return {
+              ...deal,
+              businessType,
+              status: deal.status ?? 'active',
+              currentClaims: deal.currentClaims ?? deal.claimCount ?? 0,
+              claimCount: deal.claimCount ?? deal.currentClaims ?? 0,
+              createdAt: deal.createdAt ?? Date.now(),
+              expiresAt: deal.expiresAt ?? Date.now(),
+              hasTimer: deal.hasTimer ?? true,
+              distance:
+                typeof deal.distance === 'string' && deal.distance.trim()
+                  ? deal.distance
+                  : businessType === 'online'
+                    ? 'Online'
+                    : 'Nearby',
+              lat: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLat : 0,
+              lng: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLng : 0,
+            };
+          })
       : [];
   } catch {
     return [];
@@ -324,7 +363,10 @@ const getDistanceForDeal = (location: UserLocation, deal: Deal) =>
   calculateDistance(location.lat, location.lng, deal.lat, deal.lng);
 
 const getRadiusForDeal = (location: UserLocation, deal: Deal) => {
-  const distance = getDistanceForDeal(location, deal);
+  const distance =
+    hasUsableUserLocation(location) && hasUsableCoordinates(deal.lat, deal.lng)
+      ? getDistanceForDeal(location, deal)
+      : parseDistanceLabel(deal.distance) ?? Number.POSITIVE_INFINITY;
   return RADIUS_OPTIONS.find(option => distance <= option) ?? RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
 };
 
@@ -349,18 +391,21 @@ const getEffectiveLocalDealDistance = (
   deal: Deal,
   allowCoordinateDistance: boolean,
 ): number => {
-  const hasUsableCoordinates =
+  const canUseCoordinateDistance =
     allowCoordinateDistance &&
-    Number.isFinite(deal.lat) &&
-    Number.isFinite(deal.lng) &&
-    !(deal.lat === 0 && deal.lng === 0);
+    hasUsableUserLocation(location) &&
+    hasUsableCoordinates(deal.lat, deal.lng);
 
-  if (hasUsableCoordinates) {
+  if (canUseCoordinateDistance) {
     return calculateDistance(location.lat, location.lng, deal.lat, deal.lng);
   }
 
-  const fallbackDistance = parseDistanceLabel(deal.distance);
-  return fallbackDistance ?? Number.POSITIVE_INFINITY;
+  if (!allowCoordinateDistance) {
+    const fallbackDistance = parseDistanceLabel(deal.distance);
+    return fallbackDistance ?? Number.POSITIVE_INFINITY;
+  }
+
+  return Number.POSITIVE_INFINITY;
 };
 
 const isManagedLocalSeedDeal = (deal: Deal) =>
@@ -368,6 +413,20 @@ const isManagedLocalSeedDeal = (deal: Deal) =>
 
 const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
   return mergeDealsWithMockOnlinePipeline(existingDeals, generateSeededOnlineDeals()).deals;
+};
+
+const composeDealsWithLocationContext = (
+  sourceDeals: Deal[],
+  location: UserLocation,
+  includeManagedLocalSeeds: boolean,
+): Deal[] => {
+  const syncedDeals = syncSharedOnlineDeals(sourceDeals).filter((deal) => !isManagedLocalSeedDeal(deal));
+
+  if (!includeManagedLocalSeeds || !hasUsableUserLocation(location)) {
+    return syncedDeals;
+  }
+
+  return [...generateSeededDeals(location), ...syncedDeals];
 };
 
 const deriveWebsiteOrigin = (value?: string | null) => {
@@ -984,6 +1043,9 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     row.max_claims,
     fallback?.maxClaims ?? 999,
   );
+  const rawLat = parseDealNumberOrFallback(row.lat, fallback?.lat ?? 0);
+  const rawLng = parseDealNumberOrFallback(row.lng, fallback?.lng ?? 0);
+  const hasValidLocalCoordinates = businessType !== 'online' && hasUsableCoordinates(rawLat, rawLng);
 
   return {
     id: row.id ?? fallback?.id ?? createUuid(),
@@ -1009,8 +1071,8 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     productUrl: row.product_link ?? row.product_url ?? row.affiliate_url ?? fallback?.productUrl ?? fallback?.affiliateUrl ?? undefined,
     hasTimer: typeof row.has_timer === 'boolean' ? row.has_timer : fallback?.hasTimer ?? Boolean(row.expires_at),
     distance: row.distance ?? fallback?.distance ?? (businessType === 'online' ? 'Online' : 'Nearby'),
-    lat: parseDealNumberOrFallback(row.lat, fallback?.lat ?? 0),
-    lng: parseDealNumberOrFallback(row.lng, fallback?.lng ?? 0),
+    lat: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLat : 0,
+    lng: businessType === 'online' ? 0 : hasValidLocalCoordinates ? rawLng : 0,
     createdAt,
     expiresAt,
     maxClaims,
@@ -1822,6 +1884,8 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [toastNotifications, setToastNotifications] = useState<AppNotification[]>([]);
   const seenDealIdsRef = useRef<Set<string>>(new Set());
+  const latestUserLocationRef = useRef<UserLocation>(DEFAULT_LOCATION);
+  const latestHasPreciseLocationRef = useRef(false);
   const [portalSuccessMessage, setPortalSuccessMessage] = useState<string>('');
   const [session, setSession] = useState<Session | null>(null);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -1891,6 +1955,11 @@ export default function App() {
         : locationStatus === 'error'
           ? 'Location unavailable'
           : (cityName || 'Current area');
+
+  useEffect(() => {
+    latestUserLocationRef.current = userLocation;
+    latestHasPreciseLocationRef.current = hasPreciseUserLocation && hasUsableUserLocation(userLocation);
+  }, [hasPreciseUserLocation, userLocation]);
   const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
   const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
   const selectedAIFinderCandidate = useMemo(
@@ -3475,7 +3544,11 @@ export default function App() {
     const savedCatalog = readStoredCatalog();
     const savedNotifications = readStoredNotifications();
     const savedRole = readStoredRole();
-    const fallbackDeals = syncSharedOnlineDeals(savedDeals);
+    const fallbackDeals = composeDealsWithLocationContext(
+      savedDeals,
+      latestUserLocationRef.current,
+      latestHasPreciseLocationRef.current,
+    );
 
     applyDealsState(fallbackDeals);
     setDealsLoading(true);
@@ -3505,7 +3578,13 @@ export default function App() {
         const remoteDeals = await fetchSharedDeals();
         if (cancelled) return;
 
-        const nextDeals = remoteDeals.length > 0 ? syncSharedOnlineDeals(remoteDeals) : fallbackDeals;
+        const nextDeals = remoteDeals.length > 0
+          ? composeDealsWithLocationContext(
+              remoteDeals,
+              latestUserLocationRef.current,
+              latestHasPreciseLocationRef.current,
+            )
+          : fallbackDeals;
         applyDealsState(nextDeals);
         setDealsError(remoteDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
       } catch (error) {
@@ -3586,38 +3665,90 @@ export default function App() {
   const fetchLocation = () => {
     setLocationStatus('loading');
     setCityName('');
-    if (!navigator.geolocation) {
+    const previousLocation = latestUserLocationRef.current;
+    const hadPreviousPreciseLocation =
+      latestHasPreciseLocationRef.current && hasUsableUserLocation(previousLocation);
+    const previousCityName = cityName;
+
+    const clearManagedSeedDeals = () => {
+      setDeals((prevDeals) => {
+        const nextDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
+        seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
+        return nextDeals;
+      });
+    };
+
+    const handleLocationFailure = (status: 'denied' | 'error', nextCityName: string) => {
+      if (hadPreviousPreciseLocation) {
+        console.warn('[LiveDrop] Geolocation refresh failed, keeping last known precise location', {
+          status,
+          nextCityName,
+          previousLocation,
+        });
+        setUserLocation(previousLocation);
+        latestUserLocationRef.current = previousLocation;
+        latestHasPreciseLocationRef.current = true;
+        setLocationStatus('success');
+        setCityName(previousCityName || 'Current area');
+        return;
+      }
+
       setUserLocation(DEFAULT_LOCATION);
-      setLocationStatus('error');
-      setCityName('Location unavailable');
+      latestUserLocationRef.current = DEFAULT_LOCATION;
+      latestHasPreciseLocationRef.current = false;
+      setLocationStatus(status);
+      setCityName(nextCityName);
+      clearManagedSeedDeals();
+    };
+
+    const handleLocationSuccess = (position: GeolocationPosition) => {
+      const newLocation = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy
+      };
+      setUserLocation(newLocation);
+      latestUserLocationRef.current = newLocation;
+      latestHasPreciseLocationRef.current = true;
+      setLocationStatus('success');
+      setCityName('');
+
+      setDeals((prevDeals) => {
+        const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
+        const nextDeals = composeDealsWithLocationContext(preservedDeals, newLocation, true);
+        seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
+        return nextDeals;
+      });
+    };
+
+    if (!navigator.geolocation) {
+      handleLocationFailure('error', 'Location unavailable');
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const newLocation = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy
-        };
-        setUserLocation(newLocation);
-        setLocationStatus('success');
-        setCityName('');
-
-        setDeals((prevDeals) => {
-          const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-          const nextDeals = syncSharedOnlineDeals([...generateSeededDeals(newLocation), ...preservedDeals]);
-          seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
-          return nextDeals;
-        });
-      },
+      handleLocationSuccess,
       (error) => {
         console.error('Geolocation error:', error);
-        setUserLocation(DEFAULT_LOCATION);
-        setLocationStatus(error.code === 1 ? 'denied' : 'error');
-        setCityName(error.code === 1 ? 'Location access denied' : 'Location unavailable');
-        
-        // Do NOT seed here to avoid fallback coordinates
+
+        if (error.code !== 1) {
+          console.warn('[LiveDrop] High-accuracy geolocation failed, retrying with balanced accuracy', error);
+
+          navigator.geolocation.getCurrentPosition(
+            handleLocationSuccess,
+            (retryError) => {
+              console.error('Balanced geolocation retry failed:', retryError);
+              handleLocationFailure(
+                retryError.code === 1 ? 'denied' : 'error',
+                retryError.code === 1 ? 'Location access denied' : 'Location unavailable',
+              );
+            },
+            { enableHighAccuracy: false, timeout: 15000, maximumAge: 5 * 60 * 1000 },
+          );
+          return;
+        }
+
+        handleLocationFailure('denied', 'Location access denied');
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
@@ -3630,11 +3761,10 @@ export default function App() {
     }
 
     const nextLocation = locationOverride ?? userLocation;
-    const refreshedLocalDeals = generateSeededDeals(nextLocation);
 
     setDeals((prevDeals) => {
       const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-      const nextDeals = syncSharedOnlineDeals([...refreshedLocalDeals, ...preservedDeals]);
+      const nextDeals = composeDealsWithLocationContext(preservedDeals, nextLocation, true);
       seenDealIdsRef.current = new Set(nextDeals.map((deal) => deal.id));
       return nextDeals;
     });
@@ -3698,7 +3828,7 @@ export default function App() {
       }
     };
 
-    if (userLocation.lat && userLocation.lng) {
+    if (hasUsableUserLocation(userLocation)) {
       fetchCity();
     }
   }, [locationStatus, userLocation.lat, userLocation.lng]);
@@ -3748,6 +3878,10 @@ export default function App() {
         return;
       }
 
+      if (!hasUsableCoordinates(deal.lat, deal.lng)) {
+        return;
+      }
+
       const distance = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
       if (deal.expiresAt > Date.now() && distance <= radius) {
         pushNotification({
@@ -3766,6 +3900,7 @@ export default function App() {
 
     deals.forEach((deal) => {
       if (deal.businessType === 'online') return;
+      if (!hasUsableCoordinates(deal.lat, deal.lng)) return;
 
       const distance = calculateDistance(userLocation.lat, userLocation.lng, deal.lat, deal.lng);
       const isVisible = deal.expiresAt > Date.now() && distance <= radius;
@@ -3783,7 +3918,8 @@ export default function App() {
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem(DEALS_STORAGE_KEY, JSON.stringify(deals));
+    const persistedDeals = deals.filter((deal) => !isManagedLocalSeedDeal(deal));
+    localStorage.setItem(DEALS_STORAGE_KEY, JSON.stringify(persistedDeals));
   }, [deals]);
 
   useEffect(() => {
@@ -4421,8 +4557,18 @@ export default function App() {
     setDealsLoading(true);
     try {
       const sharedDeals = await fetchSharedDeals();
-      const fallbackDeals = syncSharedOnlineDeals(readStoredDeals());
-      const nextDeals = sharedDeals.length > 0 ? syncSharedOnlineDeals(sharedDeals) : fallbackDeals;
+      const fallbackDeals = composeDealsWithLocationContext(
+        readStoredDeals(),
+        latestUserLocationRef.current,
+        latestHasPreciseLocationRef.current,
+      );
+      const nextDeals = sharedDeals.length > 0
+        ? composeDealsWithLocationContext(
+            sharedDeals,
+            latestUserLocationRef.current,
+            latestHasPreciseLocationRef.current,
+          )
+        : fallbackDeals;
       applyDealsState(nextDeals);
       setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
       pushAdminLog('info', 'Force refreshed shared deals');
@@ -4936,8 +5082,13 @@ export default function App() {
     const visibleCategoryOnlineDeals = categoryOnlineDealPages[safeOnlineCategoryPage] ?? [];
     const onlineHeadline = selectedCategory === 'All' ? 'All' : getCategoryLabel(selectedCategory);
     const onlineCategoryDescription = isDropModeActive
-      ? `Drop Mode is highlighting ${selectedCategory === 'All' ? 'the sharpest online deals' : `${getCategoryLabel(selectedCategory).toLowerCase()} deals`} right now.`
-      : `${selectedCategory === 'All' ? 'All online deals' : `${getCategoryLabel(selectedCategory)} deals`}, newest drops first.`;
+      ? selectedCategory === 'All'
+        ? 'Urgent picks, newest first.'
+        : `Urgent ${getCategoryLabel(selectedCategory).toLowerCase()} picks, newest first.`
+      : selectedCategory === 'All'
+        ? 'Fresh online deals, newest first.'
+        : `Fresh ${getCategoryLabel(selectedCategory).toLowerCase()} deals, newest first.`;
+    const onlineHeroIconName = selectedCategory === 'All' ? 'online' : getCategoryIconName(selectedCategory);
 
     const getOnlineDealHeroLabel = (offerText?: string | null) => {
       const normalizedOffer = (typeof offerText === 'string' ? offerText : '').trim();
@@ -5020,7 +5171,7 @@ export default function App() {
             </span>
           </div>
           {isDropModeActive && deal.hasTimer ? (
-            <div className="pointer-events-none absolute right-3 top-3">
+            <div className="pointer-events-none absolute bottom-3 left-3">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-slate-950/70 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white backdrop-blur-sm">
                 <AppIcon name="clock" size={11} />
                 Ends soon
@@ -5140,11 +5291,11 @@ export default function App() {
             </span>
           </div>
           {deal.hasTimer ? (
-            <div className="pointer-events-none absolute right-2 top-2">
+            <div className="pointer-events-none absolute bottom-2 left-2">
               <Timer
                 expiresAt={deal.expiresAt}
                 onExpire={forceRefreshDealsView}
-                className="rounded-full bg-white/90 px-2 py-1 text-[11px] font-black text-indigo-600 shadow-sm"
+                className="rounded-full bg-white/92 px-2 py-1 text-[11px] font-black text-indigo-600 shadow-sm"
               />
             </div>
           ) : null}
@@ -5374,26 +5525,39 @@ export default function App() {
           </div>
         )}
 
-        <div className="flex items-center justify-between mb-0.5">
-          <div>
-            {isOnlineMode ? (
-              <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Online</p>
-            ) : null}
-            <h2 className="text-[1.45rem] font-black tracking-[-0.035em] text-slate-900">{dropMode === 'local' ? 'Live Near You' : onlineHeadline}</h2>
-            {isOnlineMode ? (
-              <p className="mt-1 text-[11px] font-semibold text-slate-500">
+        {isOnlineMode ? (
+          <div className="relative mb-2 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-4 py-3.5 shadow-[0_14px_32px_rgba(148,163,184,0.12)]">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
+            <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg]">
+              <AppIcon name={onlineHeroIconName} size={58} strokeWidth={1.35} />
+            </div>
+            <span className={`absolute right-4 top-3.5 inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${
+              isDropModeActive
+                ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
+                : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
+            }`}>
+              {sortedOnlineDealsByTab.length} Drops
+            </span>
+            <div className="relative z-10 min-w-0 pr-20">
+              <p className="text-[8px] font-black uppercase tracking-[0.22em] text-slate-400/90">Online</p>
+              <h2 className="mt-2 text-[1.3rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
+                {onlineHeadline}
+              </h2>
+              <p className="mt-1.5 max-w-[13.75rem] text-[11.5px] font-medium leading-[1.5] text-slate-500/95">
                 {onlineCategoryDescription}
               </p>
-            ) : null}
+            </div>
           </div>
-          <span className={`text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-[0.14em] ${
-            isDropModeActive
-              ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-              : 'bg-indigo-100/80 text-indigo-600'
-          }`}>
-            {dropMode === 'local' ? filteredActiveLocalDeals.length : sortedOnlineDealsByTab.length} Drops
-          </span>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between mb-0.5">
+            <div>
+              <h2 className="text-[1.45rem] font-black tracking-[-0.035em] text-slate-900">Live Near You</h2>
+            </div>
+            <span className="rounded-full bg-indigo-100/80 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-indigo-600">
+              {filteredActiveLocalDeals.length} Drops
+            </span>
+          </div>
+        )}
 
         <div className="overflow-x-auto pb-0.5 -mx-0.5">
           <div className="flex min-w-max items-center gap-1.5 px-1">
