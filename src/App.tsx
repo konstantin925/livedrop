@@ -571,11 +571,21 @@ const getEffectiveLocalDealDistance = (
   return Number.POSITIVE_INFINITY;
 };
 
+const EXCLUDED_ONLINE_DEAL_TITLES = new Set([
+  'Laptop Stand Bundle Deal',
+  'Creator Desk Essentials Sale',
+]);
+
+const isExcludedOnlineDeal = (deal: Deal) => {
+  return deal.businessType === 'online' && EXCLUDED_ONLINE_DEAL_TITLES.has(deal.title);
+};
+
 const isManagedLocalSeedDeal = (deal: Deal) =>
   deal.businessType !== 'online' && deal.id.startsWith('seed-');
 
 const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
-  return mergeDealsWithMockOnlinePipeline(existingDeals, generateSeededOnlineDeals()).deals;
+  const synced = mergeDealsWithMockOnlinePipeline(existingDeals, generateSeededOnlineDeals()).deals;
+  return synced.filter((deal) => !isExcludedOnlineDeal(deal));
 };
 
 const composeDealsWithLocationContext = (
@@ -7713,6 +7723,7 @@ export default function App() {
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, 3);
     const fallbackRecommendedDeals = generateSeededOnlineDeals()
+      .filter((deal) => !isExcludedOnlineDeal(deal))
       .filter((deal) => deal.expiresAt > now && !savedDealIds.has(deal.id))
       .slice(0, 3);
     const recommendedCatalogDeals = liveRecommendedDeals.length > 0 ? liveRecommendedDeals : fallbackRecommendedDeals;
