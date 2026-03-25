@@ -467,11 +467,7 @@ const readStoredDeals = (): Deal[] => {
     const raw = localStorage.getItem(DEALS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? sanitizeDealsCollection(
-          parsed.filter((deal) => !isStoredManagedLocalSeedDeal(deal)),
-        )
-      : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }

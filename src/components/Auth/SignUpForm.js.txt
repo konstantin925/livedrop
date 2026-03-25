@@ -1,0 +1,65 @@
+// src/components/Auth/SignUpForm.js
+
+import React, { useState } from 'react';
+import { createUserWithEmailAndPassword } from 'firebase/auth'; // Import the function for creating users
+import { auth } from '../../lib/firebase/firebase'; // Import your initialized auth instance
+
+function SignUpForm() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
+
+  const handleSignUp = async (e) => {
+    e.preventDefault(); // Prevent default form submission
+    setError(null);    // Clear previous errors
+    setSuccess(false); // Clear previous success state
+
+    try {
+      // Use Firebase Authentication to create a new user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      console.log("User signed up:", userCredential.user);
+      setSuccess(true);
+      setEmail(''); // Clear form fields on success
+      setPassword('');
+      // You might want to redirect the user or update UI here
+    } catch (firebaseError) {
+      // Handle errors during sign-up
+      console.error("Error signing up:", firebaseError.message);
+      setError(firebaseError.message);
+    }
+  };
+
+  return (
+    <div>
+      <h2>Sign Up</h2>
+      <form onSubmit={handleSignUp}>
+        <div>
+          <label htmlFor="email">Email:</label>
+          <input
+            type="email"
+            id="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        <div>
+          <label htmlFor="password">Password:</label>
+          <input
+            type="password"
+            id="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+        <button type="submit">Register</button>
+      </form>
+      {success && <p style={{ color: 'green' }}>Registration successful! Welcome.</p>}
+      {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+    </div>
+  );
+}
+
+export default SignUpForm;
