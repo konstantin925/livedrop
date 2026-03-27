@@ -268,6 +268,43 @@ const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
   Home: ['Cleaning', 'Books', 'Furniture', 'Services'],
 };
 
+const ONLINE_TECH_SUBCATEGORY_OPTIONS = [
+  'All',
+  'Phones',
+  'Laptops',
+  'Tablets',
+  'Smartwatches',
+  'Headphones',
+  'Earbuds',
+  'Speakers',
+  'Gaming',
+  'PC Accessories',
+  'Keyboards',
+  'Mice',
+  'Monitors',
+  'TVs',
+  'Cameras',
+  'Drones',
+] as const;
+
+const ONLINE_TECH_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
+  Phones: ['phone', 'iphone', 'galaxy', 'pixel', 'smartphone', 'mobile'],
+  Laptops: ['laptop', 'macbook', 'notebook', 'chromebook', 'ultrabook'],
+  Tablets: ['tablet', 'ipad', 'fire hd', 'galaxy tab', 'surface go'],
+  Smartwatches: ['watch', 'smartwatch', 'fitbit', 'galaxy watch', 'apple watch'],
+  Headphones: ['headphone', 'over-ear', 'over ear', 'studio pro'],
+  Earbuds: ['earbud', 'earbuds', 'in-ear', 'airpods'],
+  Speakers: ['speaker', 'soundbar', 'audio system'],
+  Gaming: ['gaming', 'ps5', 'xbox', 'switch', 'controller', 'console'],
+  'PC Accessories': ['pc accessory', 'pc accessories', 'dock', 'hub', 'ssd enclosure'],
+  Keyboards: ['keyboard', 'keychron', 'mechanical keyboard'],
+  Mice: ['mouse', 'gaming mouse', 'trackball'],
+  Monitors: ['monitor', 'display', 'screen'],
+  TVs: ['tv', 'oled', 'qled', 'led tv', 'fire tv'],
+  Cameras: ['camera', 'dslr', 'mirrorless', 'security camera', 'webcam'],
+  Drones: ['drone', 'quadcopter'],
+};
+
 const LOCAL_SUBCATEGORY_KEYWORDS: Record<string, Record<string, string[]>> = {
   'Fast Food': {
     Burgers: ['burger', 'burgers', 'cheeseburger', 'fries', 'slider'],
@@ -312,6 +349,23 @@ const getLocalDealSubcategory = (deal: Deal) => {
 
   for (const [subcategory, keywords] of Object.entries(matchers)) {
     if (keywords.some((keyword) => sourceText.includes(keyword))) {
+      return subcategory;
+    }
+  }
+
+  return null;
+};
+
+const getOnlineTechSubcategory = (deal: Deal) => {
+  if (deal.category !== 'Tech') return null;
+
+  const haystack = [deal.title, deal.description, deal.offerText, deal.businessName, deal.brand, deal.merchant]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  for (const [subcategory, keywords] of Object.entries(ONLINE_TECH_SUBCATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => haystack.includes(keyword))) {
       return subcategory;
     }
   }
@@ -2820,6 +2874,7 @@ export default function App() {
   const [dropModeShuffleSeed, setDropModeShuffleSeed] = useState<number>(() => Date.now());
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedLocalSubcategory, setSelectedLocalSubcategory] = useState<string>('All');
+  const [selectedOnlineSubcategory, setSelectedOnlineSubcategory] = useState<string>('All');
   const [onlineCategoryPage, setOnlineCategoryPage] = useState(0);
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
@@ -2980,6 +3035,18 @@ export default function App() {
       setSelectedLocalSubcategory('All');
     }
   }, [dropMode, selectedCategory, selectedLocalSubcategory]);
+
+  useEffect(() => {
+    if (dropMode !== 'online' || selectedCategory !== 'Tech') {
+      setSelectedOnlineSubcategory('All');
+      return;
+    }
+
+    const availableSubcategories = ONLINE_TECH_SUBCATEGORY_OPTIONS;
+    if (!availableSubcategories.includes(selectedOnlineSubcategory as typeof availableSubcategories[number])) {
+      setSelectedOnlineSubcategory('All');
+    }
+  }, [dropMode, selectedCategory, selectedOnlineSubcategory]);
 
   useEffect(() => {
     if (currentView === 'deal-detail' && selectedDetailDealId && !selectedDetailDeal) {
@@ -6226,6 +6293,10 @@ export default function App() {
     const isDropModeActive = isOnlineMode && dropModeEnabled;
     const localDeals = deals.filter((deal) => deal.businessType !== 'online');
     const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
+    const onlineDealsWithSubcategory = onlineDeals.map((deal) => ({
+      ...deal,
+      onlineSubcategory: getOnlineTechSubcategory(deal),
+    }));
     const dealsWithDistance = localDeals.map(deal => {
       const dist = getEffectiveLocalDealDistance(userLocation, deal, hasPreciseUserLocation);
       return {
@@ -6238,6 +6309,10 @@ export default function App() {
     const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? []);
     const shouldShowLocalSubcategories =
       dropMode === 'local' && selectedCategory !== 'All' && localSubcategoryOptions.length > 0;
+    const shouldShowOnlineTechSubcategories = dropMode === 'online' && selectedCategory === 'Tech';
+    const onlineTechSubcategoryOptions = shouldShowOnlineTechSubcategories
+      ? ONLINE_TECH_SUBCATEGORY_OPTIONS.filter((subcategory) => subcategory !== 'All')
+      : [];
 
     const activeLocalDeals = dealsWithDistance
       .filter(d =>
@@ -6284,8 +6359,11 @@ export default function App() {
       return true;
     });
 
-    const activeOnlineDeals = onlineDeals.filter(
-      (deal) => deal.expiresAt > now && (selectedCategory === 'All' || deal.category === selectedCategory),
+    const activeOnlineDeals = onlineDealsWithSubcategory.filter(
+      (deal) =>
+        deal.expiresAt > now &&
+        (selectedCategory === 'All' || deal.category === selectedCategory) &&
+        (selectedCategory !== 'Tech' || selectedOnlineSubcategory === 'All' || deal.onlineSubcategory === selectedOnlineSubcategory),
     );
 
     const rankedDropModeDeals = [...activeOnlineDeals]
@@ -6930,6 +7008,47 @@ export default function App() {
                     onClick={() => setSelectedLocalSubcategory(subcategory)}
                     className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
                       selectedLocalSubcategory === subcategory
+                        ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                        : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                    }`}
+                  >
+                    {subcategory}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {dropMode === 'online' && shouldShowOnlineTechSubcategories ? (
+          <div
+            aria-hidden={!shouldShowOnlineTechSubcategories}
+            className={`overflow-hidden transition-all duration-200 ease-out ${
+              shouldShowOnlineTechSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
+            }`}
+          >
+            <div className="overflow-x-auto -mx-0.5">
+              <div className="flex min-w-max items-center gap-1.5 px-1 pt-1">
+                <button
+                  type="button"
+                  aria-pressed={selectedOnlineSubcategory === 'All'}
+                  onClick={() => setSelectedOnlineSubcategory('All')}
+                  className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                    selectedOnlineSubcategory === 'All'
+                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                  }`}
+                >
+                  All Tech
+                </button>
+                {onlineTechSubcategoryOptions.map((subcategory) => (
+                  <button
+                    key={subcategory}
+                    type="button"
+                    aria-pressed={selectedOnlineSubcategory === subcategory}
+                    onClick={() => setSelectedOnlineSubcategory(subcategory)}
+                    className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                      selectedOnlineSubcategory === subcategory
                         ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
                         : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                     }`}

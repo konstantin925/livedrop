@@ -35,6 +35,9 @@ export interface Deal {
   currentClaims: number;
   claimCount: number;
   category: string;
+  // Derived grouping helpers used in UI filtering
+  localSubcategory?: string;
+  onlineSubcategory?: string;
 }
 
 export interface UserLocation {
