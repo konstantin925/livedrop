@@ -93,6 +93,86 @@ const buildExtractionDebug = (
   failureReason: pipelineResult.failureReason,
 });
 
+const hasValue = (value: unknown) => {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'string') return value.trim().length > 0;
+  return Boolean(value);
+};
+
+const buildFocusedFieldDebug = (pipelineResult: Awaited<ReturnType<typeof runImportPipeline>>) => {
+  const scan = pipelineResult.scanResult;
+  const normalized = pipelineResult.normalizedDigest;
+  const mapped = pipelineResult.mappedForm.payload;
+  const requestedAffiliate = pipelineResult.normalizedDigest.affiliateUrl ?? null;
+  const derivedWebsite = (() => {
+    try {
+      if (!normalized.sourceUrl) return null;
+      const parsed = new URL(normalized.sourceUrl);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      return null;
+    }
+  })();
+
+  const rawScanResult = {
+    storeName: scan.fields.merchant.value ?? scan.fields.brand.value ?? null,
+    dealTitle: scan.fields.title.value,
+    description: scan.fields.description.value ?? scan.fields.summary.value ?? null,
+    category: scan.fields.category.value ?? (scan.breadcrumbs[scan.breadcrumbs.length - 1] ?? null),
+    websiteUrl: scan.finalUrl ?? scan.cleanedSourceUrl ?? scan.sourceUrl,
+    sourceProductUrl: scan.cleanedSourceUrl ?? scan.finalUrl ?? scan.sourceUrl,
+    affiliateUrl: requestedAffiliate,
+    imageUrl: scan.fields.mainImage.value,
+  };
+
+  const normalizedDealObject = {
+    storeName: normalized.merchant ?? normalized.brand ?? null,
+    dealTitle: normalized.productTitle,
+    description: normalized.description ?? normalized.summary ?? null,
+    category: normalized.category,
+    websiteUrl: derivedWebsite,
+    sourceProductUrl: normalized.sourceUrl,
+    affiliateUrl: normalized.affiliateUrl,
+    imageUrl: normalized.image,
+  };
+
+  const portalFieldMappingObject = {
+    storeName: mapped.storeName,
+    dealTitle: mapped.dealTitle,
+    description: mapped.description,
+    category: mapped.category,
+    websiteUrl: mapped.websiteUrl,
+    sourceProductUrl: mapped.productUrl,
+    affiliateUrl: mapped.affiliateUrl,
+    imageUrl: mapped.imageUrl,
+  };
+
+  const trackedFields = Object.keys(rawScanResult) as Array<keyof typeof rawScanResult>;
+  const transitionIssues = trackedFields.flatMap((field) => {
+    const rawValue = rawScanResult[field];
+    const normalizedValue = normalizedDealObject[field];
+    const mappedValue = portalFieldMappingObject[field];
+    const issues: string[] = [];
+
+    if (hasValue(rawValue) && !hasValue(normalizedValue)) {
+      issues.push(`${field}: lost between scan and normalize`);
+    }
+    if (hasValue(normalizedValue) && !hasValue(mappedValue)) {
+      issues.push(`${field}: lost between normalize and map`);
+    }
+
+    return issues;
+  });
+
+  return {
+    rawScanResult,
+    normalizedDealObject,
+    portalFieldMappingObject,
+    transitionIssues,
+  };
+};
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -142,12 +222,20 @@ Deno.serve(async (request) => {
       : '';
     const missingGroups = buildMissingGroups(pipelineResult.validationResult);
     const extractionDebug = buildExtractionDebug(pipelineResult);
+    const focusedFieldDebug = buildFocusedFieldDebug(pipelineResult);
     const sourceAssets = {
       websiteUrl: pipelineResult.mappedForm.payload.websiteUrl || null,
       productUrl: pipelineResult.normalizedDigest.sourceUrl,
       affiliateUrl: pipelineResult.normalizedDigest.affiliateUrl,
       imageUrl: pipelineResult.normalizedDigest.image,
     };
+
+    console.info('[LiveDrop][ai-deal-finder] Raw scan result', focusedFieldDebug.rawScanResult);
+    console.info('[LiveDrop][ai-deal-finder] Normalized deal object', focusedFieldDebug.normalizedDealObject);
+    console.info('[LiveDrop][ai-deal-finder] Portal field mapping object', focusedFieldDebug.portalFieldMappingObject);
+    if (focusedFieldDebug.transitionIssues.length > 0) {
+      console.warn('[LiveDrop][ai-deal-finder] Transition issues', focusedFieldDebug.transitionIssues);
+    }
 
     return json({
       normalizedDeal: pipelineResult.mappedForm.draft,
@@ -164,6 +252,7 @@ Deno.serve(async (request) => {
       sourceAssets,
       extractionStatus: pipelineResult.extractionStatus,
       extractionDebug,
+      focusedFieldDebug,
       requestPayload: {
         query: null,
         url: sourceUrl,
@@ -185,6 +274,7 @@ Deno.serve(async (request) => {
         minDiscount: body.minDiscount ?? null,
       },
       provider: pipelineResult.scanResult.provider,
+      amazonRawProduct: pipelineResult.scanResult.amazonRawProduct,
       searchStatus: 'Direct URL mode',
       searchQuery: pipelineResult.scanResult.cleanedSourceUrl ?? sourceUrl,
       queryAttempts: [],

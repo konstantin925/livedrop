@@ -11,6 +11,7 @@ interface DealCardProps {
   deal: Deal;
   onClaim: (deal: Deal) => void;
   isClaimed?: boolean;
+  isViewed?: boolean;
   computedDistance?: string;
   onSaveToCatalog?: (deal: Deal) => void;
   canSaveToCatalog?: boolean;
@@ -28,6 +29,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   deal,
   onClaim,
   isClaimed = false,
+  isViewed = false,
   computedDistance,
   onSaveToCatalog,
   canSaveToCatalog = false,
@@ -125,7 +127,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   }
 
   return (
-      <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3.5 max-[359px]:p-3 shadow-[0_12px_28px_rgba(148,163,184,0.16)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] active:scale-[0.985]`}>
+      <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3.5 max-[359px]:p-3 shadow-[0_12px_28px_rgba(148,163,184,0.16)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] active:scale-[0.985] ${isViewed ? 'opacity-90 border-slate-200 shadow-[0_8px_18px_rgba(148,163,184,0.12)]' : ''}`}>
       <div className="mb-2.5 flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           <CompanyLogo businessName={displayBusinessName} logoUrl={deal.logoUrl} category={deal.category} size={36} />
@@ -151,6 +153,11 @@ export const DealCard: React.FC<DealCardProps> = ({
               </p>
             <p className="mb-1 truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
             <h2 className="line-clamp-2 break-words pr-1 text-[0.98rem] font-extrabold leading-[1.15] text-slate-900">{displayTitle}</h2>
+            {isViewed ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <AppIcon name="eye" size={11} /> Viewed
+              </span>
+            ) : null}
           </div>
         </div>
         <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-[13px] min-[360px]:text-base" />

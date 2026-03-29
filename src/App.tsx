@@ -30,6 +30,8 @@ import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupa
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
 import brandBoltLogo from './assets/logo-bolt.svg';
+import brandBoltLogo3d from './assets/bolt-3d.png';
+import brandBoltLogo3dActive from './assets/bolt-3d-active.png';
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
@@ -305,6 +307,74 @@ const ONLINE_TECH_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Drones: ['drone', 'quadcopter'],
 };
 
+const ONLINE_HOME_SUBCATEGORY_OPTIONS = [
+  'All',
+  'Furniture',
+  'Home Decor',
+  'Kitchen',
+  'Bedding',
+  'Bath',
+  'Storage',
+  'Cleaning',
+  'Appliances',
+  'Smart Home',
+  'Lighting',
+  'Outdoor',
+  'Patio',
+] as const;
+
+const ONLINE_HOME_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
+  Furniture: ['sofa', 'couch', 'chair', 'table', 'desk', 'dresser', 'bed frame', 'furniture'],
+  'Home Decor': ['decor', 'throw pillow', 'wall art', 'rug', 'vase', 'frame', 'decorative'],
+  Kitchen: ['kitchen', 'cookware', 'pan', 'pot', 'knife', 'blender', 'food processor'],
+  Bedding: ['bedding', 'comforter', 'duvet', 'sheet', 'pillowcase', 'bedspread', 'quilt'],
+  Bath: ['bath', 'towel', 'shower', 'bathroom', 'bath mat'],
+  Storage: ['storage', 'organizer', 'bin', 'basket', 'shelf', 'closet', 'drawer'],
+  Cleaning: ['cleaning', 'vacuum', 'mop', 'broom', 'cleaner', 'detergent'],
+  Appliances: ['appliance', 'microwave', 'toaster', 'air fryer', 'fridge', 'washer', 'dryer', 'dishwasher'],
+  'Smart Home': ['smart home', 'smart plug', 'smart bulb', 'smart switch', 'homekit', 'google home', 'alexa'],
+  Lighting: ['lamp', 'lighting', 'light', 'bulb', 'lantern'],
+  Outdoor: ['outdoor', 'garden', 'lawn', 'grill', 'hose'],
+  Patio: ['patio', 'outdoor furniture', 'umbrella', 'deck'],
+};
+
+const ONLINE_FASHION_SUBCATEGORY_OPTIONS = [
+  'All',
+  'Men’s Clothing',
+  'Women’s Clothing',
+  'Shoes',
+  'Sneakers',
+  'Boots',
+  'Sandals',
+  'Jackets',
+  'Hoodies',
+  'T-Shirts',
+  'Jeans',
+  'Dresses',
+  'Activewear',
+  'Loungewear',
+  'Bags',
+  'Wallets',
+] as const;
+
+const ONLINE_FASHION_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
+  'Men’s Clothing': ['mens', 'men’s', 'men ', 'man ', 'male', 'menswear'],
+  'Women’s Clothing': ['women', 'women’s', 'womens', 'lady', 'ladies', 'womenswear'],
+  Shoes: ['shoe', 'shoes', 'footwear'],
+  Sneakers: ['sneaker', 'sneakers', 'jordans', 'running shoe', 'trainer'],
+  Boots: ['boot', 'boots'],
+  Sandals: ['sandal', 'sandals', 'slides', 'flip flop'],
+  Jackets: ['jacket', 'parka', 'coat', 'outerwear'],
+  Hoodies: ['hoodie', 'hooded', 'pullover', 'sweatshirt'],
+  'T-Shirts': ['t-shirt', 'tee', 'tees', 'graphic tee'],
+  Jeans: ['jean', 'jeans', 'denim'],
+  Dresses: ['dress', 'dresses', 'maxi', 'midi'],
+  Activewear: ['activewear', 'athletic', 'training', 'performance', 'gym'],
+  Loungewear: ['lounge', 'loungewear', 'pajama', 'pj', 'sweatpant'],
+  Bags: ['bag', 'tote', 'backpack', 'handbag', 'crossbody'],
+  Wallets: ['wallet', 'card holder'],
+};
+
 const LOCAL_SUBCATEGORY_KEYWORDS: Record<string, Record<string, string[]>> = {
   'Fast Food': {
     Burgers: ['burger', 'burgers', 'cheeseburger', 'fries', 'slider'],
@@ -370,6 +440,47 @@ const getOnlineTechSubcategory = (deal: Deal) => {
     }
   }
 
+  return null;
+};
+
+const getOnlineHomeSubcategory = (deal: Deal) => {
+  if (deal.category !== 'Home') return null;
+
+  const haystack = [deal.title, deal.description, deal.offerText, deal.businessName, deal.brand, deal.merchant]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  for (const [subcategory, keywords] of Object.entries(ONLINE_HOME_SUBCATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => haystack.includes(keyword))) {
+      return subcategory;
+    }
+  }
+
+  return null;
+};
+
+const getOnlineFashionSubcategory = (deal: Deal) => {
+  if (deal.category !== 'Fashion') return null;
+
+  const haystack = [deal.title, deal.description, deal.offerText, deal.businessName, deal.brand, deal.merchant]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  for (const [subcategory, keywords] of Object.entries(ONLINE_FASHION_SUBCATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => haystack.includes(keyword))) {
+      return subcategory;
+    }
+  }
+
+  return null;
+};
+
+const getOnlineDealSubcategory = (deal: Deal) => {
+  if (deal.category === 'Tech') return getOnlineTechSubcategory(deal);
+  if (deal.category === 'Home') return getOnlineHomeSubcategory(deal);
+  if (deal.category === 'Fashion') return getOnlineFashionSubcategory(deal);
   return null;
 };
 
@@ -773,6 +884,7 @@ type BulkImportDealInput = {
   title: string;
   description: string;
   category: string;
+  subcategory?: string;
   offerText: string;
   originalPrice?: number;
   price?: number;
@@ -790,6 +902,7 @@ type BulkImportDealInput = {
   tags?: string[];
   sourceType?: 'keyword' | 'url';
   sourceQuery?: string;
+  sourceProductUrl?: string;
   maxPriceMatched?: boolean;
   stockStatus?: string;
   availability?: string;
@@ -1081,11 +1194,12 @@ const buildPortalFieldCoverage = (portalState: Deal | null) => {
 
 const resolveImportedLinkSet = (source: {
   websiteUrl?: string;
+  sourceProductUrl?: string;
   productUrl?: string;
   productLink?: string;
   affiliateUrl?: string;
 }) => {
-  const productUrl = getFirstSafeExternalUrl(source.productUrl, source.productLink);
+  const productUrl = getFirstSafeExternalUrl(source.sourceProductUrl, source.productUrl, source.productLink);
   const affiliateUrl = normalizeSafeExternalUrl(source.affiliateUrl);
   const websiteUrl =
     deriveWebsiteOrigin(source.websiteUrl)
@@ -1112,20 +1226,75 @@ const PORTAL_FIELD_FALLBACK_SOURCES: Record<keyof PortalAutofillPayload, string[
   offerText: ['couponText', 'offerText'],
 };
 
+const ONLINE_CATEGORY_SUBCATEGORY_HINTS: Record<string, readonly string[]> = {
+  Tech: ['Phones', 'Laptops', 'Tablets', 'Smartwatches', 'Headphones', 'Earbuds', 'Speakers', 'Gaming', 'PC Accessories', 'Keyboards', 'Mice', 'Monitors', 'TVs', 'Cameras', 'Drones'],
+  Home: ['Furniture', 'Home Decor', 'Kitchen', 'Bedding', 'Bath', 'Storage', 'Cleaning', 'Appliances', 'Smart Home', 'Lighting', 'Outdoor', 'Patio'],
+  Fashion: ['Men Clothing', 'Women Clothing', 'Shoes', 'Sneakers', 'Boots', 'Sandals', 'Jackets', 'Hoodies', 'T-Shirts', 'Jeans', 'Dresses', 'Activewear', 'Loungewear', 'Bags', 'Wallets'],
+};
+
+const ONLINE_SUBCATEGORY_KEYWORDS: Record<string, readonly string[]> = {
+  Phones: ['phone', 'iphone', 'android', 'pixel', 'galaxy'],
+  Laptops: ['laptop', 'notebook', 'macbook', 'chromebook'],
+  Tablets: ['tablet', 'ipad', 'fire hd'],
+  Smartwatches: ['smartwatch', 'apple watch', 'wearable'],
+  Headphones: ['headphone', 'over-ear', 'noise cancelling'],
+  Earbuds: ['earbud', 'airpods', 'buds'],
+  Speakers: ['speaker', 'soundbar', 'bluetooth speaker'],
+  Gaming: ['gaming', 'xbox', 'playstation', 'nintendo'],
+  'PC Accessories': ['pc accessory', 'pc accessories'],
+  Keyboards: ['keyboard', 'mechanical'],
+  Mice: ['mouse', 'mice'],
+  Monitors: ['monitor', 'display'],
+  TVs: ['tv', 'television', 'oled', 'qled'],
+  Cameras: ['camera', 'dslr', 'mirrorless'],
+  Drones: ['drone', 'quadcopter'],
+  Furniture: ['sofa', 'chair', 'table', 'desk', 'furniture'],
+  'Home Decor': ['decor', 'wall art', 'vase', 'rug'],
+  Kitchen: ['kitchen', 'cookware', 'knife', 'blender', 'air fryer'],
+  Bedding: ['bedding', 'sheet', 'comforter', 'pillow'],
+  Bath: ['bath', 'towel', 'shower'],
+  Storage: ['storage', 'organizer', 'shelf', 'bin'],
+  Cleaning: ['cleaning', 'vacuum', 'mop', 'detergent'],
+  Appliances: ['appliance', 'microwave', 'fridge', 'dishwasher'],
+  'Smart Home': ['smart home', 'smart plug', 'smart bulb', 'alexa'],
+  Lighting: ['lamp', 'lighting', 'light bulb'],
+  Outdoor: ['outdoor', 'garden', 'yard'],
+  Patio: ['patio', 'deck', 'outdoor furniture'],
+  'Men Clothing': ['men', 'mens'],
+  'Women Clothing': ['women', 'womens'],
+  Shoes: ['shoe', 'footwear'],
+  Sneakers: ['sneaker', 'trainer'],
+  Boots: ['boot'],
+  Sandals: ['sandal'],
+  Jackets: ['jacket', 'coat'],
+  Hoodies: ['hoodie', 'sweatshirt'],
+  'T-Shirts': ['t-shirt', 'tee shirt', 'tee'],
+  Jeans: ['jean', 'denim'],
+  Dresses: ['dress', 'gown'],
+  Activewear: ['activewear', 'workout', 'gym wear', 'athletic'],
+  Loungewear: ['loungewear', 'pajama', 'sleepwear'],
+  Bags: ['bag', 'backpack', 'tote'],
+  Wallets: ['wallet'],
+};
+
 const buildPortalAutofillPayload = (
   source:
     | {
         businessName?: string;
+        storeName?: string;
         businessType?: Deal['businessType'];
         merchant?: string;
         brand?: string;
         websiteUrl?: string;
+        sourceProductUrl?: string;
         productUrl?: string;
         productLink?: string;
         affiliateUrl?: string;
         imageUrl?: string;
         title?: string;
+        dealTitle?: string;
         description?: string;
+        summary?: string;
         category?: string;
         offerText?: string;
       }
@@ -1135,28 +1304,83 @@ const buildPortalAutofillPayload = (
   const mode = source?.businessType === 'local' ? 'local' : 'online';
   const linkSet = resolveImportedLinkSet({
     websiteUrl: source?.websiteUrl,
+    sourceProductUrl: source?.sourceProductUrl,
     productUrl: source?.productUrl,
     productLink: source?.productLink,
     affiliateUrl: source?.affiliateUrl,
   });
 
   return {
-    storeName: normalizePortalFieldValue(source?.businessName ?? source?.merchant ?? source?.brand),
+    storeName: normalizePortalFieldValue(source?.businessName ?? source?.storeName ?? source?.merchant ?? source?.brand),
     websiteUrl: normalizePortalFieldValue(linkSet.websiteUrl),
     productUrl: normalizePortalFieldValue(linkSet.productUrl),
     affiliateUrl: normalizePortalFieldValue(linkSet.affiliateUrl),
     imageUrl: normalizePortalFieldValue(source?.imageUrl),
-    dealTitle: normalizePortalFieldValue(source?.title),
-    description: normalizePortalFieldValue(source?.description),
+    dealTitle: normalizePortalFieldValue(source?.title ?? source?.dealTitle),
+    description: normalizePortalFieldValue(source?.description ?? source?.summary),
     category: normalizeCategoryValue(source?.category, mode, [
-      source?.title,
-      source?.description,
-      source?.businessName,
+      source?.title ?? source?.dealTitle,
+      source?.description ?? source?.summary,
+      source?.businessName ?? source?.storeName,
       source?.merchant,
       source?.brand,
     ]),
     offerText: normalizePortalFieldValue(source?.offerText),
   };
+};
+
+const mapNormalizedDealToPortalFormFields = (normalizedDeal: BulkImportDealInput): PortalAutofillPayload =>
+  buildPortalAutofillPayload(normalizedDeal);
+
+const titleCaseFromSlug = (value: string) =>
+  value
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const deriveMerchantFromSourceUrl = (...urlCandidates: Array<string | null | undefined>) => {
+  const safeUrl = getFirstSafeExternalUrl(...urlCandidates);
+  if (!safeUrl) return '';
+
+  try {
+    const hostname = new URL(safeUrl).hostname.toLowerCase();
+    const cleaned = hostname.replace(/^www\./, '').split('.').slice(0, -1).join(' ') || hostname.replace(/^www\./, '');
+    return titleCaseFromSlug(cleaned);
+  } catch {
+    return '';
+  }
+};
+
+const guessSubcategoryFromText = (category: string, textSignals: string[]) => {
+  const candidateSubcategories = ONLINE_CATEGORY_SUBCATEGORY_HINTS[category];
+  if (!candidateSubcategories?.length) return '';
+
+  const haystack = textSignals.join(' ').toLowerCase();
+  for (const subcategory of candidateSubcategories) {
+    const keywordList = ONLINE_SUBCATEGORY_KEYWORDS[subcategory] ?? [subcategory.toLowerCase()];
+    if (keywordList.some((keyword) => haystack.includes(keyword.toLowerCase()))) {
+      return subcategory;
+    }
+  }
+
+  return '';
+};
+
+const buildOfferTextFallback = (deal: BulkImportDealInput) => {
+  const existingOffer = trimDealTextValue(deal.offerText ?? deal.couponText);
+  if (existingOffer) return existingOffer;
+
+  if (typeof deal.discountPercent === 'number' && Number.isFinite(deal.discountPercent) && deal.discountPercent > 0) {
+    return `${Math.round(deal.discountPercent)}% OFF`;
+  }
+
+  const currentPrice = deal.currentPrice ?? deal.price;
+  if (typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice >= 0) {
+    return `Now $${currentPrice.toFixed(2)}`;
+  }
+
+  return DEAL_OFFER_FALLBACK;
 };
 
 const TEST_COUPON_AUTOFILL: PortalAutofillPayload = {
@@ -1204,24 +1428,48 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
   if (!deal) return null;
 
   const businessType = deal.isOnline === false ? 'local' : 'online';
+  const sourceUrlCandidate = getFirstSafeExternalUrl(
+    deal.sourceProductUrl,
+    deal.productUrl,
+    deal.productLink,
+    deal.sourceQuery,
+  );
+  const sourceWebsiteCandidate = deriveWebsiteOrigin(deal.websiteUrl) || deriveWebsiteOrigin(sourceUrlCandidate) || '';
+  const merchantFromUrl = deriveMerchantFromSourceUrl(sourceWebsiteCandidate, sourceUrlCandidate);
   const linkSet = resolveImportedLinkSet({
-    websiteUrl: deal.websiteUrl,
-    productUrl: deal.productUrl,
-    productLink: deal.productLink,
+    websiteUrl: sourceWebsiteCandidate || deal.websiteUrl,
+    sourceProductUrl: sourceUrlCandidate || deal.sourceProductUrl,
+    productUrl: sourceUrlCandidate || deal.productUrl,
+    productLink: sourceUrlCandidate || deal.productLink,
     affiliateUrl: deal.affiliateUrl,
   });
   const businessName = trimDealTextWithFallback(
-    deal.businessName ?? deal.merchant ?? deal.brand,
+    deal.businessName ?? deal.merchant ?? deal.brand ?? merchantFromUrl,
     DEAL_BUSINESS_FALLBACK,
     DEAL_MAX_TEXT_LENGTH.businessName,
   );
   const title = trimDealTextWithFallback(deal.title, DEAL_TITLE_FALLBACK, DEAL_MAX_TEXT_LENGTH.title);
-  const description = trimDealTextWithFallback(deal.description ?? deal.summary, DEAL_DESCRIPTION_FALLBACK, DEAL_MAX_TEXT_LENGTH.description);
-  const offerText = trimDealTextWithFallback(
-    deal.offerText ?? deal.couponText,
-    DEAL_OFFER_FALLBACK,
-    DEAL_MAX_TEXT_LENGTH.offerText,
+  const textSignals = [title, deal.description, deal.summary, businessName, deal.merchant, deal.brand, deal.category, deal.offerText].filter(Boolean) as string[];
+  const inferredCategory = normalizeCategoryValue(deal.category, businessType, textSignals);
+  const inferredSubcategory = guessSubcategoryFromText(inferredCategory, textSignals);
+  const descriptionFallback = merchantFromUrl
+    ? `Imported from ${merchantFromUrl}. Add product details before publishing.`
+    : DEAL_DESCRIPTION_FALLBACK;
+  const description = trimDealTextWithFallback(
+    deal.description ?? deal.summary,
+    descriptionFallback,
+    DEAL_MAX_TEXT_LENGTH.description,
   );
+  const offerText = trimDealTextWithFallback(buildOfferTextFallback(deal), DEAL_OFFER_FALLBACK, DEAL_MAX_TEXT_LENGTH.offerText);
+  const primaryImageUrl = trimDealTextValue(deal.imageUrl)
+    || (deal.galleryImages ?? []).map((image) => trimDealTextValue(image)).find(Boolean)
+    || '';
+  const safeTags = (deal.tags ?? [])
+    .map((tag) => trimDealTextValue(tag))
+    .filter(Boolean);
+  if (inferredSubcategory && !safeTags.includes(inferredSubcategory)) {
+    safeTags.push(inferredSubcategory);
+  }
 
   return {
     ...deal,
@@ -1233,22 +1481,18 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
     description,
     summary: trimDealTextValue(deal.summary) || undefined,
     offerText,
-    category: normalizeCategoryValue(deal.category, businessType, [
-      title,
-      description,
-      businessName,
-      deal.merchant,
-      deal.brand,
-      offerText,
-    ]),
+    category: inferredCategory,
+    subcategory: trimDealTextValue(deal.subcategory) || inferredSubcategory || undefined,
+    tags: safeTags.length ? safeTags : undefined,
     websiteUrl: linkSet.websiteUrl || undefined,
+    sourceProductUrl: linkSet.productUrl || undefined,
     productUrl: linkSet.productUrl || undefined,
     productLink: linkSet.productUrl || undefined,
     affiliateUrl: linkSet.affiliateUrl || undefined,
-    imageUrl: trimDealTextValue(deal.imageUrl) || undefined,
+    imageUrl: primaryImageUrl || undefined,
     availability: trimDealTextValue(deal.availability) || trimDealTextValue(deal.stockStatus) || undefined,
     stockStatus: trimDealTextValue(deal.stockStatus) || trimDealTextValue(deal.availability) || undefined,
-    sourceQuery: trimDealTextValue(deal.sourceQuery) || undefined,
+    sourceQuery: trimDealTextValue(deal.sourceQuery) || sourceUrlCandidate || undefined,
   };
 };
 
@@ -1265,6 +1509,7 @@ const buildFallbackNormalizedDigest = (deal?: BulkImportDealInput | null) => {
     affiliateUrl: normalizedDeal.affiliateUrl ?? null,
     asin: normalizedDeal.asin ?? null,
     category: normalizedDeal.category ?? null,
+    subcategory: normalizedDeal.subcategory ?? null,
     image: normalizedDeal.imageUrl ?? null,
     galleryImages: normalizedDeal.galleryImages ?? [],
     currentPrice: normalizedDeal.currentPrice ?? normalizedDeal.price ?? null,
@@ -1293,7 +1538,7 @@ const buildFallbackMappedForm = (
   const normalizedDeal = normalizeImportedDealInput(deal);
   if (!normalizedDeal) return null;
 
-  const payload = buildPortalAutofillPayload(normalizedDeal);
+  const payload = mapNormalizedDealToPortalFormFields(normalizedDeal);
   return {
     payload,
     fieldMappings: buildFallbackMappedFieldMappings(payload, normalizedDeal),
@@ -1317,7 +1562,7 @@ const buildFallbackValidationResult = (
 ): AIDealFinderValidationResult | null => {
   if (!result?.normalizedDeal) return null;
 
-  const mappedForm = buildFallbackMappedForm(result.normalizedDeal);
+  const mappedForm = result.mappedForm ?? buildFallbackMappedForm(result.normalizedDeal);
   if (!mappedForm) return null;
 
   const missingRequiredFields = REQUIRED_PORTAL_AUTOFILL_FIELDS.filter(
@@ -1372,6 +1617,139 @@ const buildFallbackValidationResult = (
   };
 };
 
+const finalizeAIDealPipelineResult = (
+  result: AIDealFinderResult,
+  options?: {
+    sourceUrl?: string | null;
+    affiliateUrl?: string | null;
+  },
+): AIDealFinderResult => {
+  const preferredDraft = result.mappedForm?.draft ?? result.normalizedDeal;
+  const sourceUrl =
+    canonicalizeSourceProductUrl(
+      getFirstSafeExternalUrl(
+        result.mappedForm?.payload.productUrl,
+        result.sourceAssets?.productUrl,
+        preferredDraft.sourceProductUrl,
+        preferredDraft.productUrl,
+        preferredDraft.productLink,
+        preferredDraft.sourceQuery,
+        options?.sourceUrl,
+      ) ?? '',
+    );
+  const affiliateUrl =
+    normalizeSafeExternalUrl(options?.affiliateUrl)
+    ?? normalizeSafeExternalUrl(result.mappedForm?.payload.affiliateUrl)
+    ?? normalizeSafeExternalUrl(result.sourceAssets?.affiliateUrl)
+    ?? normalizeSafeExternalUrl(preferredDraft.affiliateUrl)
+    ?? '';
+
+  const normalizedDeal =
+    normalizeImportedDealInput({
+      ...preferredDraft,
+      sourceType: 'url',
+      sourceQuery: sourceUrl || preferredDraft.sourceQuery,
+      sourceProductUrl: sourceUrl || preferredDraft.sourceProductUrl || preferredDraft.productUrl,
+      productUrl: sourceUrl || preferredDraft.productUrl || preferredDraft.sourceProductUrl,
+      productLink: sourceUrl || preferredDraft.productLink || preferredDraft.productUrl,
+      affiliateUrl: affiliateUrl || preferredDraft.affiliateUrl,
+      websiteUrl:
+        deriveWebsiteOrigin(preferredDraft.websiteUrl)
+        || deriveWebsiteOrigin(sourceUrl)
+        || preferredDraft.websiteUrl,
+      importedAt: preferredDraft.importedAt ?? new Date().toISOString(),
+      isOnline: true,
+    })
+    ?? normalizeImportedDealInput({
+      businessName: deriveMerchantFromSourceUrl(sourceUrl) || DEAL_BUSINESS_FALLBACK,
+      title: preferredDraft.title || DEAL_TITLE_FALLBACK,
+      description: preferredDraft.description || preferredDraft.summary || DEAL_DESCRIPTION_FALLBACK,
+      category: preferredDraft.category || getDefaultCategoryForMode('online'),
+      offerText: preferredDraft.offerText || DEAL_OFFER_FALLBACK,
+      sourceType: 'url',
+      sourceQuery: sourceUrl || undefined,
+      sourceProductUrl: sourceUrl || undefined,
+      productUrl: sourceUrl || undefined,
+      productLink: sourceUrl || undefined,
+      affiliateUrl: affiliateUrl || undefined,
+      websiteUrl: deriveWebsiteOrigin(sourceUrl) || undefined,
+      imageUrl: preferredDraft.imageUrl,
+      isOnline: true,
+    });
+
+  if (!normalizedDeal) {
+    return result;
+  }
+
+  const fallbackPayload = mapNormalizedDealToPortalFormFields(normalizedDeal);
+  const serverPayload = result.mappedForm?.payload;
+  const resolvePayloadField = (serverValue: string | undefined, fallbackValue: string) =>
+    normalizePortalFieldValue(serverValue) || fallbackValue;
+  const resolvedPayload: PortalAutofillPayload = {
+    storeName: resolvePayloadField(serverPayload?.storeName, fallbackPayload.storeName),
+    websiteUrl: resolvePayloadField(serverPayload?.websiteUrl, fallbackPayload.websiteUrl),
+    productUrl: resolvePayloadField(serverPayload?.productUrl, fallbackPayload.productUrl),
+    affiliateUrl: resolvePayloadField(serverPayload?.affiliateUrl, fallbackPayload.affiliateUrl),
+    imageUrl: resolvePayloadField(serverPayload?.imageUrl, fallbackPayload.imageUrl),
+    dealTitle: resolvePayloadField(serverPayload?.dealTitle, fallbackPayload.dealTitle),
+    description: resolvePayloadField(serverPayload?.description, fallbackPayload.description),
+    category: resolvePayloadField(serverPayload?.category, fallbackPayload.category),
+    offerText: resolvePayloadField(serverPayload?.offerText, fallbackPayload.offerText),
+  };
+  const resolvedMappedForm: AIDealFinderMappedForm = {
+    payload: resolvedPayload,
+    fieldMappings:
+      result.mappedForm?.fieldMappings?.length
+        ? result.mappedForm.fieldMappings.map((mapping) => ({
+          ...mapping,
+          value: resolvedPayload[mapping.field],
+        }))
+        : buildFallbackMappedFieldMappings(resolvedPayload, normalizedDeal),
+    draft: {
+      ...normalizedDeal,
+      businessName: resolvedPayload.storeName || normalizedDeal.businessName,
+      title: resolvedPayload.dealTitle || normalizedDeal.title,
+      description: resolvedPayload.description || normalizedDeal.description,
+      category: resolvedPayload.category || normalizedDeal.category,
+      offerText: resolvedPayload.offerText || normalizedDeal.offerText,
+      websiteUrl: resolvedPayload.websiteUrl || normalizedDeal.websiteUrl,
+      sourceProductUrl: resolvedPayload.productUrl || normalizedDeal.sourceProductUrl,
+      productUrl: resolvedPayload.productUrl || normalizedDeal.productUrl,
+      productLink: resolvedPayload.productUrl || normalizedDeal.productLink,
+      affiliateUrl: resolvedPayload.affiliateUrl || normalizedDeal.affiliateUrl,
+      imageUrl: resolvedPayload.imageUrl || normalizedDeal.imageUrl,
+    },
+  };
+  const normalizedDigest = buildFallbackNormalizedDigest(resolvedMappedForm.draft);
+  const validationResult = buildFallbackValidationResult({
+    ...result,
+    normalizedDeal: resolvedMappedForm.draft,
+    mappedForm: resolvedMappedForm,
+  });
+  const generatedJson = JSON.stringify(resolvedMappedForm.draft, null, 2);
+
+  return {
+    ...result,
+    normalizedDeal: resolvedMappedForm.draft,
+    generatedJson,
+    sourceAssets: {
+      websiteUrl: resolvedMappedForm.payload.websiteUrl || deriveWebsiteOrigin(sourceUrl) || result.sourceAssets?.websiteUrl || null,
+      productUrl: resolvedMappedForm.payload.productUrl || sourceUrl || result.sourceAssets?.productUrl || null,
+      affiliateUrl: resolvedMappedForm.payload.affiliateUrl || affiliateUrl || result.sourceAssets?.affiliateUrl || null,
+      imageUrl: resolvedMappedForm.payload.imageUrl || resolvedMappedForm.draft.imageUrl || result.sourceAssets?.imageUrl || null,
+    },
+    normalizedDigest: normalizedDigest ?? result.normalizedDigest,
+    mappedForm: resolvedMappedForm,
+    validationResult: validationResult ?? result.validationResult,
+    missingFields: Array.from(
+      new Set([
+        ...(result.missingFields ?? []),
+        ...(validationResult?.missingRequiredFields ?? []),
+      ]),
+    ),
+  };
+};
+
 const buildFallbackScanLayer = (result?: AIDealFinderResult | null) => {
   if (!result) return null;
   if (result.scanResult) return result.scanResult;
@@ -1418,36 +1796,25 @@ const applyAffiliateTrackingOverrideToResult = (
     return result;
   }
 
-  const nextNormalizedDeal = applyAffiliateTrackingOverride(result.normalizedDeal, nextAffiliateUrl);
-  const nextMappedForm = result.mappedForm
-    ? {
-        ...result.mappedForm,
-        payload: {
-          ...result.mappedForm.payload,
-          affiliateUrl: nextAffiliateUrl,
-        },
-        draft: applyAffiliateTrackingOverride(result.mappedForm.draft, nextAffiliateUrl),
-      }
-    : undefined;
-
-  return {
-    ...result,
-    normalizedDeal: nextNormalizedDeal,
-    generatedJson: result.generatedJson
-      ? JSON.stringify(nextMappedForm?.draft ?? nextNormalizedDeal, null, 2)
-      : result.generatedJson,
-    sourceAssets: {
-      ...result.sourceAssets,
+  return finalizeAIDealPipelineResult(
+    {
+      ...result,
+      normalizedDeal: applyAffiliateTrackingOverride(result.normalizedDeal, nextAffiliateUrl),
+      sourceAssets: {
+        ...result.sourceAssets,
+        affiliateUrl: nextAffiliateUrl,
+      },
+    },
+    {
+      sourceUrl:
+        result.sourceAssets?.productUrl
+        ?? result.normalizedDeal.productUrl
+        ?? result.normalizedDeal.productLink
+        ?? result.normalizedDeal.sourceQuery
+        ?? null,
       affiliateUrl: nextAffiliateUrl,
     },
-    normalizedDigest: result.normalizedDigest
-      ? {
-          ...result.normalizedDigest,
-          affiliateUrl: nextAffiliateUrl,
-        }
-      : result.normalizedDigest,
-    mappedForm: nextMappedForm,
-  };
+  );
 };
 
 const validateAffiliateTrackingInput = (value?: string | null) => {
@@ -1631,6 +1998,31 @@ const normalizeUuidOrNull = (value?: string | null) => {
   return trimmed && UUID_PATTERN.test(trimmed) ? trimmed : null;
 };
 
+const canonicalizeSourceProductUrl = (value?: string | null) => {
+  const trimmed = value?.trim() ?? '';
+  if (!trimmed) return '';
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return trimmed;
+    }
+
+    if (parsed.hostname.toLowerCase().includes('amazon.')) {
+      const asinMatch = parsed.pathname.match(/\/(?:gp\/product|dp)\/([A-Z0-9]{10})/i)
+        ?? parsed.pathname.match(/\/([A-Z0-9]{10})(?:[/?]|$)/i);
+      if (asinMatch?.[1]) {
+        return `${parsed.protocol}//${parsed.hostname}/dp/${asinMatch[1].toUpperCase()}`;
+      }
+    }
+
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+};
+
 const validateDirectProductUrl = (value?: string | null) => {
   const trimmed = value?.trim() ?? '';
 
@@ -1667,7 +2059,7 @@ const validateDirectProductUrl = (value?: string | null) => {
     }
 
     return {
-      url: trimmed,
+      url: canonicalizeSourceProductUrl(trimmed),
       error: null,
     };
   } catch {
@@ -2786,6 +3178,7 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
           ? item.sourceType
           : undefined,
       sourceQuery: typeof item.sourceQuery === 'string' ? item.sourceQuery.trim() : undefined,
+      sourceProductUrl: typeof item.sourceProductUrl === 'string' ? item.sourceProductUrl.trim() : undefined,
       maxPriceMatched: typeof item.maxPriceMatched === 'boolean' ? item.maxPriceMatched : undefined,
       stockStatus: typeof item.stockStatus === 'string' ? item.stockStatus.trim() : undefined,
       availability: typeof item.availability === 'string' ? item.availability.trim() : undefined,
@@ -2885,6 +3278,17 @@ export default function App() {
   const [catalogDropWarnings, setCatalogDropWarnings] = useState<string[]>([]);
   const [catalogSaveFeedback, setCatalogSaveFeedback] = useState<Record<string, string | null>>({});
   const [dealEngagementPending, setDealEngagementPending] = useState<Record<string, DealEngagementAction | null>>({});
+  const [viewedDealIds, setViewedDealIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    const stored = window.localStorage.getItem('livedrop_viewed_deals');
+    if (!stored) return new Set();
+    try {
+      return new Set(JSON.parse(stored));
+    } catch {
+      return new Set();
+    }
+  });
+  const [isMoreDealsAnimating, setIsMoreDealsAnimating] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [toastNotifications, setToastNotifications] = useState<AppNotification[]>([]);
@@ -2943,6 +3347,7 @@ export default function App() {
   const [adminAccessError, setAdminAccessError] = useState('');
   const [adminLogs, setAdminLogs] = useState<AdminLogEntry[]>([]);
   const [showAdvancedBackendLogs, setShowAdvancedBackendLogs] = useState(false);
+  const [adminDealsOpenSection, setAdminDealsOpenSection] = useState<'local' | 'online' | null>('local');
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
@@ -3037,13 +3442,21 @@ export default function App() {
   }, [dropMode, selectedCategory, selectedLocalSubcategory]);
 
   useEffect(() => {
-    if (dropMode !== 'online' || selectedCategory !== 'Tech') {
+    if (dropMode !== 'online') {
       setSelectedOnlineSubcategory('All');
       return;
     }
 
-    const availableSubcategories = ONLINE_TECH_SUBCATEGORY_OPTIONS;
-    if (!availableSubcategories.includes(selectedOnlineSubcategory as typeof availableSubcategories[number])) {
+    const availableSubcategories =
+      selectedCategory === 'Tech'
+        ? ONLINE_TECH_SUBCATEGORY_OPTIONS
+        : selectedCategory === 'Home'
+          ? ONLINE_HOME_SUBCATEGORY_OPTIONS
+          : selectedCategory === 'Fashion'
+            ? ONLINE_FASHION_SUBCATEGORY_OPTIONS
+            : ['All'];
+
+    if (!availableSubcategories.includes(selectedOnlineSubcategory as (typeof availableSubcategories)[number])) {
       setSelectedOnlineSubcategory('All');
     }
   }, [dropMode, selectedCategory, selectedOnlineSubcategory]);
@@ -3068,10 +3481,10 @@ export default function App() {
       return livePortalValues[key as keyof PortalAutofillPayload] === value;
     });
 
-    console.info('[LiveDrop] Auto Fill Portal verification', {
-      normalizedDeal: pendingPortalAutofill.normalizedDeal,
-      mappedPortalPayload: expectedPortalValues,
-      finalPortalFormState: livePortalValues,
+    console.info('[LiveDrop] URL-to-deal pipeline trace', {
+      stage2NormalizedDealObject: pendingPortalAutofill.normalizedDeal,
+      stage3PortalFieldMapping: expectedPortalValues,
+      stage4FormStateUpdate: livePortalValues,
     });
 
     if (fieldsChanged && finalCoverage.filled.length > 0) {
@@ -4033,19 +4446,25 @@ export default function App() {
         throw new Error('Direct URL extraction returned an incomplete response.');
       }
 
-      const normalizedResult: AIDealFinderResult = affiliateTrackingUrl
-        ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingUrl)
-        : result;
+      const pipelineResult = finalizeAIDealPipelineResult(
+        affiliateTrackingUrl
+          ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingUrl)
+          : result,
+        {
+          sourceUrl,
+          affiliateUrl: affiliateTrackingUrl,
+        },
+      );
 
       setAiFinderRuntime((prev) => ({
         ...prev,
         responseReceived: true,
         currentAction: 'completed',
       }));
-      setAiFinderResult(normalizedResult);
+      setAiFinderResult(pipelineResult);
 
       if (mode === 'extract') {
-        const extractionSucceeded = normalizedResult.extractionStatus === 'Extraction succeeded';
+        const extractionSucceeded = pipelineResult.extractionStatus === 'Extraction succeeded';
         setAiFinderStage(extractionSucceeded ? 'result-selected' : 'idle');
         setAiFinderMessage(
           extractionSucceeded
@@ -4053,13 +4472,13 @@ export default function App() {
             : 'Stage 1 completed with partial data. Source and affiliate link fields were still mapped so you can continue to Generate Deal.',
         );
       } else {
-        const extractionSucceeded = normalizedResult.extractionStatus === 'Extraction succeeded';
-        const effectiveMappedForm = normalizedResult.mappedForm ?? buildFallbackMappedForm(normalizedResult.normalizedDeal);
-        const effectiveValidationResult = normalizedResult.validationResult ?? buildFallbackValidationResult(normalizedResult);
+        const extractionSucceeded = pipelineResult.extractionStatus === 'Extraction succeeded';
+        const effectiveMappedForm = pipelineResult.mappedForm ?? buildFallbackMappedForm(pipelineResult.normalizedDeal);
+        const effectiveValidationResult = pipelineResult.validationResult ?? buildFallbackValidationResult(pipelineResult);
         const hasBlockingMappedFields =
           (effectiveValidationResult?.missingRequiredFields.length ?? 0) > 0;
         const hasReviewWarnings =
-          (effectiveValidationResult?.warnings.length ?? normalizedResult.missingFields.length ?? 0) > 0;
+          (effectiveValidationResult?.warnings.length ?? pipelineResult.missingFields.length ?? 0) > 0;
         setAiFinderStage('coupon-generated');
         setAiFinderMessage(
           hasBlockingMappedFields
@@ -4068,7 +4487,7 @@ export default function App() {
             ? 'Stage 2 complete. A normalized deal object is ready for portal mapping.'
             : 'Deal JSON generated with partial source data. Review the mapped values before autofill.',
         );
-        syncGeneratedDealToPortalFields(normalizedResult);
+        syncGeneratedDealToPortalFields(pipelineResult);
         setBulkImportMessage(
           extractionSucceeded
             ? 'Generated coupon JSON inserted into the portal intake box.'
@@ -4081,18 +4500,18 @@ export default function App() {
         mode === 'extract' ? 'Deal extracted successfully' : 'Coupon generated',
         formatAdminLogDetail({
           sourceMerchant:
-            normalizedResult.normalizedDeal.merchant ??
-            normalizedResult.normalizedDeal.businessName ??
+            pipelineResult.normalizedDeal.merchant ??
+            pipelineResult.normalizedDeal.businessName ??
             '',
-          productTitle: normalizedResult.normalizedDeal.title ?? '',
-          missingOptionalFields: normalizedResult.missingFields,
-          extractionStatus: normalizedResult.extractionStatus ?? '',
+          productTitle: pipelineResult.normalizedDeal.title ?? '',
+          missingOptionalFields: pipelineResult.missingFields,
+          extractionStatus: pipelineResult.extractionStatus ?? '',
           sourceUrl,
           affiliateUrl: affiliateTrackingUrl,
         }),
       );
 
-      return normalizedResult;
+      return pipelineResult;
     } catch (error) {
       const message = await extractAIDealFinderErrorMessage(error);
       setAiFinderError(message);
@@ -4132,7 +4551,20 @@ export default function App() {
     if (!sourceUrl) return;
 
     try {
-      await runAIDealFinder('generate', { overrideUrl: sourceUrl });
+      const generatedResult = await runAIDealFinder('generate', { overrideUrl: sourceUrl });
+      const portalReadyDeal = generatedResult.mappedForm?.draft ?? generatedResult.normalizedDeal;
+      const mappedPortalPayload = generatedResult.mappedForm?.payload ?? mapNormalizedDealToPortalFormFields(portalReadyDeal);
+      console.info('[LiveDrop] URL-to-deal pipeline trace', {
+        stage1RawExtractionResult: generatedResult.scanResult ?? generatedResult.extractionDebug ?? null,
+        stage2NormalizedDealObject: portalReadyDeal,
+        stage3PortalFieldMapping: mappedPortalPayload,
+      });
+      const previewDealCard = createLivePreviewDealFromImport(portalReadyDeal);
+      setDeals((prevDeals) => [previewDealCard, ...prevDeals]);
+      openPortalWithAutofillPayload(mappedPortalPayload, portalReadyDeal, {
+        serializedDeal: generatedResult.generatedJson || JSON.stringify(portalReadyDeal, null, 2),
+        message: 'Generated deal mapped and applied to the Business Portal form.',
+      });
     } catch (error) {
       console.error('[LiveDrop] AI Deal Finder JSON generation failed', error);
     }
@@ -4152,13 +4584,26 @@ export default function App() {
       const result = aiFinderResult?.generatedJson
         ? aiFinderResult
         : await runAIDealFinder('generate', { overrideUrl: sourceUrl });
-      const portalReadyResult = affiliateTrackingValidation.url
-        ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingValidation.url)
-        : result;
+      const portalReadyResult = finalizeAIDealPipelineResult(
+        affiliateTrackingValidation.url
+          ? applyAffiliateTrackingOverrideToResult(result, affiliateTrackingValidation.url)
+          : result,
+        {
+          sourceUrl,
+          affiliateUrl: affiliateTrackingValidation.url ?? null,
+        },
+      );
       const portalReadyDeal = portalReadyResult.mappedForm?.draft ?? portalReadyResult.normalizedDeal;
-      const mappedPortalPayload = portalReadyResult.mappedForm?.payload ?? buildPortalAutofillPayload(portalReadyDeal);
+      const mappedPortalPayload = portalReadyResult.mappedForm?.payload ?? mapNormalizedDealToPortalFormFields(portalReadyDeal);
+      console.info('[LiveDrop] URL-to-deal pipeline trace', {
+        stage1RawExtractionResult: portalReadyResult.scanResult ?? portalReadyResult.extractionDebug ?? null,
+        stage2NormalizedDealObject: portalReadyDeal,
+        stage3PortalFieldMapping: mappedPortalPayload,
+      });
+      const previewDealCard = createLivePreviewDealFromImport(portalReadyDeal);
+      setDeals((prevDeals) => [previewDealCard, ...prevDeals]);
       openPortalWithAutofillPayload(mappedPortalPayload, portalReadyDeal, {
-        serializedDeal: JSON.stringify(portalReadyDeal, null, 2),
+        serializedDeal: portalReadyResult.generatedJson || JSON.stringify(portalReadyDeal, null, 2),
         message: 'Applying normalized deal data to the Business Portal form...',
       });
     } catch (error) {
@@ -4305,7 +4750,7 @@ export default function App() {
     const maxClaims = normalizedItem.maxClaims && normalizedItem.maxClaims > 0 ? normalizedItem.maxClaims : 999;
     const createdAt = Date.now() - index * 60 * 1000;
     const businessType = normalizedItem.isOnline === false ? 'local' : 'online';
-    const sourceProductUrl = normalizedItem.productUrl || normalizedItem.productLink || undefined;
+    const sourceProductUrl = normalizedItem.sourceProductUrl || normalizedItem.productUrl || normalizedItem.productLink || undefined;
     const affiliateUrl = normalizedItem.affiliateUrl || undefined;
     const websiteUrl = normalizedItem.websiteUrl || deriveWebsiteOrigin(sourceProductUrl) || deriveWebsiteOrigin(affiliateUrl) || undefined;
 
@@ -4349,6 +4794,28 @@ export default function App() {
     };
   };
 
+  const createLivePreviewDealFromImport = (item: BulkImportDealInput) => {
+    const now = Date.now();
+    const draftDeal = createDraftFromBulkImport(item, 0);
+
+    return {
+      ...draftDeal,
+      id: createUuid(),
+      businessType: 'online' as const,
+      status: 'active' as const,
+      distance: 'Online',
+      lat: 0,
+      lng: 0,
+      hasTimer: true,
+      createdAt: now,
+      expiresAt: now + 2 * 60 * 60 * 1000,
+      currentClaims: 0,
+      claimCount: 0,
+      featured: false,
+      adminTag: null,
+    };
+  };
+
   const syncGeneratedDealToPortalFields = (
     result: AIDealFinderResult,
     options?: {
@@ -4360,7 +4827,7 @@ export default function App() {
     const nextDraft = createDraftFromBulkImport(parsedDeals[0], 0);
 
     setDealDraft(nextDraft);
-    setPortalFieldSnapshot(null);
+    setPortalFieldSnapshot(nextDraft);
     setBulkImportJson(serializedDeal);
     setBulkImportCandidates(parsedDeals);
     setSelectedBulkImportIndex(0);
@@ -6222,6 +6689,14 @@ export default function App() {
       productUrl: deal.productUrl ?? null,
       externalUrl,
     });
+    setViewedDealIds((prev) => {
+      const next = new Set(prev);
+      next.add(deal.id);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
 
     openExternalUrl(externalUrl, {
       dedupeKey: `deal:${deal.id}:${externalUrl}`,
@@ -6243,6 +6718,14 @@ export default function App() {
   };
 
   const handleOpenDealDetail = (deal: Deal) => {
+    setViewedDealIds((prev) => {
+      const next = new Set(prev);
+      next.add(deal.id);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
     if (currentView === 'deal-detail' && selectedDetailDealId === deal.id) {
       return;
     }
@@ -6295,7 +6778,7 @@ export default function App() {
     const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
     const onlineDealsWithSubcategory = onlineDeals.map((deal) => ({
       ...deal,
-      onlineSubcategory: getOnlineTechSubcategory(deal),
+      onlineSubcategory: getOnlineDealSubcategory(deal),
     }));
     const dealsWithDistance = localDeals.map(deal => {
       const dist = getEffectiveLocalDealDistance(userLocation, deal, hasPreciseUserLocation);
@@ -6309,9 +6792,16 @@ export default function App() {
     const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? []);
     const shouldShowLocalSubcategories =
       dropMode === 'local' && selectedCategory !== 'All' && localSubcategoryOptions.length > 0;
-    const shouldShowOnlineTechSubcategories = dropMode === 'online' && selectedCategory === 'Tech';
-    const onlineTechSubcategoryOptions = shouldShowOnlineTechSubcategories
-      ? ONLINE_TECH_SUBCATEGORY_OPTIONS.filter((subcategory) => subcategory !== 'All')
+    const shouldShowOnlineSubcategories =
+      dropMode === 'online' && (selectedCategory === 'Tech' || selectedCategory === 'Home' || selectedCategory === 'Fashion');
+    const onlineSubcategoryOptions = shouldShowOnlineSubcategories
+      ? (
+        selectedCategory === 'Tech'
+          ? ONLINE_TECH_SUBCATEGORY_OPTIONS
+          : selectedCategory === 'Home'
+            ? ONLINE_HOME_SUBCATEGORY_OPTIONS
+            : ONLINE_FASHION_SUBCATEGORY_OPTIONS
+      ).filter((subcategory) => subcategory !== 'All')
       : [];
 
     const activeLocalDeals = dealsWithDistance
@@ -6359,11 +6849,18 @@ export default function App() {
       return true;
     });
 
+    const hasOnlineSubcategory =
+      selectedCategory === 'Tech' || selectedCategory === 'Home' || selectedCategory === 'Fashion';
+
     const activeOnlineDeals = onlineDealsWithSubcategory.filter(
       (deal) =>
         deal.expiresAt > now &&
         (selectedCategory === 'All' || deal.category === selectedCategory) &&
-        (selectedCategory !== 'Tech' || selectedOnlineSubcategory === 'All' || deal.onlineSubcategory === selectedOnlineSubcategory),
+        (
+          !hasOnlineSubcategory ||
+          selectedOnlineSubcategory === 'All' ||
+          deal.onlineSubcategory === selectedOnlineSubcategory
+        ),
     );
 
     const rankedDropModeDeals = [...activeOnlineDeals]
@@ -6418,6 +6915,7 @@ export default function App() {
     const totalCategoryOnlinePages = Math.max(1, categoryOnlineDealPages.length);
     const safeOnlineCategoryPage = Math.min(onlineCategoryPage, totalCategoryOnlinePages - 1);
     const visibleCategoryOnlineDeals = categoryOnlineDealPages[safeOnlineCategoryPage] ?? [];
+    const hasMoreCategoryPages = safeOnlineCategoryPage < totalCategoryOnlinePages - 1;
     const onlineHeadline = selectedCategory === 'All' ? 'All' : getCategoryLabel(selectedCategory);
     const onlineCategoryDescription = isDropModeActive
       ? selectedCategory === 'All'
@@ -6503,6 +7001,7 @@ export default function App() {
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const viewed = viewedDealIds.has(deal.id);
 
       return (
         <div
@@ -6653,6 +7152,7 @@ export default function App() {
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const viewed = viewedDealIds.has(deal.id);
 
       return (
         <div
@@ -6668,7 +7168,9 @@ export default function App() {
               handleOpenDealDetail(deal);
             }
           }}
-          className="overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
+          className={`overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 ${
+            viewed ? 'opacity-90 border-slate-200 shadow-[0_6px_16px_rgba(148,163,184,0.12)]' : ''
+          }`}
         >
           <div className="relative aspect-[1/1] overflow-hidden bg-slate-100">
             <DealArtwork
@@ -6676,13 +7178,18 @@ export default function App() {
               alt={displayTitle}
               fit="contain"
               iconSize={24}
-              imageClassName="p-2"
+              imageClassName={`p-2 ${viewed ? 'opacity-85' : ''}`}
             />
             <div className="pointer-events-none absolute left-2 top-2">
               <span className="inline-flex min-h-[28px] max-w-[76%] items-center rounded-[0.9rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-center text-[10px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white shadow-[0_10px_20px_rgba(99,102,241,0.22)]">
                 {getOnlineDealHeroLabel(displayOfferText)}
               </span>
             </div>
+            {viewed ? (
+              <span className="pointer-events-none absolute right-2 bottom-2 rounded-full bg-white/85 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500 shadow-sm">
+                Viewed
+              </span>
+            ) : null}
             {deal.hasTimer ? (
               <div className="pointer-events-none absolute bottom-2 left-2">
                 <Timer
@@ -6749,6 +7256,39 @@ export default function App() {
         </div>
       );
     };
+
+    const renderOnlineGridFiller = (onClick: () => void) => (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label="Load more deals"
+        className={`hidden min-[360px]:block w-full h-full overflow-hidden rounded-[1.3rem] border border-slate-200/70 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(99,102,241,0.14)] ${
+          isMoreDealsAnimating ? 'scale-95 shadow-[0_14px_32px_rgba(99,102,241,0.18)]' : ''
+        }`}
+      >
+        <div className="flex h-full flex-col">
+          {/* Media area */}
+          <div className="relative aspect-[1/1] rounded-[1.05rem] bg-white transition-all duration-150 active:brightness-[1.08]">
+            <div className="absolute inset-0 flex items-center justify-center">
+                <img
+                  src={brandBoltLogo3d}
+                  alt="More deals"
+                  className={`h-30 w-30 object-contain transition-all duration-150 opacity-80 ${
+                    isMoreDealsAnimating
+                      ? 'scale-110 brightness-115 drop-shadow-[0_6px_18px_rgba(99,102,241,0.35)]'
+                      : 'active:brightness-115 active:scale-105'
+                  }`}
+                />
+            </div>
+          </div>
+          {/* Content area */}
+          <div className="flex flex-1 flex-col items-center justify-center px-3 pb-3 pt-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">More Deals</span>
+            <span className="mt-1 text-[11px] font-medium text-slate-400">Tap to load more</span>
+          </div>
+        </div>
+      </button>
+    );
 
     return (
       <div className="space-y-4">
@@ -6876,48 +7416,52 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white p-3.5 shadow-sm shadow-slate-200/35">
-            <div className="flex items-start justify-between gap-2.5">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <div className="rounded-[1rem] bg-indigo-50 p-2.5 text-indigo-600 shadow-inner shadow-white/70">
-                  <AppIcon name="online" size={18} />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Online</p>
-                  <p className="text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.45] text-slate-700">
-                    {isDropModeActive
-                      ? 'Curated for speed: bigger savings, shorter windows.'
-                      : 'Turn on Drop Mode for the fastest, best-value online drops.'}
-                  </p>
-                </div>
+          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white px-3 py-3 shadow-sm shadow-slate-200/35">
+            <div className="flex items-center gap-2 min-[360px]:gap-3">
+              <div className="flex h-11 w-11 min-[360px]:h-12 min-[360px]:w-12 items-center justify-center rounded-[0.95rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
+                <AppIcon name="online" size={18} />
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className={`text-[8px] min-[360px]:text-[9px] font-black uppercase tracking-[0.12em] ${isDropModeActive ? 'text-indigo-600' : 'text-slate-400'}`}>
-                  {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleDropModeToggle}
-                  aria-pressed={isDropModeActive}
-                  aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                  className={`group relative flex h-11 w-11 min-[360px]:h-12 min-[360px]:w-12 items-center justify-center overflow-hidden rounded-[1.05rem] border transition-all ${
-                    isDropModeActive
-                      ? 'border-fuchsia-300 bg-slate-950 text-white shadow-[0_0_0_1px_rgba(129,140,248,0.35),0_14px_32px_rgba(79,70,229,0.24)]'
-                      : 'border-slate-200 bg-slate-50 text-indigo-600 shadow-sm shadow-slate-200/50'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(99,102,241,0.2),rgba(14,165,233,0.18),rgba(236,72,153,0.18))] transition-opacity ${
-                      isDropModeActive ? 'opacity-100 animate-pulse' : 'opacity-0'
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Online</p>
+                  <span className={`text-[10px] min-[360px]:text-[11px] font-black uppercase tracking-[0.14em] ${isDropModeActive ? 'text-indigo-600' : 'text-slate-500'}`}>
+                    {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
+                  </span>
+                </div>
+                <p className="mt-1 text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.35] text-slate-700 line-clamp-3">
+                  {isDropModeActive
+                    ? 'Curated for speed: bigger savings, shorter windows.'
+                    : 'Turn on Drop Mode for the fastest, best-value online drops.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDropModeToggle}
+                aria-pressed={isDropModeActive}
+                aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
+                className="group relative inline-flex h-18 w-18 min-[360px]:h-[82px] min-[360px]:w-[82px] items-center justify-center bg-transparent p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0"
+              >
+                <div className="relative h-full w-full flex items-center justify-center">
+                  <img
+                    src={brandBoltLogo3d}
+                    alt=""
+                    className={`absolute h-28 w-28 min-[360px]:h-[128px] min-[360px]:w-[128px] object-contain transition-all duration-200 ${
+                      isDropModeActive
+                        ? 'opacity-0 scale-90'
+                        : 'opacity-100 scale-100 group-hover:brightness-110'
                     }`}
                   />
                   <img
-                    src={brandBoltLogo}
+                    src={brandBoltLogo3dActive}
                     alt=""
-                    className={`relative z-10 h-5 w-5 min-[360px]:h-[22px] min-[360px]:w-[22px] object-contain transition-transform ${isDropModeActive ? 'scale-110 drop-shadow-[0_0_12px_rgba(129,140,248,0.7)]' : 'scale-100 group-hover:scale-105'}`}
+                    className={`absolute h-28 w-28 min-[360px]:h-[128px] min-[360px]:w-[128px] object-contain transition-all duration-200 ${
+                      isDropModeActive
+                        ? 'opacity-100 scale-112 drop-shadow-[0_0_34px_rgba(111,114,255,0.9)]'
+                        : 'opacity-0 scale-90'
+                    }`}
                   />
-                </button>
-              </div>
+                </div>
+              </button>
             </div>
           </div>
         )}
@@ -7020,11 +7564,11 @@ export default function App() {
           </div>
         ) : null}
 
-        {dropMode === 'online' && shouldShowOnlineTechSubcategories ? (
+        {dropMode === 'online' && shouldShowOnlineSubcategories ? (
           <div
-            aria-hidden={!shouldShowOnlineTechSubcategories}
+            aria-hidden={!shouldShowOnlineSubcategories}
             className={`overflow-hidden transition-all duration-200 ease-out ${
-              shouldShowOnlineTechSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
+              shouldShowOnlineSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
             }`}
           >
             <div className="overflow-x-auto -mx-0.5">
@@ -7039,9 +7583,9 @@ export default function App() {
                       : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                   }`}
                 >
-                  All Tech
+                  All {getCategoryLabel(selectedCategory)}
                 </button>
-                {onlineTechSubcategoryOptions.map((subcategory) => (
+                {onlineSubcategoryOptions.map((subcategory) => (
                   <button
                     key={subcategory}
                     type="button"
@@ -7091,16 +7635,17 @@ export default function App() {
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               filteredActiveLocalDeals.map(deal => (
-                <DealCard 
-                  key={deal.id} 
-                  deal={deal} 
-                  onClaim={handleClaimDeal} 
-                  isClaimed={claims.some(c => c.dealId === deal.id)}
-                  computedDistance={deal.computedDistanceLabel}
-                  onSaveToCatalog={handleSaveToCatalog}
-                  canSaveToCatalog={canSaveDealToCatalog(deal)}
-                  isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
-                  saveFeedback={catalogSaveFeedback[deal.id]}
+                  <DealCard 
+                    key={deal.id} 
+                    deal={deal} 
+                    onClaim={handleClaimDeal} 
+                    isClaimed={claims.some(c => c.dealId === deal.id)}
+                    isViewed={viewedDealIds.has(deal.id)}
+                    computedDistance={deal.computedDistanceLabel}
+                    onSaveToCatalog={handleSaveToCatalog}
+                    canSaveToCatalog={canSaveDealToCatalog(deal)}
+                    isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
+                    saveFeedback={catalogSaveFeedback[deal.id]}
                   badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
                   pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
                   onLike={handleLikeDeal}
@@ -7138,6 +7683,13 @@ export default function App() {
                   <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
                     <div className="grid grid-cols-1 gap-2.5 min-[360px]:grid-cols-2">
                       {visibleCategoryOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
+                      {hasMoreCategoryPages && visibleCategoryOnlineDeals.length % 2 === 1
+                        ? renderOnlineGridFiller(() => {
+                            setIsMoreDealsAnimating(true);
+                            setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));
+                            window.setTimeout(() => setIsMoreDealsAnimating(false), 220);
+                          })
+                        : null}
                     </div>
                   </div>
                   {totalCategoryOnlinePages > 1 ? (
@@ -8225,16 +8777,19 @@ export default function App() {
       const previewDeal = aiFinderResult?.normalizedDeal;
       const extractionDebug = aiFinderResult?.extractionDebug;
       const sourceAssets = aiFinderResult?.sourceAssets;
-      const portalCoverageSource = portalFieldSnapshot;
+      const normalizedJson = aiFinderResult?.generatedJson || (previewDeal ? JSON.stringify(previewDeal, null, 2) : '');
+      const effectiveScanLayer = buildFallbackScanLayer(aiFinderResult);
+      const effectiveNormalizedDigest = aiFinderResult?.normalizedDigest ?? buildFallbackNormalizedDigest(previewDeal);
+      const effectiveMappedForm = aiFinderResult?.mappedForm ?? buildFallbackMappedForm(previewDeal);
+      const portalCoverageSource =
+        portalFieldSnapshot
+        ?? dealDraft
+        ?? (effectiveMappedForm ? createDraftFromBulkImport(effectiveMappedForm.draft, 0) : null);
       const portalCoverage = buildPortalFieldCoverage(portalCoverageSource);
       const filledFields = portalCoverage.filled;
       const requiredMissingFields = portalCoverage.missingRequired;
       const optionalMissingFields = portalCoverage.missingOptional;
       const completionPercent = portalCoverage.completionPercent;
-      const normalizedJson = aiFinderResult?.generatedJson || (previewDeal ? JSON.stringify(previewDeal, null, 2) : '');
-      const effectiveScanLayer = buildFallbackScanLayer(aiFinderResult);
-      const effectiveNormalizedDigest = aiFinderResult?.normalizedDigest ?? buildFallbackNormalizedDigest(previewDeal);
-      const effectiveMappedForm = aiFinderResult?.mappedForm ?? buildFallbackMappedForm(previewDeal);
       const effectiveValidationResult = aiFinderResult?.validationResult ?? buildFallbackValidationResult(aiFinderResult);
       const rawScanJson = effectiveScanLayer ? JSON.stringify(effectiveScanLayer, null, 2) : '';
       const normalizedDigestJson = effectiveNormalizedDigest ? JSON.stringify(effectiveNormalizedDigest, null, 2) : '';
@@ -10320,7 +10875,58 @@ export default function App() {
     }
 
     const managedDeals = [...deals].sort((a, b) => b.createdAt - a.createdAt);
+    const localManagedDeals = managedDeals.filter((deal) => deal.businessType !== 'online');
+    const onlineManagedDeals = managedDeals.filter((deal) => deal.businessType === 'online');
     const expiredManagedDeals = managedDeals.filter((deal) => isExpiredDeal(deal));
+
+    const renderAdminDealCard = (deal: Deal) => (
+      <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">{deal.businessName}</p>
+            <h3 className="mt-1 text-base font-black text-slate-900">{deal.title}</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              {deal.category} · {deal.businessType === 'online' ? 'Online' : deal.distance}
+            </p>
+            <p className="mt-2 truncate font-mono text-[10px] text-slate-400">{deal.websiteUrl ?? deal.productUrl ?? 'No external link saved'}</p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${deal.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+              {deal.status ?? 'active'}
+            </span>
+            {deal.adminTag ? (
+              <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600">
+                {deal.adminTag}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={() => handleEditDeal(deal)} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
+            Edit
+          </button>
+          <button onClick={() => handleReuseDeal(deal)} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
+            Reuse
+          </button>
+          <button onClick={() => handleReuseDealAndGoLive(deal)} className="inline-flex h-9 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-white transition-colors hover:bg-indigo-500">
+            Relaunch
+          </button>
+          <button onClick={() => void handleAdminSetDealStatus(deal, deal.status === 'active' ? 'draft' : 'active')} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
+            {deal.status === 'active' ? 'Unpublish' : 'Publish'}
+          </button>
+          <button onClick={() => void handleAdminToggleFeatured(deal)} className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${deal.featured ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'}`}>
+            {deal.featured ? 'Featured' : 'Mark Featured'}
+          </button>
+          <button onClick={() => void handleAdminToggleTrending(deal)} className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${deal.adminTag === 'trending' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'}`}>
+            {deal.adminTag === 'trending' ? 'Trending' : 'Mark Trending'}
+          </button>
+          <button onClick={() => void handleAdminDeleteDeal(deal)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500" aria-label="Delete deal">
+            <AppIcon name="trash" size={16} />
+          </button>
+        </div>
+      </div>
+    );
 
     if (isCreating) {
       return (
@@ -10371,7 +10977,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900">
-        <div className="mx-auto max-w-[430px] space-y-4">
+        <div className="mx-auto max-w-[1200px] space-y-4">
           <div className="rounded-[1.75rem] border border-slate-100 bg-white px-4 py-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -10534,7 +11140,7 @@ export default function App() {
           </div>
 
           <div className="space-y-3">
-            {managedDeals.map((deal) => (
+            {false && managedDeals.map((deal) => (
               <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -10608,6 +11214,86 @@ export default function App() {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-4 grid gap-6 md:grid-cols-2">
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => setAdminDealsOpenSection((prev) => (prev === 'local' ? null : 'local'))}
+                className="mb-2 flex w-full items-center justify-between rounded-xl border border-slate-100 bg-white px-3 py-2 text-left transition-colors hover:border-indigo-200 md:pointer-events-none md:cursor-default md:rounded-none md:border-0 md:bg-transparent md:p-0"
+                aria-expanded={adminDealsOpenSection === 'local'}
+                aria-controls="admin-local-deals"
+              >
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Local Deals</p>
+                  <h3 className="text-lg font-black text-slate-900">Nearby drops</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{localManagedDeals.length} total</span>
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 text-sm font-black text-slate-400 transition-transform md:hidden">
+                    {adminDealsOpenSection === 'local' ? '−' : '+'}
+                  </span>
+                </div>
+              </button>
+              <div
+                id="admin-local-deals"
+                className={`min-w-0 overflow-hidden transition-[max-height,opacity] duration-300 ease-out md:overflow-visible ${
+                  adminDealsOpenSection === 'local'
+                    ? 'max-h-[5000px] opacity-100'
+                    : 'max-h-0 opacity-0 md:max-h-none md:opacity-100'
+                }`}
+              >
+                <div className="space-y-3 pt-1 md:pt-0">
+                  {localManagedDeals.length === 0 ? (
+                    <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
+                      No local deals yet.
+                    </div>
+                  ) : (
+                    localManagedDeals.map((deal) => renderAdminDealCard(deal))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => setAdminDealsOpenSection((prev) => (prev === 'online' ? null : 'online'))}
+                className="mb-2 flex w-full items-center justify-between rounded-xl border border-slate-100 bg-white px-3 py-2 text-left transition-colors hover:border-indigo-200 md:pointer-events-none md:cursor-default md:rounded-none md:border-0 md:bg-transparent md:p-0"
+                aria-expanded={adminDealsOpenSection === 'online'}
+                aria-controls="admin-online-deals"
+              >
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Online Deals</p>
+                  <h3 className="text-lg font-black text-slate-900">Live online drops</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{onlineManagedDeals.length} total</span>
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 text-sm font-black text-slate-400 transition-transform md:hidden">
+                    {adminDealsOpenSection === 'online' ? '−' : '+'}
+                  </span>
+                </div>
+              </button>
+              <div
+                id="admin-online-deals"
+                className={`min-w-0 overflow-hidden transition-[max-height,opacity] duration-300 ease-out md:overflow-visible ${
+                  adminDealsOpenSection === 'online'
+                    ? 'max-h-[5000px] opacity-100'
+                    : 'max-h-0 opacity-0 md:max-h-none md:opacity-100'
+                }`}
+              >
+                <div className="space-y-3 pt-1 md:pt-0">
+                  {onlineManagedDeals.length === 0 ? (
+                    <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
+                      No online deals yet.
+                    </div>
+                  ) : (
+                    onlineManagedDeals.map((deal) => renderAdminDealCard(deal))
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

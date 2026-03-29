@@ -38,6 +38,7 @@ export type ProviderScanResult = {
     merchantHint: string | null;
     categoryHint: string | null;
   };
+  amazonRawProduct: AmazonRawProduct | null;
   fields: {
     title: ScanField<string>;
     currentPrice: ScanField<number>;
@@ -60,6 +61,49 @@ export type ProviderScanResult = {
   };
 };
 
+export type AmazonRawProduct = {
+  provider: 'amazon';
+  sourceUrl: string;
+  finalUrl: string | null;
+  canonicalProductUrl: string | null;
+  asin: string | null;
+  extractionOrder: 'structured-data-first';
+  selectedSources: {
+    title: string | null;
+    brand: string | null;
+    image: string | null;
+    currentPrice: string | null;
+    originalPrice: string | null;
+    description: string | null;
+  };
+  confidence: {
+    title: number;
+    image: number;
+    description: number;
+    brand: number;
+    price: number;
+  };
+  fields: {
+    title: string | null;
+    brand: string | null;
+    merchant: string | null;
+    mainImage: string | null;
+    currentPrice: number | null;
+    originalPrice: number | null;
+    couponText: string | null;
+    description: string | null;
+    featureBullets: string[];
+    breadcrumbs: string[];
+    rating: number | null;
+    reviewCount: number | null;
+    availability: string | null;
+    shippingInfo: string | null;
+    seller: string | null;
+    asin: string | null;
+    galleryImages: string[];
+  };
+};
+
 export type NormalizedImportDigest = {
   sourceProvider: 'amazon' | 'generic';
   merchant: string | null;
@@ -69,6 +113,7 @@ export type NormalizedImportDigest = {
   affiliateUrl: string | null;
   asin: string | null;
   category: string | null;
+  subcategory: string | null;
   image: string | null;
   galleryImages: string[];
   currentPrice: number | null;
@@ -86,6 +131,13 @@ export type NormalizedImportDigest = {
   featureBullets: string[];
   summary: string | null;
   description: string | null;
+  confidence: {
+    title: number;
+    image: number;
+    description: number;
+    brand: number;
+    price: number;
+  };
   tags: string[];
   importedAt: string;
 };
@@ -131,6 +183,7 @@ export type DraftDealPayload = {
   title: string;
   description: string;
   category: string;
+  subcategory?: string;
   offerText: string;
   originalPrice?: number;
   price?: number;
@@ -279,6 +332,56 @@ const CATEGORY_RULES: Array<{ appCategory: string; patterns: RegExp[] }> = [
     patterns: [/\belectronic(s)?\b/i, /\bheadphones?\b/i, /\bearbuds?\b/i, /\bcamera\b/i, /\blaptop\b/i, /\bmonitor\b/i, /\bkeyboard\b/i, /\bcharger\b/i, /\bspeaker\b/i, /\btech\b/i, /\btablet\b/i, /\bphone\b/i],
   },
 ];
+const SUBCATEGORY_RULES: Record<string, Array<{ subcategory: string; patterns: RegExp[] }>> = {
+  Tech: [
+    { subcategory: 'Phones', patterns: [/\bphone(s)?\b/i, /\biphone\b/i, /\bgalaxy\b/i, /\bandroid\b/i] },
+    { subcategory: 'Laptops', patterns: [/\blaptop(s)?\b/i, /\bmacbook\b/i, /\bnotebook\b/i] },
+    { subcategory: 'Tablets', patterns: [/\btablet(s)?\b/i, /\bipad\b/i] },
+    { subcategory: 'Smartwatches', patterns: [/\bsmart ?watch(es)?\b/i, /\bapple watch\b/i, /\bwearable\b/i] },
+    { subcategory: 'Headphones', patterns: [/\bheadphone(s)?\b/i, /\bover-?ear\b/i] },
+    { subcategory: 'Earbuds', patterns: [/\bearbud(s)?\b/i, /\bairpods?\b/i, /\bin-?ear\b/i] },
+    { subcategory: 'Speakers', patterns: [/\bspeaker(s)?\b/i, /\bsoundbar\b/i] },
+    { subcategory: 'Gaming', patterns: [/\bgaming\b/i, /\bxbox\b/i, /\bplaystation\b/i, /\bnintendo\b/i] },
+    { subcategory: 'PC Accessories', patterns: [/\bpc accessory\b/i, /\bdocking station\b/i, /\bhub\b/i, /\badapter\b/i] },
+    { subcategory: 'Keyboards', patterns: [/\bkeyboard(s)?\b/i] },
+    { subcategory: 'Mice', patterns: [/\bmouse\b/i, /\bmice\b/i] },
+    { subcategory: 'Monitors', patterns: [/\bmonitor(s)?\b/i, /\bdisplay\b/i] },
+    { subcategory: 'TVs', patterns: [/\btv(s)?\b/i, /\boled\b/i, /\bqled\b/i] },
+    { subcategory: 'Cameras', patterns: [/\bcamera(s)?\b/i, /\bmirrorless\b/i, /\bdslr\b/i] },
+    { subcategory: 'Drones', patterns: [/\bdrone(s)?\b/i, /\buav\b/i] },
+  ],
+  Home: [
+    { subcategory: 'Furniture', patterns: [/\bfurniture\b/i, /\bsofa\b/i, /\bdesk\b/i, /\btable\b/i] },
+    { subcategory: 'Home Decor', patterns: [/\bdecor\b/i, /\bart\b/i, /\brug\b/i, /\bcurtain\b/i] },
+    { subcategory: 'Kitchen', patterns: [/\bkitchen\b/i, /\bcookware\b/i, /\bpan\b/i, /\bknife\b/i] },
+    { subcategory: 'Bedding', patterns: [/\bbedding\b/i, /\bsheet(s)?\b/i, /\bcomforter\b/i, /\bduvet\b/i] },
+    { subcategory: 'Bath', patterns: [/\bbath(room)?\b/i, /\btowel\b/i, /\bshower\b/i] },
+    { subcategory: 'Storage', patterns: [/\bstorage\b/i, /\borganizer\b/i, /\bbin\b/i] },
+    { subcategory: 'Cleaning', patterns: [/\bclean(ing)?\b/i, /\bvacc?uum\b/i, /\bmop\b/i] },
+    { subcategory: 'Appliances', patterns: [/\bappliance(s)?\b/i, /\bair fryer\b/i, /\bblender\b/i, /\bmicrowave\b/i] },
+    { subcategory: 'Smart Home', patterns: [/\bsmart home\b/i, /\bhomekit\b/i, /\balexa\b/i] },
+    { subcategory: 'Lighting', patterns: [/\blight(ing)?\b/i, /\blamp\b/i, /\bled\b/i] },
+    { subcategory: 'Outdoor', patterns: [/\boutdoor\b/i, /\bgarden\b/i, /\bbackyard\b/i] },
+    { subcategory: 'Patio', patterns: [/\bpatio\b/i, /\bdeck\b/i] },
+  ],
+  Fashion: [
+    { subcategory: "Men's Clothing", patterns: [/\bmen('|’)s\b/i, /\bmens\b/i] },
+    { subcategory: "Women's Clothing", patterns: [/\bwomen('|’)s\b/i, /\bwomens\b/i] },
+    { subcategory: 'Shoes', patterns: [/\bshoes?\b/i] },
+    { subcategory: 'Sneakers', patterns: [/\bsneaker(s)?\b/i] },
+    { subcategory: 'Boots', patterns: [/\bboot(s)?\b/i] },
+    { subcategory: 'Sandals', patterns: [/\bsandal(s)?\b/i] },
+    { subcategory: 'Jackets', patterns: [/\bjacket(s)?\b/i, /\bcoat(s)?\b/i] },
+    { subcategory: 'Hoodies', patterns: [/\bhoodie(s)?\b/i, /\bsweatshirt(s)?\b/i] },
+    { subcategory: 'T-Shirts', patterns: [/\bt-?shirt(s)?\b/i, /\btee(s)?\b/i] },
+    { subcategory: 'Jeans', patterns: [/\bjean(s)?\b/i, /\bdenim\b/i] },
+    { subcategory: 'Dresses', patterns: [/\bdress(es)?\b/i] },
+    { subcategory: 'Activewear', patterns: [/\bactivewear\b/i, /\bgym wear\b/i, /\bworkout\b/i] },
+    { subcategory: 'Loungewear', patterns: [/\bloungewear\b/i, /\bsweatpants?\b/i, /\bpajama(s)?\b/i] },
+    { subcategory: 'Bags', patterns: [/\bbag(s)?\b/i, /\bbackpack(s)?\b/i, /\btote\b/i] },
+    { subcategory: 'Wallets', patterns: [/\bwallet(s)?\b/i] },
+  ],
+};
 
 const compactText = (value: string | null | undefined) =>
   value
@@ -699,19 +802,9 @@ const parseCouponDetails = (couponText: string | null) => {
   };
 };
 
-const mapDigestCategoryToAppCategory = (digest: NormalizedImportDigest) => {
-  const explicitAppCategory = compactText(digest.category);
-  if (explicitAppCategory && APP_CATEGORY_OPTIONS.includes(explicitAppCategory)) {
-    return explicitAppCategory;
-  }
-
-  const haystack = [
-    digest.category,
-    digest.productTitle,
-    digest.summary,
-    digest.description,
-    ...digest.tags,
-  ].join(' ').toLowerCase();
+const guessAppCategoryFromText = (rawSignals: Array<string | null | undefined>) => {
+  const haystack = rawSignals.join(' ').toLowerCase();
+  if (!haystack.trim()) return '';
 
   const scores = CATEGORY_RULES.map((rule) => ({
     appCategory: rule.appCategory,
@@ -719,6 +812,21 @@ const mapDigestCategoryToAppCategory = (digest: NormalizedImportDigest) => {
   })).sort((left, right) => right.score - left.score);
 
   return scores[0]?.score ? scores[0].appCategory : '';
+};
+
+const mapDigestCategoryToAppCategory = (digest: NormalizedImportDigest) => {
+  const explicitAppCategory = compactText(digest.category);
+  if (explicitAppCategory && APP_CATEGORY_OPTIONS.includes(explicitAppCategory)) {
+    return explicitAppCategory;
+  }
+
+  return guessAppCategoryFromText([
+    digest.category,
+    digest.productTitle,
+    digest.summary,
+    digest.description,
+    ...digest.tags,
+  ]);
 };
 
 const computeCompletionPercent = (states: ValidationFieldState[]) => {
@@ -738,6 +846,34 @@ const confidenceRank = (confidence: ScanConfidence) => {
   if (confidence === 'medium') return 2;
   if (confidence === 'low') return 1;
   return 0;
+};
+
+const confidenceToScore = (confidence: ScanConfidence) => {
+  if (confidence === 'high') return 0.95;
+  if (confidence === 'medium') return 0.78;
+  if (confidence === 'low') return 0.56;
+  return 0;
+};
+
+const guessSubcategory = (
+  category: string | null | undefined,
+  title: string | null | undefined,
+  breadcrumbs: string[],
+) => {
+  const rules = category ? SUBCATEGORY_RULES[category] : null;
+  if (!rules || rules.length === 0) return null;
+
+  const haystack = dedupeStrings([title, ...breadcrumbs]).join(' ').toLowerCase();
+  if (!haystack) return null;
+
+  const scored = rules
+    .map((rule) => ({
+      subcategory: rule.subcategory,
+      score: rule.patterns.reduce((sum, pattern) => sum + (pattern.test(haystack) ? 1 : 0), 0),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.score ? scored[0].subcategory : null;
 };
 
 const computeDealScore = (
@@ -793,6 +929,40 @@ const getJsonLdOffer = (productJson: Record<string, unknown> | null) => {
     return firstOffer && typeof firstOffer === 'object' ? firstOffer as Record<string, unknown> : null;
   }
   return offers && typeof offers === 'object' ? offers as Record<string, unknown> : null;
+};
+
+const getJsonLdListPrice = (offerJson: Record<string, unknown> | null) => {
+  if (!offerJson) return null;
+
+  const listPriceDirect =
+    parseNumberish(offerJson.listPrice)
+    ?? parseNumberish(offerJson.highPrice)
+    ?? parseNumberish(offerJson.msrp);
+  if (listPriceDirect != null) return listPriceDirect;
+
+  const priceSpecification = offerJson.priceSpecification;
+  if (priceSpecification && typeof priceSpecification === 'object') {
+    const ps = priceSpecification as Record<string, unknown>;
+    return (
+      parseNumberish(ps.price)
+      ?? parseNumberish(ps.listPrice)
+      ?? parseNumberish(ps.maxPrice)
+    );
+  }
+
+  if (Array.isArray(priceSpecification)) {
+    for (const entry of priceSpecification) {
+      if (!entry || typeof entry !== 'object') continue;
+      const ps = entry as Record<string, unknown>;
+      const parsed =
+        parseNumberish(ps.price)
+        ?? parseNumberish(ps.listPrice)
+        ?? parseNumberish(ps.maxPrice);
+      if (parsed != null) return parsed;
+    }
+  }
+
+  return null;
 };
 
 const getJsonLdAggregateRating = (productJson: Record<string, unknown> | null) => {
@@ -859,6 +1029,54 @@ const extractBreadcrumbAnchors = (html: string) => {
 const extractTitleFallback = (html: string) =>
   extractMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i);
 
+const cleanAmazonTitleText = (value: string | null | undefined) => {
+  const normalized = compactText(value);
+  if (!normalized) return null;
+
+  return normalized
+    .replace(/\s*[:\-|]\s*amazon(?:\.com)?\s*$/i, '')
+    .replace(/^amazon(?:\.com)?\s*[:\-|]\s*/i, '')
+    .trim();
+};
+
+const isLikelyAmazonPlaceholderTitle = (value: string | null | undefined) => {
+  const normalized = compactText(value)?.toLowerCase() ?? '';
+  if (!normalized) return true;
+
+  const placeholders = [
+    'amazon',
+    'amazon.com',
+    'amazon sign-in',
+    'sorry! something went wrong!',
+    'robot check',
+    'enter the characters you see below',
+    'captcha',
+  ];
+
+  return placeholders.some((placeholder) => normalized === placeholder || normalized.includes(placeholder));
+};
+
+const getAmazonTitleFromUrlPath = (url: string | null | undefined) => {
+  if (!url) return null;
+  try {
+    const parsed = new URL(normalizeUrl(url));
+    if (!parsed.hostname.toLowerCase().includes('amazon.')) return null;
+
+    const path = decodeURIComponent(parsed.pathname);
+    const slugMatch = path.match(/\/([^/]+)\/(?:dp|gp\/product)\//i);
+    const slug = slugMatch?.[1];
+    if (!slug) return null;
+
+    const cleaned = slug
+      .replace(/[\-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleanAmazonTitleText(cleaned);
+  } catch {
+    return null;
+  }
+};
+
 const extractAdditionalImages = (html: string) => {
   const matches = [
     ...extractMatches(html, /<img[^>]+src=["']([^"']+)["']/gi),
@@ -921,6 +1139,7 @@ const buildFailureScanResult = (
       merchantHint: normalizedMerchantHint,
       categoryHint: compactText(categoryHint),
     },
+    amazonRawProduct: null,
     fields: {
       title: emptyText,
       currentPrice: emptyNumber,
@@ -969,38 +1188,59 @@ const scanAmazonPage = (
   const jsonLdImages = getJsonLdImages(productJson);
   const dynamicImages = getAmazonDynamicImages(html);
   const asin = getAmazonAsin(context.finalUrl) ?? getAmazonAsin(context.cleanedSourceUrl) ?? extractTagTextById(html, 'ASIN') ?? extractAttributeById(html, 'ASIN', 'value');
-  const mainImage = dynamicImages[0] ?? jsonLdImages[0] ?? extractMetaContent(html, 'og:image');
+  const mainImage = jsonLdImages[0] ?? dynamicImages[0] ?? extractMetaContent(html, 'og:image');
   const visiblePrices = getGenericVisiblePrices(html);
   const fallbackSalePrice = visiblePrices[0] ?? null;
   const fallbackOriginalPrice = visiblePrices.length > 1 ? Math.max(...visiblePrices) : null;
+  const jsonLdDescription = typeof productJson?.description === 'string' ? productJson.description : null;
+  const jsonLdCouponHint = extractMatch(jsonLdDescription ?? '', /((?:save|coupon)[^.,;]{0,120})/i);
 
   const titleField = buildTextField([
-    textCandidate('selector:#productTitle', extractTagTextById(html, 'productTitle', 'span'), 'high'),
     textCandidate('jsonld:name', typeof productJson?.name === 'string' ? productJson.name : null, 'high'),
+    textCandidate('selector:#productTitle', extractTagTextById(html, 'productTitle', 'span'), 'high'),
     textCandidate('meta:og:title', extractMetaContent(html, 'og:title'), 'medium'),
-    textCandidate('title', extractTitleFallback(html), 'low'),
+    textCandidate('fallback:title', extractTitleFallback(html), 'low'),
   ]);
+  const urlPathTitleFallback = getAmazonTitleFromUrlPath(context.sourceUrl) ?? getAmazonTitleFromUrlPath(context.finalUrl);
+  const titleNeedsFallback = isLikelyAmazonPlaceholderTitle(titleField.value);
+  const resolvedTitleField = titleNeedsFallback && urlPathTitleFallback
+    ? {
+      ...titleField,
+      value: urlPathTitleFallback,
+      source: 'fallback:url-path-title',
+      confidence: 'low' as ScanConfidence,
+      candidates: [
+        ...titleField.candidates,
+        textCandidate('fallback:url-path-title', urlPathTitleFallback, 'low'),
+      ],
+    }
+    : {
+      ...titleField,
+      value: cleanAmazonTitleText(titleField.value),
+    };
 
   const currentPriceField = buildNumberField([
+    numberCandidate('jsonld:offers.price', offerJson ? offerJson.price as string | number | null : null, 'high'),
     numberCandidate('selector:#corePrice_feature_div .a-offscreen', extractMatch(html, /id=["']corePrice_feature_div["'][\s\S]*?class=["'][^"']*a-offscreen[^"']*["'][^>]*>\s*([^<]+)/i), 'high'),
     numberCandidate('selector:#priceblock_ourprice', extractTagTextById(html, 'priceblock_ourprice', 'span'), 'high'),
     numberCandidate('selector:#priceblock_dealprice', extractTagTextById(html, 'priceblock_dealprice', 'span'), 'high'),
     numberCandidate('selector:.apexPriceToPay .a-offscreen', extractMatch(html, /class=["'][^"']*apexPriceToPay[^"']*["'][\s\S]*?class=["'][^"']*a-offscreen[^"']*["'][^>]*>\s*([^<]+)/i), 'high'),
-    numberCandidate('jsonld:offers.price', offerJson ? offerJson.price as string | number | null : null, 'medium'),
-    numberCandidate('visible-price-fallback', fallbackSalePrice, 'low'),
+    numberCandidate('fallback:visible-price', fallbackSalePrice, 'low'),
   ]);
 
   const originalPriceField = buildNumberField([
+    numberCandidate('jsonld:offers.listPrice', getJsonLdListPrice(offerJson), 'high'),
     numberCandidate('selector:.basisPrice .a-offscreen', extractMatch(html, /class=["'][^"']*basisPrice[^"']*["'][\s\S]*?class=["'][^"']*a-offscreen[^"']*["'][^>]*>\s*([^<]+)/i), 'high'),
     numberCandidate('selector:#priceblock_listprice', extractTagTextById(html, 'priceblock_listprice', 'span'), 'high'),
     numberCandidate('selector:.priceBlockStrikePriceString', extractMatch(html, /class=["'][^"']*priceBlockStrikePriceString[^"']*["'][^>]*>\s*([^<]+)/i), 'medium'),
-    numberCandidate('visible-price-fallback', fallbackOriginalPrice, 'low'),
+    numberCandidate('fallback:visible-price', fallbackOriginalPrice, 'low'),
   ]);
 
   const couponTextField = buildTextField([
+    textCandidate('jsonld:description-coupon', jsonLdCouponHint, jsonLdCouponHint ? 'medium' : 'missing'),
     textCandidate('selector:#promoPriceBlockMessage_feature_div', extractMatch(html, /id=["']promoPriceBlockMessage_feature_div["'][\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i), 'high'),
     textCandidate('selector:#couponFeature', extractMatch(html, /id=["']couponFeature["'][\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i), 'high'),
-    textCandidate('coupon-text-search', extractMatch(html, /(Save\s+[^<]{0,80}coupon[^<]{0,80})/i), 'medium'),
+    textCandidate('fallback:coupon-text-search', extractMatch(html, /(Save\s+[^<]{0,80}coupon[^<]{0,80})/i), 'low'),
   ]);
 
   const merchantField = buildTextField([
@@ -1011,19 +1251,19 @@ const scanAmazonPage = (
   const brandField = buildTextField([
     textCandidate('jsonld:brand', brandName, 'high'),
     textCandidate('selector:#bylineInfo', extractTagTextById(html, 'bylineInfo', 'a'), 'medium'),
-    textCandidate('brand-label', extractMatch(html, /Brand[^<]{0,20}<\/span>\s*<span[^>]*>([\s\S]*?)<\/span>/i), 'medium'),
+    textCandidate('fallback:brand-label', extractMatch(html, /Brand[^<]{0,20}<\/span>\s*<span[^>]*>([\s\S]*?)<\/span>/i), 'low'),
   ]);
 
   const mainImageField = buildTextField([
-    textCandidate('amazon-dynamic-images', mainImage, mainImage ? 'high' : 'missing'),
-    textCandidate('jsonld:image', jsonLdImages[0], jsonLdImages[0] ? 'medium' : 'missing'),
-    textCandidate('meta:og:image', extractMetaContent(html, 'og:image'), 'medium'),
+    textCandidate('jsonld:image', jsonLdImages[0], jsonLdImages[0] ? 'high' : 'missing'),
+    textCandidate('selector:amazon-dynamic-images', mainImage, mainImage ? 'high' : 'missing'),
+    textCandidate('fallback:meta:og:image', extractMetaContent(html, 'og:image'), 'low'),
   ]);
 
   const galleryImagesField = buildListField([
-    listCandidate('amazon-dynamic-images', dynamicImages, dynamicImages.length > 0 ? 'high' : 'missing'),
-    listCandidate('jsonld:image', jsonLdImages, jsonLdImages.length > 0 ? 'medium' : 'missing'),
-    listCandidate('img-src-fallback', extractAdditionalImages(html), 'low'),
+    listCandidate('jsonld:image', jsonLdImages, jsonLdImages.length > 0 ? 'high' : 'missing'),
+    listCandidate('selector:amazon-dynamic-images', dynamicImages, dynamicImages.length > 0 ? 'high' : 'missing'),
+    listCandidate('fallback:img-src', extractAdditionalImages(html), 'low'),
   ]);
 
   const ratingField = buildNumberField([
@@ -1050,8 +1290,8 @@ const scanAmazonPage = (
   ]);
 
   const sellerField = buildTextField([
-    textCandidate('seller-search', extractMatch(html, /Sold by[^<]{0,20}<\/span>\s*<span[^>]*>([\s\S]*?)<\/span>/i), 'medium'),
     textCandidate('jsonld:offers.seller', getJsonLdMerchantName(offerJson), 'medium'),
+    textCandidate('selector:seller-search', extractMatch(html, /Sold by[^<]{0,20}<\/span>\s*<span[^>]*>([\s\S]*?)<\/span>/i), 'medium'),
   ]);
 
   const categoryField = buildTextField([
@@ -1061,24 +1301,67 @@ const scanAmazonPage = (
 
   const featureBulletsField = buildListField([
     listCandidate('selector:#feature-bullets li', extractListItemsByContainerId(html, 'feature-bullets'), 'high'),
-    listCandidate('jsonld:description-split', dedupeStrings([(typeof productJson?.description === 'string' ? productJson.description : null)]), 'low'),
+    listCandidate('fallback:jsonld:description-split', dedupeStrings([jsonLdDescription]), 'low'),
   ]);
 
   const summaryField = buildTextField([
+    textCandidate('jsonld:description', jsonLdDescription, 'high'),
     textCandidate('meta:description', extractMetaContent(html, 'description'), 'medium'),
-    textCandidate('jsonld:description', typeof productJson?.description === 'string' ? productJson.description : null, 'medium'),
-    textCandidate('bullet-summary', featureBulletsField.value && featureBulletsField.value.length > 0 ? featureBulletsField.value[0] : null, 'low'),
+    textCandidate('fallback:bullet-summary', featureBulletsField.value && featureBulletsField.value.length > 0 ? featureBulletsField.value[0] : null, 'low'),
   ]);
 
   const descriptionField = buildTextField([
+    textCandidate('jsonld:description', jsonLdDescription, 'high'),
     textCandidate('selector:#productDescription', extractTagTextById(html, 'productDescription', 'div'), 'medium'),
-    textCandidate('jsonld:description', typeof productJson?.description === 'string' ? productJson.description : null, 'medium'),
-    textCandidate('meta:description', extractMetaContent(html, 'description'), 'low'),
+    textCandidate('fallback:meta:description', extractMetaContent(html, 'description'), 'low'),
   ]);
 
   const asinField = buildTextField([
     textCandidate('amazon-asin', asin, asin ? 'high' : 'missing'),
   ]);
+
+  const amazonRawProduct: AmazonRawProduct = {
+    provider: 'amazon',
+    sourceUrl: context.sourceUrl,
+    finalUrl: context.finalUrl,
+    canonicalProductUrl: context.cleanedSourceUrl,
+    asin: asinField.value,
+    extractionOrder: 'structured-data-first',
+    selectedSources: {
+      title: resolvedTitleField.source,
+      brand: brandField.source,
+      image: mainImageField.source,
+      currentPrice: currentPriceField.source,
+      originalPrice: originalPriceField.source,
+      description: descriptionField.source ?? summaryField.source,
+    },
+    confidence: {
+      title: confidenceToScore(resolvedTitleField.confidence),
+      image: confidenceToScore(mainImageField.confidence),
+      description: Math.max(confidenceToScore(descriptionField.confidence), confidenceToScore(summaryField.confidence)),
+      brand: confidenceToScore(brandField.confidence),
+      price: Math.max(confidenceToScore(currentPriceField.confidence), confidenceToScore(originalPriceField.confidence)),
+    },
+    fields: {
+      title: resolvedTitleField.value,
+      brand: brandField.value,
+      merchant: merchantField.value,
+      mainImage: mainImageField.value,
+      currentPrice: currentPriceField.value,
+      originalPrice: originalPriceField.value,
+      couponText: couponTextField.value,
+      description: descriptionField.value ?? summaryField.value,
+      featureBullets: featureBulletsField.value ?? [],
+      breadcrumbs: breadcrumbTrail,
+      rating: ratingField.value,
+      reviewCount: reviewCountField.value,
+      availability: availabilityField.value,
+      shippingInfo: shippingInfoField.value,
+      seller: sellerField.value,
+      asin: asinField.value,
+      galleryImages: galleryImagesField.value ?? [],
+    },
+  };
 
   return {
     provider: 'amazon',
@@ -1096,8 +1379,9 @@ const scanAmazonPage = (
       merchantHint: normalizedMerchantHint,
       categoryHint: compactText(categoryHint),
     },
+    amazonRawProduct,
     fields: {
-      title: titleField,
+      title: resolvedTitleField,
       currentPrice: currentPriceField,
       originalPrice: originalPriceField,
       couponText: couponTextField,
@@ -1263,6 +1547,7 @@ const scanGenericPage = (
       merchantHint: merchantHintValue,
       categoryHint: compactText(categoryHint),
     },
+    amazonRawProduct: null,
     fields: {
       title: titleField,
       currentPrice: currentPriceField,
@@ -1353,18 +1638,46 @@ const normalizeScanResult = (
   const galleryImages = dedupeStrings([
     ...normalizeHttpUrls([scanResult.fields.mainImage.value, ...(scanResult.fields.galleryImages.value ?? [])]),
   ]);
+  const rawCategory =
+    compactText(scanResult.fields.category.value)
+    ?? (scanResult.breadcrumbs.length > 0 ? scanResult.breadcrumbs[scanResult.breadcrumbs.length - 1] : null);
+  const guessedCategory = guessAppCategoryFromText([
+    rawCategory,
+    scanResult.fields.title.value,
+    ...scanResult.breadcrumbs,
+    summary,
+    description,
+  ]);
+  const category = guessedCategory || rawCategory || null;
+  const subcategory = guessSubcategory(category, scanResult.fields.title.value, scanResult.breadcrumbs);
+  const confidence = scanResult.provider === 'amazon' && scanResult.amazonRawProduct
+    ? scanResult.amazonRawProduct.confidence
+    : {
+      title: confidenceToScore(scanResult.fields.title.confidence),
+      image: confidenceToScore(scanResult.fields.mainImage.confidence),
+      description: Math.max(
+        confidenceToScore(scanResult.fields.description.confidence),
+        confidenceToScore(scanResult.fields.summary.confidence),
+      ),
+      brand: confidenceToScore(scanResult.fields.brand.confidence),
+      price: Math.max(
+        confidenceToScore(scanResult.fields.currentPrice.confidence),
+        confidenceToScore(scanResult.fields.originalPrice.confidence),
+      ),
+    };
 
   const digestBase = {
     sourceProvider: scanResult.provider,
     merchant,
     brand: compactText(scanResult.fields.brand.value),
-    productTitle: truncateText(scanResult.fields.title.value, 160) || null,
+    productTitle:
+      truncateText(scanResult.fields.title.value, 160)
+      || (scanResult.asin ? `Amazon Deal ${scanResult.asin}` : null),
     sourceUrl,
     affiliateUrl: normalizeOptionalHttpUrl(affiliateUrl),
     asin: compactText(scanResult.fields.asin.value) ?? scanResult.asin,
-    category:
-      compactText(scanResult.fields.category.value)
-      ?? (scanResult.breadcrumbs.length > 0 ? scanResult.breadcrumbs[scanResult.breadcrumbs.length - 1] : null),
+    category,
+    subcategory,
     image: normalizeOptionalHttpUrl(scanResult.fields.mainImage.value),
     galleryImages,
     currentPrice: prices.currentPrice,
@@ -1381,7 +1694,8 @@ const normalizeScanResult = (
     seller: compactText(scanResult.fields.seller.value),
     featureBullets: dedupeStrings((scanResult.fields.featureBullets.value ?? []).slice(0, 8)),
     summary,
-    description,
+    description: description ?? (scanResult.asin ? `Imported Amazon product ${scanResult.asin}. Review details before publish.` : null),
+    confidence,
     importedAt: new Date().toISOString(),
   };
 
@@ -1525,6 +1839,7 @@ const mapNormalizedDigestToForm = (
     title: payload.dealTitle,
     description: payload.description,
     category: payload.category,
+    subcategory: digest.subcategory ?? undefined,
     offerText: payload.offerText,
     originalPrice: digest.originalPrice ?? undefined,
     price: digest.currentPrice ?? undefined,
@@ -1850,9 +2165,10 @@ export const runImportPipeline = async (
 ): Promise<ImportPipelineResult> => {
   let scanResult: ProviderScanResult;
   let failureReason: string | null = null;
+  const canonicalSourceUrl = cleanProductUrl(options.sourceUrl) ?? normalizeUrl(options.sourceUrl);
 
   try {
-    const context = await fetchPageContext(options.sourceUrl);
+    const context = await fetchPageContext(canonicalSourceUrl);
     scanResult = context.provider === 'amazon'
       ? scanAmazonPage(context, options.merchantHint, options.categoryHint)
       : scanGenericPage(context, options.merchantHint, options.categoryHint);
