@@ -135,14 +135,20 @@ export const DealCard: React.FC<DealCardProps> = ({
           <div className="mt-2.5 grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => onEditDeal(deal)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onEditDeal(deal);
+              }}
               className="inline-flex h-9.5 items-center justify-center rounded-[1rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
             >
               Edit
             </button>
             <button
               type="button"
-              onClick={() => void onDeleteDeal(deal)}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onDeleteDeal(deal);
+              }}
               disabled={isDeleting}
               className={`inline-flex h-9.5 items-center justify-center rounded-[1rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
                 isDeleting
@@ -230,14 +236,20 @@ export const DealCard: React.FC<DealCardProps> = ({
         <div className="mb-3 mt-2.5 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => onEditDeal(deal)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditDeal(deal);
+            }}
             className="inline-flex h-10 items-center justify-center rounded-[1rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
           >
             Edit
           </button>
           <button
             type="button"
-            onClick={() => void onDeleteDeal(deal)}
+            onClick={(event) => {
+              event.stopPropagation();
+              void onDeleteDeal(deal);
+            }}
             disabled={isDeleting}
             className={`inline-flex h-10 items-center justify-center rounded-[1rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
               isDeleting

@@ -3338,6 +3338,7 @@ export default function App() {
   const [onlineCategoryPage, setOnlineCategoryPage] = useState(0);
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
+  const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
   const [cityName, setCityName] = useState<string>('');
   const [showDebug, setShowDebug] = useState(false);
@@ -6391,6 +6392,9 @@ export default function App() {
     setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
+    if (currentView !== 'business-portal') {
+      setCurrentView('business-portal');
+    }
     setIsCreating(true);
   };
 
@@ -7021,6 +7025,21 @@ export default function App() {
             : ONLINE_FASHION_SUBCATEGORY_OPTIONS
       ).filter((subcategory) => subcategory !== 'All')
       : [];
+    const normalizedDesktopSearch = desktopSearchQuery.trim().toLowerCase();
+    const matchesDesktopSearch = (deal: Deal) => {
+      if (!normalizedDesktopSearch) return true;
+      return [
+        deal.title,
+        deal.businessName,
+        deal.description,
+        deal.offerText,
+        deal.category,
+        deal.localSubcategory,
+        deal.onlineSubcategory,
+      ]
+        .map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
+        .some((value) => value.includes(normalizedDesktopSearch));
+    };
 
     const activeLocalDeals = dealsWithDistance
       .filter(d =>
@@ -7031,7 +7050,8 @@ export default function App() {
           selectedCategory === 'All'
           || selectedLocalSubcategory === 'All'
           || d.localSubcategory === selectedLocalSubcategory
-        )
+        ) &&
+        matchesDesktopSearch(d)
       )
       .sort((a, b) => a.computedDistanceValue - b.computedDistanceValue);
 
@@ -7078,7 +7098,8 @@ export default function App() {
           !hasOnlineSubcategory ||
           selectedOnlineSubcategory === 'All' ||
           deal.onlineSubcategory === selectedOnlineSubcategory
-        ),
+        ) &&
+        matchesDesktopSearch(deal),
     );
 
     const rankedDropModeDeals = [...activeOnlineDeals]
@@ -7212,6 +7233,48 @@ export default function App() {
 
       pushToast('Drop Mode is off. Back to the full online feed.', 'share');
     };
+    const renderDesktopModeSwitch = () => (
+      <div className="hidden min-[1024px]:mb-3 min-[1024px]:flex min-[1024px]:justify-center">
+        <div className="inline-grid h-14 w-full max-w-[840px] grid-cols-2 items-center gap-1 rounded-[1.6rem] border border-slate-200 bg-white/90 p-1.5 shadow-[0_10px_26px_rgba(148,163,184,0.2)]">
+          <button
+            type="button"
+            onClick={handleLocalFeedMode}
+            aria-pressed={dropMode === 'local'}
+            className={`inline-flex h-full items-center justify-center gap-2 rounded-[1.25rem] px-4 text-base font-black tracking-[-0.02em] transition-all ${
+              dropMode === 'local'
+                ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_22px_rgba(99,102,241,0.32)]'
+                : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+            }`}
+          >
+            <AppIcon name="pin" size={20} />
+            <span>Local</span>
+            {dropMode === 'local' ? (
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-indigo-600 shadow-sm">
+                <AppIcon name="check" size={14} />
+              </span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={handleOnlineFeedMode}
+            aria-pressed={dropMode === 'online'}
+            className={`inline-flex h-full items-center justify-center gap-2 rounded-[1.25rem] px-4 text-base font-black tracking-[-0.02em] transition-all ${
+              dropMode === 'online'
+                ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_22px_rgba(99,102,241,0.32)]'
+                : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+            }`}
+          >
+            <AppIcon name="online" size={20} />
+            <span>Online</span>
+            {dropMode === 'online' ? (
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-indigo-600 shadow-sm">
+                <AppIcon name="check" size={14} />
+              </span>
+            ) : null}
+          </button>
+        </div>
+      </div>
+    );
 
     const renderOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
@@ -7333,14 +7396,20 @@ export default function App() {
               >
                 <button
                   type="button"
-                  onClick={() => handleEditDeal(deal)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleEditDeal(deal);
+                  }}
                   className="inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Edit
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleAdminDeleteDeal(deal)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleAdminDeleteDeal(deal);
+                  }}
                   disabled={deletingDealIds.has(deal.id)}
                   className={`inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
                     deletingDealIds.has(deal.id)
@@ -7476,14 +7545,20 @@ export default function App() {
               >
                 <button
                   type="button"
-                  onClick={() => handleEditDeal(deal)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleEditDeal(deal);
+                  }}
                   className="inline-flex h-8.5 items-center justify-center rounded-[0.9rem] border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Edit
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleAdminDeleteDeal(deal)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleAdminDeleteDeal(deal);
+                  }}
                   disabled={deletingDealIds.has(deal.id)}
                   className={`inline-flex h-8.5 items-center justify-center rounded-[0.9rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] transition-colors ${
                     deletingDealIds.has(deal.id)
@@ -7572,6 +7647,54 @@ export default function App() {
 
         {renderDealsErrorBanner()}
 
+        <div className="hidden min-[1024px]:grid min-[1024px]:grid-cols-[1fr_auto_1fr] min-[1024px]:items-center min-[1024px]:gap-3 min-[1024px]:rounded-[1.1rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-2.5 min-[1024px]:shadow-sm">
+          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
+            Browse
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentView('live-deals');
+                setDropModeEnabled(false);
+                setSelectedCategory('All');
+                setSelectedFeedFilter('all');
+              }}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-indigo-100 bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600"
+            >
+              <AppIcon name="home" size={13} />
+              Home
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenCatalog}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              <AppIcon name="catalog" size={13} />
+              Catalog
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentView('my-claims')}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              <AppIcon name="claims" size={13} />
+              Claims
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenBusinessPortal}
+              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              <AppIcon name="portal" size={13} />
+              Upgrade
+            </button>
+          </div>
+          <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            {normalizedDesktopSearch ? `Searching "${desktopSearchQuery.trim()}"` : 'Popular deals right now'}
+          </span>
+        </div>
+
         {/* Developer Debug Section */}
         {isAdminRoute && showDebug && dropMode === 'local' && (
           <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
@@ -7619,7 +7742,7 @@ export default function App() {
           </div>
         )}
 
-          <div className="grid grid-cols-2 gap-1.5 rounded-[1.35rem] bg-slate-100/90 p-1">
+          <div className="grid grid-cols-2 gap-1.5 rounded-[1.35rem] bg-slate-100/90 p-1 min-[1024px]:hidden">
           {[
             { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleLocalFeedMode },
             { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleOnlineFeedMode },
@@ -7642,6 +7765,7 @@ export default function App() {
         {/* Location & Radius Header */}
         {dropMode === 'local' ? (
             <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white p-3.5 shadow-sm shadow-slate-200/35">
+              {renderDesktopModeSwitch()}
               <div className="mb-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className={`rounded-[0.95rem] p-2 ${hasPreciseUserLocation ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
@@ -7689,6 +7813,7 @@ export default function App() {
           </div>
         ) : (
           <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white px-3 py-3 shadow-sm shadow-slate-200/35">
+            {renderDesktopModeSwitch()}
             <div className="flex items-center gap-2 min-[360px]:gap-3">
               <div className="flex h-11 w-11 min-[360px]:h-12 min-[360px]:w-12 items-center justify-center rounded-[0.95rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
                 <AppIcon name="online" size={18} />
@@ -7772,141 +7897,163 @@ export default function App() {
           </div>
         )}
 
-        <div className="overflow-x-auto pb-1 -mx-0.5">
-          <div className="flex min-w-max items-center gap-1.5 px-1">
-            {activeCategoryOptions.map(category => (
-              <button
-                key={category}
-                type="button"
-                aria-pressed={selectedCategory === category}
-                onClick={() => handleSelectActiveCategory(category)}
-                className={`inline-flex shrink-0 ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all duration-200 ${
-                  selectedCategory === category
-                    ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/40 ring-2 ring-indigo-100/70'
-                    : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                }`}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  {category === 'All' ? <AppIcon name="deal" size={12} /> : <AppIcon name={getCategoryIconName(category)} size={12} />}
-                  {category === 'All' ? category : getCategoryLabel(category)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {dropMode === 'local' ? (
-          <div
-            aria-hidden={!shouldShowLocalSubcategories}
-            className={`overflow-hidden transition-all duration-200 ease-out ${
-              shouldShowLocalSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
-            }`}
-          >
-            <div className="overflow-x-auto -mx-0.5">
-              <div className="flex min-w-max items-center gap-1.5 px-1 pt-1">
+        <div className="space-y-1.5 min-[1024px]:rounded-[1.2rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:p-3 min-[1024px]:shadow-sm min-[1024px]:shadow-slate-200/35">
+          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
+            <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
+              {activeCategoryOptions.map(category => (
                 <button
+                  key={category}
                   type="button"
-                  aria-pressed={selectedLocalSubcategory === 'All'}
-                  onClick={() => setSelectedLocalSubcategory('All')}
-                  className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                    selectedLocalSubcategory === 'All'
-                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                  aria-pressed={selectedCategory === category}
+                  onClick={() => handleSelectActiveCategory(category)}
+                  className={`inline-flex shrink-0 ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all duration-200 ${
+                    selectedCategory === category
+                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/40 ring-2 ring-indigo-100/70'
                       : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                   }`}
                 >
-                  All {getCategoryLabel(selectedCategory)}
+                  <span className="inline-flex items-center gap-1.5">
+                    {category === 'All' ? <AppIcon name="deal" size={12} /> : <AppIcon name={getCategoryIconName(category)} size={12} />}
+                    {category === 'All' ? category : getCategoryLabel(category)}
+                  </span>
                 </button>
-                {localSubcategoryOptions.map((subcategory) => (
+              ))}
+            </div>
+          </div>
+
+          {dropMode === 'local' ? (
+            <div
+              aria-hidden={!shouldShowLocalSubcategories}
+              className={`overflow-hidden transition-all duration-200 ease-out ${
+                shouldShowLocalSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
+              }`}
+            >
+              <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
+                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
                   <button
-                    key={subcategory}
                     type="button"
-                    aria-pressed={selectedLocalSubcategory === subcategory}
-                    onClick={() => setSelectedLocalSubcategory(subcategory)}
+                    aria-pressed={selectedLocalSubcategory === 'All'}
+                    onClick={() => setSelectedLocalSubcategory('All')}
                     className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                      selectedLocalSubcategory === subcategory
+                      selectedLocalSubcategory === 'All'
                         ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
                         : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                     }`}
                   >
-                    {subcategory}
+                    All {getCategoryLabel(selectedCategory)}
                   </button>
-                ))}
+                  {localSubcategoryOptions.map((subcategory) => (
+                    <button
+                      key={subcategory}
+                      type="button"
+                      aria-pressed={selectedLocalSubcategory === subcategory}
+                      onClick={() => setSelectedLocalSubcategory(subcategory)}
+                      className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                        selectedLocalSubcategory === subcategory
+                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                          : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                      }`}
+                    >
+                      {subcategory}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {dropMode === 'online' && shouldShowOnlineSubcategories ? (
-          <div
-            aria-hidden={!shouldShowOnlineSubcategories}
-            className={`overflow-hidden transition-all duration-200 ease-out ${
-              shouldShowOnlineSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
-            }`}
-          >
-            <div className="overflow-x-auto -mx-0.5">
-              <div className="flex min-w-max items-center gap-1.5 px-1 pt-1">
-                <button
-                  type="button"
-                  aria-pressed={selectedOnlineSubcategory === 'All'}
-                  onClick={() => setSelectedOnlineSubcategory('All')}
-                  className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                    selectedOnlineSubcategory === 'All'
-                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
-                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                  }`}
-                >
-                  All {getCategoryLabel(selectedCategory)}
-                </button>
-                {onlineSubcategoryOptions.map((subcategory) => (
+          {dropMode === 'online' && shouldShowOnlineSubcategories ? (
+            <div
+              aria-hidden={!shouldShowOnlineSubcategories}
+              className={`overflow-hidden transition-all duration-200 ease-out ${
+                shouldShowOnlineSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
+              }`}
+            >
+              <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
+                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
                   <button
-                    key={subcategory}
                     type="button"
-                    aria-pressed={selectedOnlineSubcategory === subcategory}
-                    onClick={() => setSelectedOnlineSubcategory(subcategory)}
+                    aria-pressed={selectedOnlineSubcategory === 'All'}
+                    onClick={() => setSelectedOnlineSubcategory('All')}
                     className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                      selectedOnlineSubcategory === subcategory
+                      selectedOnlineSubcategory === 'All'
                         ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
                         : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
                     }`}
                   >
-                    {subcategory}
+                    All {getCategoryLabel(selectedCategory)}
                   </button>
-                ))}
+                  {onlineSubcategoryOptions.map((subcategory) => (
+                    <button
+                      key={subcategory}
+                      type="button"
+                      aria-pressed={selectedOnlineSubcategory === subcategory}
+                      onClick={() => setSelectedOnlineSubcategory(subcategory)}
+                      className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
+                        selectedOnlineSubcategory === subcategory
+                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
+                          : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                      }`}
+                    >
+                      {subcategory}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        <div className="overflow-x-auto pb-1 -mx-0.5">
-          <div className="flex min-w-max items-center gap-1.5 px-1">
-            {[
-              { id: 'all', label: 'All' },
-              { id: 'trending', label: 'Trending' },
-              { id: 'ending-soon', label: 'Ending Soon' },
-              { id: 'just-dropped', label: 'Just Dropped' },
-            ].map(filter => (
-              <button
-                key={filter.id}
-                onClick={() => setSelectedFeedFilter(filter.id as typeof selectedFeedFilter)}
-                className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
-                  selectedFeedFilter === filter.id
-                    ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
-                    : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                }`}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <AppIcon name={getFeedFilterIconName(filter.id as typeof selectedFeedFilter)} size={12} />
-                  {filter.label}
-                </span>
-              </button>
-            ))}
+          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
+            <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'trending', label: 'Trending' },
+                { id: 'ending-soon', label: 'Ending Soon' },
+                { id: 'just-dropped', label: 'Just Dropped' },
+              ].map(filter => (
+                <button
+                  key={filter.id}
+                  onClick={() => setSelectedFeedFilter(filter.id as typeof selectedFeedFilter)}
+                  className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
+                    selectedFeedFilter === filter.id
+                      ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
+                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <AppIcon name={getFeedFilterIconName(filter.id as typeof selectedFeedFilter)} size={12} />
+                    {filter.label}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         <section className="space-y-2.5">
+          <div className="hidden min-[1024px]:block min-[1024px]:rounded-[1.2rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-3 min-[1024px]:shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">
+              {dropMode === 'online' ? 'Online Storefront' : 'Local Storefront'}
+            </p>
+            <h3 className="mt-1 text-[1.1rem] font-black tracking-[-0.02em] text-slate-900">
+              {selectedFeedFilter === 'trending'
+                ? 'Trending Deals'
+                : selectedFeedFilter === 'ending-soon'
+                  ? 'Ending Soon'
+                  : selectedFeedFilter === 'just-dropped'
+                    ? 'Fresh New Drops'
+                    : selectedCategory === 'All'
+                      ? 'Popular Deals Right Now'
+                      : `${getCategoryLabel(selectedCategory)} Deals`}
+            </h3>
+            <p className="mt-1 text-[12px] font-medium text-slate-500">
+              Curated picks organized for faster browsing on desktop.
+            </p>
+          </div>
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
-              filteredActiveLocalDeals.map(deal => (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                {filteredActiveLocalDeals.map(deal => (
                   <DealCard 
                     key={deal.id} 
                     deal={deal} 
@@ -7928,7 +8075,8 @@ export default function App() {
                   onDeleteDeal={handleAdminDeleteDeal}
                   isDeleting={deletingDealIds.has(deal.id)}
                 />
-              ))
+                ))}
+              </div>
             ) : (
               <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
@@ -7957,7 +8105,7 @@ export default function App() {
               pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
-                    <div className="grid grid-cols-1 gap-2.5 min-[360px]:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-2.5 min-[360px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
                       {visibleCategoryOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
                       {hasMoreCategoryPages && visibleCategoryOnlineDeals.length % 2 === 1
                         ? renderOnlineGridFiller(() => {
@@ -8029,7 +8177,7 @@ export default function App() {
               )
             ) : (
               sortedOnlineDealsByTab.length > 0 ? (
-                <div className="space-y-3">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                   {sortedOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
                 </div>
               ) : (
@@ -11683,6 +11831,9 @@ export default function App() {
       userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
       isAdminSession={hasAdminAccess}
       adminLabel={adminStatusLabel}
+      desktopSearchQuery={desktopSearchQuery}
+      onDesktopSearchQueryChange={setDesktopSearchQuery}
+      desktopSearchPlaceholder={dropMode === 'online' ? 'Search online deals, brands, categories' : 'Search local deals, stores, categories'}
       isDropModeHighlighted={false}
       onOpenAuth={() => {
         setAuthError('');
