@@ -3541,6 +3541,7 @@ export default function App() {
   const [aiFinderSearchSnapshot, setAiFinderSearchSnapshot] = useState<AIDealFinderResult | null>(null);
   useEffect(() => {
     hiddenDealIdsRef.current = hiddenDealIds;
+    setRawDeals((previousDeals) => previousDeals.filter((deal) => !hiddenDealIds.has(deal.id)));
   }, [hiddenDealIds]);
   const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
   const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
@@ -4529,33 +4530,114 @@ export default function App() {
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
-const deleteDealFromBackend = async (dealId: string) => {
-  const { error } = await getDealsTableClient()
+const deleteDealFromBackend = async (deal: Deal) => {
+  const primaryDeleteId = ensureUuid(deal.id);
+  const { data: deletedRows, error } = await getDealsTableClient()
     .delete()
-    .eq('id', ensureUuid(dealId));
+    .eq('id', primaryDeleteId)
+    .select('id');
 
-    if (error) {
-      console.error('[LiveDrop] Supabase deal delete failed', {
-        projectUrl: resolvedSupabaseUrl,
-        schema: DEALS_SCHEMA,
-        table: DEALS_TABLE,
-        dealId,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-      });
-      pushAdminLog('error', 'Shared deal delete failed', buildSharedWriteLogDetail({
-        operation: 'delete',
-        error,
-      }));
-      throw error;
-    }
-
-    pushAdminLog('info', `Deleted deal ${dealId} from shared backend`, buildSharedWriteLogDetail({
+  if (error) {
+    console.error('[LiveDrop] Supabase deal delete failed', {
+      projectUrl: resolvedSupabaseUrl,
+      schema: DEALS_SCHEMA,
+      table: DEALS_TABLE,
+      dealId: deal.id,
+      deleteId: primaryDeleteId,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    pushAdminLog('error', 'Shared deal delete failed', buildSharedWriteLogDetail({
       operation: 'delete',
+      payload: {
+        dealId: deal.id,
+        deleteId: primaryDeleteId,
+      },
+      error,
     }));
-  };
+    throw error;
+  }
+
+  const deletedIds = new Set(
+    (deletedRows ?? [])
+      .map((row) => String((row as { id?: string | null }).id ?? '').trim())
+      .filter(Boolean),
+  );
+
+  // Online cards can be rendered with a seed id while the backend row has a UUID.
+  // Delete canonical "same deal" matches so deleted cards cannot rehydrate on refresh.
+  if (deal.businessType === 'online') {
+    const { data: candidateRows, error: candidateError } = await getDealsTableClient()
+      .select('*')
+      .eq('business_type', 'online');
+
+    if (candidateError) {
+      console.warn('[LiveDrop] Could not load online candidates for delete matching', candidateError);
+    } else {
+      const matchedCandidateIds = (candidateRows ?? [])
+        .map((row) => {
+          const candidateDeal = mapDealRowToDeal(row as Partial<DealRow>);
+          if (!isLikelySameOnlineDeal(candidateDeal, deal)) {
+            return '';
+          }
+          return String((row as { id?: string | null }).id ?? '').trim();
+        })
+        .filter((id) => Boolean(id) && !deletedIds.has(id));
+
+      if (matchedCandidateIds.length > 0) {
+        const { data: matchedDeletedRows, error: matchedDeleteError } = await getDealsTableClient()
+          .delete()
+          .in('id', matchedCandidateIds)
+          .select('id');
+
+        if (matchedDeleteError) {
+          console.error('[LiveDrop] Supabase canonical delete failed', {
+            projectUrl: resolvedSupabaseUrl,
+            schema: DEALS_SCHEMA,
+            table: DEALS_TABLE,
+            dealId: deal.id,
+            matchedCandidateIds,
+            code: matchedDeleteError.code,
+            message: matchedDeleteError.message,
+            details: matchedDeleteError.details,
+            hint: matchedDeleteError.hint,
+          });
+          pushAdminLog('error', 'Shared canonical delete failed', buildSharedWriteLogDetail({
+            operation: 'delete',
+            payload: {
+              dealId: deal.id,
+              matchedCandidateIds,
+            },
+            error: matchedDeleteError,
+          }));
+          throw matchedDeleteError;
+        }
+
+        (matchedDeletedRows ?? []).forEach((row) => {
+          const matchedDeletedId = String((row as { id?: string | null }).id ?? '').trim();
+          if (matchedDeletedId) {
+            deletedIds.add(matchedDeletedId);
+          }
+        });
+      }
+    }
+  }
+
+  pushAdminLog(
+    'info',
+    `Deleted deal ${deal.id} from shared backend (${deletedIds.size} row${deletedIds.size === 1 ? '' : 's'})`,
+    buildSharedWriteLogDetail({
+      operation: 'delete',
+      payload: {
+        dealId: deal.id,
+        deleteId: primaryDeleteId,
+        deletedIds: [...deletedIds],
+      },
+    }),
+  );
+};
 
   const handleLoadBulkImportSample = () => {
     setBulkImportJson(BULK_IMPORT_SAMPLE);
@@ -6666,6 +6748,7 @@ const deleteDealFromBackend = async (dealId: string) => {
     setHiddenDealIds((prev) => {
       const next = new Set(prev);
       next.add(deal.id);
+      hiddenDealIdsRef.current = next;
       if (typeof window !== 'undefined') {
         safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
       }
@@ -6675,7 +6758,7 @@ const deleteDealFromBackend = async (dealId: string) => {
     try {
       setDeals((prev) => prev.filter((item) => item.id !== deal.id));
       if (supabase && hasSupabaseConfig) {
-        await deleteDealFromBackend(deal.id);
+        await deleteDealFromBackend(deal);
       }
       pushToast('Deal deleted.', 'share');
     } catch {
