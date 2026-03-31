@@ -11,6 +11,8 @@ interface DealArtworkProps {
   fallbackClassName?: string;
 }
 
+const failedImageSrcCache = new Set<string>();
+
 export const DealArtwork: React.FC<DealArtworkProps> = ({
   src,
   alt,
@@ -28,7 +30,7 @@ export const DealArtwork: React.FC<DealArtworkProps> = ({
   const showImage = Boolean(normalizedSrc) && !imageFailed;
 
   useEffect(() => {
-    setImageFailed(false);
+    setImageFailed(Boolean(normalizedSrc) && failedImageSrcCache.has(normalizedSrc));
   }, [normalizedSrc]);
 
   return (
@@ -38,7 +40,12 @@ export const DealArtwork: React.FC<DealArtworkProps> = ({
           src={normalizedSrc}
           alt={alt}
           loading="lazy"
-          onError={() => setImageFailed(true)}
+          onError={() => {
+            if (normalizedSrc) {
+              failedImageSrcCache.add(normalizedSrc);
+            }
+            setImageFailed(true);
+          }}
           className={`h-full w-full ${fit === 'contain' ? 'bg-white object-contain' : 'object-cover'} ${imageClassName}`}
         />
       ) : (

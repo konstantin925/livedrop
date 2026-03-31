@@ -3639,9 +3639,9 @@ export default function App() {
           ? ONLINE_HOME_SUBCATEGORY_OPTIONS
           : selectedCategory === 'Fashion'
             ? ONLINE_FASHION_SUBCATEGORY_OPTIONS
-            : ['All'];
+            : (['All'] as const);
 
-    if (!availableSubcategories.includes(selectedOnlineSubcategory as (typeof availableSubcategories)[number])) {
+    if (!(availableSubcategories as readonly string[]).includes(selectedOnlineSubcategory)) {
       setSelectedOnlineSubcategory('All');
     }
   }, [dropMode, selectedCategory, selectedOnlineSubcategory]);
@@ -4145,7 +4145,7 @@ export default function App() {
           useCreatedAtSort,
         });
 
-        pushAdminLog('warn', 'Shared deals fetch retried with legacy-compatible query', buildSharedWriteLogDetail({
+        pushAdminLog('info', 'Shared deals fetch retried with legacy-compatible query', buildSharedWriteLogDetail({
           operation: 'select',
           error,
           missingColumns,
@@ -5592,7 +5592,14 @@ const deleteDealFromBackend = async (dealId: string) => {
           return;
         }
 
-        console.error('Geolocation error:', error);
+        if (error.code === 1) {
+          console.info('[LiveDrop] Geolocation permission denied by user');
+        } else {
+          console.warn('[LiveDrop] Geolocation request failed', {
+            code: error.code,
+            message: error.message,
+          });
+        }
 
         if (error.code !== 1) {
           console.warn('[LiveDrop] High-accuracy geolocation failed, retrying with balanced accuracy', error);
@@ -5609,7 +5616,14 @@ const deleteDealFromBackend = async (dealId: string) => {
                 return;
               }
 
-              console.error('Balanced geolocation retry failed:', retryError);
+              if (retryError.code === 1) {
+                console.info('[LiveDrop] Balanced geolocation retry denied by user');
+              } else {
+                console.warn('[LiveDrop] Balanced geolocation retry failed', {
+                  code: retryError.code,
+                  message: retryError.message,
+                });
+              }
               handleLocationFailure(
                 retryError.code === 1 ? 'denied' : 'error',
                 retryError.code === 1 ? 'Location access denied' : 'Location unavailable',

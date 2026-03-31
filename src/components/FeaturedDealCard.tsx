@@ -166,5 +166,4 @@ export const FeaturedDealCard: React.FC<FeaturedDealCardProps> = ({
       </div>
     </div>
   );
-};</content>
-<parameter name="filePath">c:\Users\User\Desktop\livedrop\livedrop\src\components\FeaturedDealCard.tsx
+};

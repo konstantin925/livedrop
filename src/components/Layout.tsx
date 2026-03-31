@@ -242,7 +242,7 @@ export const Layout: React.FC<LayoutProps> = ({
       ) : null}
 
       {role !== 'business' ? (
-        <div className={`border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-8 py-3' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
+        <div className={`hidden min-[1024px]:block border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-8 py-3' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
           <div className="mx-auto flex w-full max-w-[840px] items-center justify-center">
             <div className={`inline-grid grid-cols-4 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_22px_rgba(148,163,184,0.18)] ${isDesktopLayout ? 'h-12 w-[640px]' : 'h-11 w-full max-w-[430px]'}`}>
               <button
