@@ -45,6 +45,7 @@ const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
+const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
 const LOCAL_ADMIN_MODE = false;
 const ADMIN_SESSION_STORAGE_KEY = 'livedrop_admin_session';
@@ -745,6 +746,24 @@ const readHiddenDealIds = (): Set<string> => {
   }
 };
 
+const readHiddenDealKeys = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(HIDDEN_DEAL_KEYS_STORAGE_KEY);
+    if (!raw) return new Set();
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+
+    return new Set(
+      parsed
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
+};
+
 const getDistanceForDeal = (location: UserLocation, deal: Deal) =>
   calculateDistance(location.lat, location.lng, deal.lat, deal.lng);
 
@@ -834,6 +853,16 @@ const normalizeDealUrlForMatch = (value?: unknown) => {
 
 const normalizeDealIdentityText = (value?: unknown) =>
   (typeof value === 'string' ? value : '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+const getDealHiddenIdentityKey = (deal: Deal) => {
+  const businessType = deal.businessType === 'online' ? 'online' : 'local';
+  const business = normalizeDealIdentityText(deal.businessName);
+  const title = normalizeDealIdentityText(deal.title);
+  const product = normalizeDealUrlForMatch(deal.productUrl);
+  const affiliate = normalizeDealUrlForMatch(deal.affiliateUrl);
+  const website = normalizeDealUrlForMatch(deal.websiteUrl);
+  return `${businessType}::${business}::${title}::${product}::${affiliate}::${website}`;
+};
 
 const isLikelySameOnlineDeal = (left: Deal, right: Deal) => {
   const leftSourceId = extractMockOnlineSourceId(left.id);
@@ -3450,6 +3479,11 @@ export default function App() {
     return readHiddenDealIds();
   });
   const hiddenDealIdsRef = useRef(hiddenDealIds);
+  const [hiddenDealKeys, setHiddenDealKeys] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    return readHiddenDealKeys();
+  });
+  const hiddenDealKeysRef = useRef(hiddenDealKeys);
   const [deletingDealIds, setDeletingDealIds] = useState<Set<string>>(new Set());
   const setDeals = (value: React.SetStateAction<Deal[]>) => {
     setRawDeals((previousDeals) => {
@@ -3458,7 +3492,9 @@ export default function App() {
         : value;
 
       const sanitizedDeals = sanitizeDealsCollection(Array.isArray(resolvedDeals) ? resolvedDeals : []);
-      return sanitizedDeals.filter((deal) => !hiddenDealIdsRef.current.has(deal.id));
+      return sanitizedDeals.filter(
+        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !hiddenDealKeysRef.current.has(getDealHiddenIdentityKey(deal)),
+      );
     });
   };
   const selectedDetailDeal = useMemo(
@@ -3541,8 +3577,20 @@ export default function App() {
   const [aiFinderSearchSnapshot, setAiFinderSearchSnapshot] = useState<AIDealFinderResult | null>(null);
   useEffect(() => {
     hiddenDealIdsRef.current = hiddenDealIds;
-    setRawDeals((previousDeals) => previousDeals.filter((deal) => !hiddenDealIds.has(deal.id)));
+    setRawDeals((previousDeals) =>
+      previousDeals.filter(
+        (deal) => !hiddenDealIds.has(deal.id) && !hiddenDealKeysRef.current.has(getDealHiddenIdentityKey(deal)),
+      ),
+    );
   }, [hiddenDealIds]);
+  useEffect(() => {
+    hiddenDealKeysRef.current = hiddenDealKeys;
+    setRawDeals((previousDeals) =>
+      previousDeals.filter(
+        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !hiddenDealKeys.has(getDealHiddenIdentityKey(deal)),
+      ),
+    );
+  }, [hiddenDealKeys]);
   const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
   const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
   const [showSearchMeter, setShowSearchMeter] = useState(false);
@@ -6751,6 +6799,15 @@ const deleteDealFromBackend = async (deal: Deal) => {
       hiddenDealIdsRef.current = next;
       if (typeof window !== 'undefined') {
         safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+    setHiddenDealKeys((prev) => {
+      const next = new Set(prev);
+      next.add(getDealHiddenIdentityKey(deal));
+      hiddenDealKeysRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
       }
       return next;
     });
