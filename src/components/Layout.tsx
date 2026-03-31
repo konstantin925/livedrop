@@ -241,6 +241,67 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
       ) : null}
 
+      {role !== 'business' ? (
+        <div className={`border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-8 py-3' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
+          <div className="mx-auto flex w-full max-w-[840px] items-center justify-center">
+            <div className={`inline-grid grid-cols-4 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_22px_rgba(148,163,184,0.18)] ${isDesktopLayout ? 'h-12 w-[640px]' : 'h-11 w-full max-w-[430px]'}`}>
+              <button
+                type="button"
+                onClick={() => onViewChange('live-deals')}
+                aria-pressed={currentView === 'live-deals' || currentView === 'deal-detail'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  currentView === 'live-deals' || currentView === 'deal-detail'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="home" size={15} />
+                <span>Home</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange('catalog')}
+                aria-pressed={currentView === 'catalog'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  currentView === 'catalog'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="catalog" size={15} />
+                <span>Catalog</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange('my-claims')}
+                aria-pressed={currentView === 'my-claims'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  currentView === 'my-claims'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="claims" size={15} />
+                <span>Claims</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange('business-portal')}
+                aria-pressed={currentView === 'business-portal'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  currentView === 'business-portal'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="portal" size={15} />
+                <span>Upgrade</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {notificationsOpen ? (
         <div className="absolute left-2.5 right-2.5 top-[76px] z-[90] max-[359px]:left-2 max-[359px]:right-2 max-[359px]:top-[70px]">
           <div className="max-h-[50vh] overflow-y-auto rounded-[1.75rem] border border-slate-100/90 bg-white/98 p-3.5 shadow-[0_20px_48px_rgba(15,23,42,0.16)]">

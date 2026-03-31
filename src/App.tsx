@@ -6992,6 +6992,25 @@ export default function App() {
     setCurrentView('catalog');
   };
 
+  const handleGlobalLocalFeedMode = () => {
+    setNotificationsOpen(false);
+    setDropModeEnabled(false);
+    setDropMode('local');
+    setSelectedCategory('All');
+    setSelectedLocalSubcategory('All');
+    setSelectedFeedFilter('all');
+  };
+
+  const handleGlobalOnlineFeedMode = () => {
+    setNotificationsOpen(false);
+    if (dropMode !== 'online') {
+      setDropModeEnabled(false);
+    }
+    setDropMode('online');
+    setSelectedCategory('All');
+    setSelectedFeedFilter('all');
+  };
+
   const renderLiveDeals = () => {
     const now = Date.now();
     const isOnlineMode = dropMode === 'online';
@@ -7205,23 +7224,6 @@ export default function App() {
       }
       setSelectedCategory(category);
     };
-    const handleLocalFeedMode = () => {
-      setNotificationsOpen(false);
-      setDropModeEnabled(false);
-      setDropMode('local');
-      setSelectedCategory('All');
-      setSelectedLocalSubcategory('All');
-      setSelectedFeedFilter('all');
-    };
-    const handleOnlineFeedMode = () => {
-      setNotificationsOpen(false);
-      if (dropMode !== 'online') {
-        setDropModeEnabled(false);
-      }
-      setDropMode('online');
-      setSelectedCategory('All');
-      setSelectedFeedFilter('all');
-    };
     const handleDropModeToggle = () => {
       const nextDropModeState = !dropModeEnabled;
       setDropModeEnabled(nextDropModeState);
@@ -7233,49 +7235,6 @@ export default function App() {
 
       pushToast('Drop Mode is off. Back to the full online feed.', 'share');
     };
-    const renderDesktopModeSwitch = () => (
-      <div className="hidden min-[1024px]:mb-3 min-[1024px]:flex min-[1024px]:justify-center">
-        <div className="inline-grid h-14 w-full max-w-[840px] grid-cols-2 items-center gap-1 rounded-[1.6rem] border border-slate-200 bg-white/90 p-1.5 shadow-[0_10px_26px_rgba(148,163,184,0.2)]">
-          <button
-            type="button"
-            onClick={handleLocalFeedMode}
-            aria-pressed={dropMode === 'local'}
-            className={`inline-flex h-full items-center justify-center gap-2 rounded-[1.25rem] px-4 text-base font-black tracking-[-0.02em] transition-all ${
-              dropMode === 'local'
-                ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_22px_rgba(99,102,241,0.32)]'
-                : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
-            }`}
-          >
-            <AppIcon name="pin" size={20} />
-            <span>Local</span>
-            {dropMode === 'local' ? (
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-indigo-600 shadow-sm">
-                <AppIcon name="check" size={14} />
-              </span>
-            ) : null}
-          </button>
-          <button
-            type="button"
-            onClick={handleOnlineFeedMode}
-            aria-pressed={dropMode === 'online'}
-            className={`inline-flex h-full items-center justify-center gap-2 rounded-[1.25rem] px-4 text-base font-black tracking-[-0.02em] transition-all ${
-              dropMode === 'online'
-                ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_22px_rgba(99,102,241,0.32)]'
-                : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
-            }`}
-          >
-            <AppIcon name="online" size={20} />
-            <span>Online</span>
-            {dropMode === 'online' ? (
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-indigo-600 shadow-sm">
-                <AppIcon name="check" size={14} />
-              </span>
-            ) : null}
-          </button>
-        </div>
-      </div>
-    );
-
     const renderOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
@@ -7651,44 +7610,45 @@ export default function App() {
           <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
             Browse
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setCurrentView('live-deals');
-                setDropModeEnabled(false);
-                setSelectedCategory('All');
-                setSelectedFeedFilter('all');
-              }}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-indigo-100 bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-600"
-            >
-              <AppIcon name="home" size={13} />
-              Home
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenCatalog}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
-            >
-              <AppIcon name="catalog" size={13} />
-              Catalog
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentView('my-claims')}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
-            >
-              <AppIcon name="claims" size={13} />
-              Claims
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenBusinessPortal}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
-            >
-              <AppIcon name="portal" size={13} />
-              Upgrade
-            </button>
+          <div className="flex items-center justify-center">
+            <div className="inline-grid h-11 w-full max-w-[520px] grid-cols-2 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_20px_rgba(148,163,184,0.16)]">
+              <button
+                type="button"
+                onClick={handleGlobalLocalFeedMode}
+                aria-pressed={dropMode === 'local'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  dropMode === 'local'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="pin" size={16} />
+                <span>Local</span>
+                {dropMode === 'local' ? (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
+                    <AppIcon name="check" size={10} />
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={handleGlobalOnlineFeedMode}
+                aria-pressed={dropMode === 'online'}
+                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                  dropMode === 'online'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <AppIcon name="online" size={16} />
+                <span>Online</span>
+                {dropMode === 'online' ? (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
+                    <AppIcon name="check" size={10} />
+                  </span>
+                ) : null}
+              </button>
+            </div>
           </div>
           <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
             {normalizedDesktopSearch ? `Searching "${desktopSearchQuery.trim()}"` : 'Popular deals right now'}
@@ -7744,8 +7704,8 @@ export default function App() {
 
           <div className="grid grid-cols-2 gap-1.5 rounded-[1.35rem] bg-slate-100/90 p-1 min-[1024px]:hidden">
           {[
-            { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleLocalFeedMode },
-            { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleOnlineFeedMode },
+            { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleGlobalLocalFeedMode },
+            { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleGlobalOnlineFeedMode },
           ].map(option => (
             <button
               key={option.id}
@@ -7765,7 +7725,6 @@ export default function App() {
         {/* Location & Radius Header */}
         {dropMode === 'local' ? (
             <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white p-3.5 shadow-sm shadow-slate-200/35">
-              {renderDesktopModeSwitch()}
               <div className="mb-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className={`rounded-[0.95rem] p-2 ${hasPreciseUserLocation ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-50 text-slate-400'}`}>
@@ -7812,11 +7771,10 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white px-3 py-3 shadow-sm shadow-slate-200/35">
-            {renderDesktopModeSwitch()}
+          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white px-3 py-2 shadow-sm shadow-slate-200/35">
             <div className="flex items-center gap-2 min-[360px]:gap-3">
-              <div className="flex h-11 w-11 min-[360px]:h-12 min-[360px]:w-12 items-center justify-center rounded-[0.95rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
-                <AppIcon name="online" size={18} />
+              <div className="flex h-10 w-10 min-[360px]:h-11 min-[360px]:w-11 items-center justify-center rounded-[0.95rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
+                <AppIcon name="online" size={17} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
@@ -7825,7 +7783,7 @@ export default function App() {
                     {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
                   </span>
                 </div>
-                <p className="mt-1 text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.35] text-slate-700 line-clamp-3">
+                <p className="mt-0.5 text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.3] text-slate-700 line-clamp-2">
                   {isDropModeActive
                     ? 'Curated for speed: bigger savings, shorter windows.'
                     : 'Turn on Drop Mode for the fastest, best-value online drops.'}
@@ -7836,7 +7794,7 @@ export default function App() {
                 onClick={handleDropModeToggle}
                 aria-pressed={isDropModeActive}
                 aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                className="group relative inline-flex h-18 w-18 min-[360px]:h-[82px] min-[360px]:w-[82px] items-center justify-center bg-transparent p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0"
+                className="group relative inline-flex h-16 w-16 min-[360px]:h-[74px] min-[360px]:w-[74px] items-center justify-center rounded-[1.05rem] border border-indigo-200/80 bg-white/35 p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0"
               >
                 <div className="relative h-full w-full flex items-center justify-center">
                   <img
@@ -7864,7 +7822,7 @@ export default function App() {
         )}
 
         {isOnlineMode ? (
-          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-3.5 max-[359px]:px-3 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
+          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-2.5 max-[359px]:px-3 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
@@ -7878,10 +7836,10 @@ export default function App() {
             </span>
             <div className="relative z-10 min-w-0 pr-[4.4rem] min-[360px]:pr-20">
               <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
-              <h2 className="mt-2 text-[1.18rem] min-[360px]:text-[1.3rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
+              <h2 className="mt-1 text-[1.12rem] min-[360px]:text-[1.24rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
                 {onlineHeadline}
               </h2>
-              <p className="mt-1.5 max-w-[12.2rem] min-[360px]:max-w-[13.75rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.5] text-slate-500/95">
+              <p className="mt-1 max-w-[12.2rem] min-[360px]:max-w-[13.75rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
                 {onlineCategoryDescription}
               </p>
             </div>
