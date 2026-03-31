@@ -5,12 +5,16 @@ import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
 
 interface CreateDealFormProps {
-  onSubmit: (deal: Omit<Deal, 'id' | 'createdAt'>) => void;
+  onSubmit: (
+    deal: Omit<Deal, 'id' | 'createdAt'>,
+    options?: { mode: 'publish' | 'draft' }
+  ) => void | Promise<void>;
   onCancel: () => void;
   userLocation: UserLocation;
   hasPreciseUserLocation?: boolean;
   initialData?: Deal | null;
   onDraftChange?: (draft: Deal) => void;
+  onDirtyChange?: (dirty: boolean) => void;
   autofillRequest?: {
     id: number;
     payload: {
@@ -225,10 +229,22 @@ const getInitialFormData = (
   };
 };
 
-export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCancel, userLocation, hasPreciseUserLocation = false, initialData, onDraftChange, autofillRequest }) => {
+export const CreateDealForm: React.FC<CreateDealFormProps> = ({
+  onSubmit,
+  onCancel,
+  userLocation,
+  hasPreciseUserLocation = false,
+  initialData,
+  onDraftChange,
+  onDirtyChange,
+  autofillRequest,
+}) => {
   const savedDefaults = readBusinessDefaults();
   const [formData, setFormData] = useState(() => getInitialFormData(savedDefaults, initialData));
   const [submitError, setSubmitError] = useState<string>('');
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const safeLocalLocation = hasPreciseUserLocation ? userLocation : { lat: 0, lng: 0 };
 
   useEffect(() => {
@@ -429,83 +445,63 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
     safeLocalLocation.lng,
   ]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitError('');
+  const getDraftFingerprint = () =>
+    JSON.stringify({
+      businessMode: formData.businessMode,
+      businessName: normalizeTextValue(formData.businessName).trim(),
+      websiteUrl: normalizeTextValue(formData.websiteUrl).trim(),
+      productUrl: normalizeTextValue(formData.productUrl).trim(),
+      affiliateUrl: normalizeTextValue(formData.affiliateUrl).trim(),
+      title: normalizeTextValue(formData.title).trim(),
+      description: normalizeTextValue(formData.description).trim(),
+      category: normalizedCategory,
+      offerType: formData.offerType,
+      discountValue: normalizeTextValue(formData.discountValue).trim(),
+      customOfferText: normalizeTextValue(formData.customOfferText).trim(),
+      quantity: String(formData.quantity ?? ''),
+      currentClaims: String(formData.currentClaims ?? ''),
+      durationPreset: formData.durationPreset,
+      customDuration: normalizeTextValue(formData.customDuration).trim(),
+      radiusMiles: normalizeTextValue(formData.radiusMiles).trim(),
+      imageUrl: normalizeTextValue(formData.imageUrl).trim(),
+    });
 
-    if (
-      !normalizeTextValue(formData.businessName).trim() ||
-      !normalizeTextValue(formData.title).trim() ||
-      !normalizeTextValue(formData.description).trim()
-    ) {
-      setSubmitError('Please complete all required fields.');
-      return;
+  const [initialFingerprint, setInitialFingerprint] = useState(getDraftFingerprint());
+
+  useEffect(() => {
+    const nextFingerprint = getDraftFingerprint();
+    setInitialFingerprint(nextFingerprint);
+    setIsDirty(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialData]);
+
+  useEffect(() => {
+    const dirty = getDraftFingerprint() !== initialFingerprint;
+    setIsDirty(dirty);
+    onDirtyChange?.(dirty);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData, normalizedCategory, initialFingerprint, onDirtyChange]);
+
+  useEffect(() => {
+    if (!isDirty || typeof window === 'undefined') {
+      return undefined;
     }
 
-    if (!offerText) {
-      setSubmitError('Please enter a valid offer.');
-      return;
-    }
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = 'You have unsaved changes. Save before leaving?';
+    };
 
-    if (!normalizedCategory.trim()) {
-      setSubmitError('Please choose a category.');
-      return;
-    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
 
-    if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
-      setSubmitError('Discount value must be greater than 0.');
-      return;
-    }
-
-    if (formData.businessMode === 'online') {
-      if (!normalizedLinkState.websiteUrl || !normalizedLinkState.productUrl) {
-        setSubmitError('Website URL and source product URL are required for online drops.');
-        return;
-      }
-      if (!normalizeTextValue(formData.productUrl).trim() || !normalizedLinkState.productUrl) {
-        setSubmitError('Paste a valid full product page URL for online drops.');
-        return;
-      }
-      if (normalizeTextValue(formData.affiliateUrl).trim() && !normalizedLinkState.affiliateUrl) {
-        setSubmitError('Paste a valid affiliate / outbound URL or leave that field blank.');
-        return;
-      }
-      if (!normalizeTextValue(formData.imageUrl).trim()) {
-        setSubmitError('Please upload a product image for online drops.');
-        return;
-      }
-    }
-
-    if (formData.businessMode === 'local' && !hasPreciseUserLocation) {
-      setSubmitError('Enable location access before publishing a local drop so nearby users get the correct location.');
-      return;
-    }
-
-    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
-      setSubmitError('Please enter a valid duration.');
-      return;
-    }
-
-    if (!Number.isFinite(Number(formData.quantity)) || Number(formData.quantity) <= 0) {
-      setSubmitError('Quantity must be at least 1.');
-      return;
-    }
-
-    if (!Number.isFinite(Number(formData.currentClaims)) || Number(formData.currentClaims) < 0) {
-      setSubmitError('Current claims must be 0 or greater.');
-      return;
-    }
-
-    if (Number(formData.currentClaims) > Number(formData.quantity)) {
-      setSubmitError('Current claims cannot be greater than max claims.');
-      return;
-    }
-
+  const buildDealPayload = () => {
     const safeRadius = Number.isFinite(radiusMiles) && radiusMiles >= 0 ? radiusMiles : 0;
     const latOffset = safeRadius / 69;
     const isOnline = formData.businessMode === 'online';
 
-    onSubmit({
+    return {
       businessType: formData.businessMode,
       businessName: normalizeTextValue(formData.businessName).trim(),
       title: normalizeTextValue(formData.title).trim(),
@@ -519,19 +515,131 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
       distance: isOnline ? 'Online' : safeRadius > 0 ? `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi` : 'Nearby',
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
-      expiresAt: Date.now() + durationMinutes * 60 * 1000,
+      expiresAt: Date.now() + Math.max(durationMinutes, 1) * 60 * 1000,
       maxClaims: Number(formData.quantity),
       currentClaims: Number(formData.currentClaims),
       claimCount: Number(formData.currentClaims),
       category: normalizedCategory,
       logoUrl: undefined,
-    });
+    } as Omit<Deal, 'id' | 'createdAt'>;
+  };
 
+  const getPublishValidationError = () => {
+    if (
+      !normalizeTextValue(formData.businessName).trim() ||
+      !normalizeTextValue(formData.title).trim() ||
+      !normalizeTextValue(formData.description).trim()
+    ) {
+      return 'Please complete all required fields.';
+    }
+
+    if (!offerText) {
+      return 'Please enter a valid offer.';
+    }
+
+    if (!normalizedCategory.trim()) {
+      return 'Please choose a category.';
+    }
+
+    if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
+      return 'Discount value must be greater than 0.';
+    }
+
+    if (formData.businessMode === 'online') {
+      if (!normalizedLinkState.websiteUrl || !normalizedLinkState.productUrl) {
+        return 'Website URL and source product URL are required for online drops.';
+      }
+      if (!normalizeTextValue(formData.productUrl).trim() || !normalizedLinkState.productUrl) {
+        return 'Paste a valid full product page URL for online drops.';
+      }
+      if (normalizeTextValue(formData.affiliateUrl).trim() && !normalizedLinkState.affiliateUrl) {
+        return 'Paste a valid affiliate / outbound URL or leave that field blank.';
+      }
+      if (!normalizeTextValue(formData.imageUrl).trim()) {
+        return 'Please upload a product image for online drops.';
+      }
+    }
+
+    if (formData.businessMode === 'local' && !hasPreciseUserLocation) {
+      return 'Enable location access before publishing a local drop so nearby users get the correct location.';
+    }
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+      return 'Please enter a valid duration.';
+    }
+
+    if (!Number.isFinite(Number(formData.quantity)) || Number(formData.quantity) <= 0) {
+      return 'Quantity must be at least 1.';
+    }
+
+    if (!Number.isFinite(Number(formData.currentClaims)) || Number(formData.currentClaims) < 0) {
+      return 'Current claims must be 0 or greater.';
+    }
+
+    if (Number(formData.currentClaims) > Number(formData.quantity)) {
+      return 'Current claims cannot be greater than max claims.';
+    }
+
+    return '';
+  };
+
+  const finalizeSavedDefaults = () => {
     localStorage.setItem(BUSINESS_DEFAULTS_KEY, JSON.stringify({
       businessName: normalizeTextValue(formData.businessName).trim(),
       category: normalizedCategory,
       businessMode: formData.businessMode,
     }));
+    const nextFingerprint = getDraftFingerprint();
+    setInitialFingerprint(nextFingerprint);
+    setIsDirty(false);
+  };
+
+  const handlePublish = async () => {
+    setSubmitError('');
+    const validationError = getPublishValidationError();
+    if (validationError) {
+      setSubmitError(validationError);
+      return;
+    }
+
+    setIsPublishing(true);
+    try {
+      await onSubmit(buildDealPayload(), { mode: 'publish' });
+      finalizeSavedDefaults();
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    setSubmitError('');
+    setIsSavingDraft(true);
+    try {
+      await onSubmit(buildDealPayload(), { mode: 'draft' });
+      finalizeSavedDefaults();
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!isDirty) {
+      onCancel();
+      return;
+    }
+
+    const shouldSave = window.confirm('You have unsaved changes. Save before leaving?');
+    if (shouldSave) {
+      await handleSaveDraft();
+      return;
+    }
+
+    onCancel();
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    void handlePublish();
   };
 
   return (
@@ -543,7 +651,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
             {initialData ? 'Review imported details before publishing' : 'Post in under 30 seconds'}
           </p>
         </div>
-        <button type="button" onClick={onCancel} className="text-zinc-500 text-sm font-bold uppercase">Cancel</button>
+        <span className="text-zinc-400 text-xs font-bold uppercase tracking-[0.14em]">Editor</span>
       </div>
 
       {initialData ? (
@@ -972,13 +1080,33 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({ onSubmit, onCanc
         <p className="text-sm font-semibold text-rose-500">{submitError}</p>
       ) : null}
 
-      <button
-        type="submit"
-        className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black text-xl hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2"
-      >
-        <AppIcon name="plus" size={24} />
-        Drop Deal
-      </button>
+      <div className="sticky bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-20 rounded-[1.5rem] border border-slate-200 bg-white/95 p-2 shadow-xl shadow-slate-200/70 backdrop-blur">
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSaveDraft()}
+            disabled={isSavingDraft || isPublishing}
+            className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSavingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            type="submit"
+            disabled={isSavingDraft || isPublishing}
+            className="inline-flex h-12 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isPublishing ? 'Publishing…' : 'Publish Deal'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleCancel()}
+            disabled={isSavingDraft || isPublishing}
+            className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </form>
   );
 };

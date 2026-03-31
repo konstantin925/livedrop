@@ -3354,6 +3354,7 @@ export default function App() {
   });
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
+  const [hasUnsavedFormChanges, setHasUnsavedFormChanges] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
@@ -5918,8 +5919,14 @@ export default function App() {
     return newClaim;
   };
 
-  const handleCreateDeal = async (dealData: Omit<Deal, 'id' | 'createdAt'>) => {
-    if (dealData.businessType !== 'online' && !hasUsableCoordinates(dealData.lat, dealData.lng)) {
+  const handleCreateDeal = async (
+    dealData: Omit<Deal, 'id' | 'createdAt'>,
+    options?: { mode?: 'publish' | 'draft' },
+  ) => {
+    const mode = options?.mode ?? 'publish';
+    const shouldPublish = mode === 'publish';
+
+    if (shouldPublish && dealData.businessType !== 'online' && !hasUsableCoordinates(dealData.lat, dealData.lng)) {
       const locationError = 'Enable location access before publishing a local drop so LiveDrop can save a real nearby location.';
       console.warn('[LiveDrop] Blocked local publish without usable coordinates', {
         lat: dealData.lat,
@@ -5940,7 +5947,7 @@ export default function App() {
       createdAt: existingDraft?.createdAt ?? Date.now(),
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
-      status: 'active',
+      status: shouldPublish ? 'active' : 'draft',
       featured: dealData.featured ?? existingDraft?.featured ?? false,
       adminTag: dealData.adminTag ?? existingDraft?.adminTag ?? null,
     };
@@ -5964,7 +5971,7 @@ export default function App() {
         pushAdminLog('error', `Using local fallback after shared ${sharedWriteMode} failure`, formatAdminLogDetail(failure));
         setDealsError(`Could not ${sharedWriteMode} to ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Showing your local copy for now.`);
       }
-    } else {
+    } else if (shouldPublish) {
       setLastSharedPublishFailure(null);
       setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
     }
@@ -5988,19 +5995,23 @@ export default function App() {
     setPortalAutofillRequest(null);
     setPendingPortalAutofill(null);
     setEditingDealId(null);
+    setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
-    if (publishedDeal.businessType !== 'online') {
+    if (shouldPublish && publishedDeal.businessType !== 'online') {
       setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, publishedDeal)));
       setDropMode('local');
-    } else {
+    } else if (shouldPublish) {
       setDropMode('online');
     }
-    setSelectedCategory('All');
-    setSelectedFeedFilter('all');
-    setPortalSuccessMessage(sharedWriteSucceeded ? 'Your deal is live' : '');
+    if (shouldPublish) {
+      setSelectedCategory('All');
+      setSelectedFeedFilter('all');
+    }
+    setPortalSuccessMessage(shouldPublish ? 'Deal published' : 'Deal saved');
+    pushToast(shouldPublish ? 'Deal published' : 'Deal saved', shouldPublish ? 'new_deal' : 'share');
     setIsCreating(false);
-    if (!isAdminRoute) {
+    if (!isAdminRoute && shouldPublish) {
       setCurrentView('live-deals');
     }
   };
@@ -6057,9 +6068,22 @@ export default function App() {
     });
     setPendingPortalAutofill(null);
     setEditingDealId(null);
+    setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
     setIsCreating(true);
+  };
+
+  const closeCreateEditor = () => {
+    setIsCreating(false);
+    setDealDraft(null);
+    setPortalFieldSnapshot(null);
+    setPortalAutofillRequest(null);
+    setPendingPortalAutofill(null);
+    setEditingDealId(null);
+    setHasUnsavedFormChanges(false);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
   };
 
   const createReusedDealPayload = (
@@ -6114,6 +6138,7 @@ export default function App() {
     const nextDraft = createReusedDealPayload(deal, { durationMinutes: 30 });
     setPortalSuccessMessage('');
     setEditingDealId(null);
+    setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
     setDealDraft(nextDraft);
@@ -6284,9 +6309,37 @@ export default function App() {
     setDealDraft(deal);
     setPortalFieldSnapshot(deal);
     setEditingDealId(deal.id);
+    setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
     setIsCreating(true);
+  };
+
+  const runWithUnsavedCreateGuard = async (onContinue: () => void | Promise<void>) => {
+    if (!isCreating || !hasUnsavedFormChanges) {
+      await onContinue();
+      return;
+    }
+
+    const shouldSaveFirst = window.confirm('You have unsaved changes. Save before leaving?');
+    if (shouldSaveFirst && portalFieldSnapshot) {
+      const { id: _id, createdAt: _createdAt, ...draftPayload } = portalFieldSnapshot;
+      await handleCreateDeal(draftPayload, { mode: 'draft' });
+    }
+
+    await onContinue();
+  };
+
+  const handleBackFromAdminEditor = async () => {
+    await runWithUnsavedCreateGuard(async () => {
+      if (isAdminRoute) {
+        closeCreateEditor();
+        return;
+      }
+
+      navigateToPath('/admin');
+      closeCreateEditor();
+    });
   };
 
   const refreshSharedDeals = async () => {
@@ -6833,8 +6886,8 @@ export default function App() {
     const now = Date.now();
     const isOnlineMode = dropMode === 'online';
     const isDropModeActive = isOnlineMode && dropModeEnabled;
-    const localDeals = deals.filter((deal) => deal.businessType !== 'online');
-    const onlineDeals = deals.filter((deal) => deal.businessType === 'online');
+    const localDeals = deals.filter((deal) => deal.businessType !== 'online' && (deal.status ?? 'active') === 'active');
+    const onlineDeals = deals.filter((deal) => deal.businessType === 'online' && (deal.status ?? 'active') === 'active');
     const onlineDealsWithSubcategory = onlineDeals.map((deal) => ({
       ...deal,
       onlineSubcategory: getOnlineDealSubcategory(deal),
@@ -10615,20 +10668,19 @@ export default function App() {
         return (
           <div className="space-y-4">
             {renderImportedDraftSwitcher()}
+            {hasUnsavedFormChanges ? (
+              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                Unsaved changes
+              </p>
+            ) : null}
             <CreateDealForm
               onSubmit={handleCreateDeal}
-              onCancel={() => {
-                setIsCreating(false);
-                setDealDraft(null);
-                setPortalFieldSnapshot(null);
-                setPortalAutofillRequest(null);
-                setBulkImportCandidates([]);
-                setSelectedBulkImportIndex(0);
-              }}
+              onCancel={closeCreateEditor}
               userLocation={userLocation}
               hasPreciseUserLocation={hasPreciseUserLocation}
               initialData={dealDraft}
               onDraftChange={setPortalFieldSnapshot}
+              onDirtyChange={setHasUnsavedFormChanges}
               autofillRequest={portalAutofillRequest}
             />
           </div>
@@ -10771,20 +10823,19 @@ export default function App() {
       return (
         <div className="space-y-4">
           {renderImportedDraftSwitcher()}
+          {hasUnsavedFormChanges ? (
+            <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+              Unsaved changes
+            </p>
+          ) : null}
           <CreateDealForm 
             onSubmit={handleCreateDeal} 
-            onCancel={() => {
-              setIsCreating(false);
-              setDealDraft(null);
-              setPortalFieldSnapshot(null);
-              setPortalAutofillRequest(null);
-              setBulkImportCandidates([]);
-              setSelectedBulkImportIndex(0);
-            }}
+            onCancel={closeCreateEditor}
             userLocation={userLocation}
             hasPreciseUserLocation={hasPreciseUserLocation}
             initialData={dealDraft}
             onDraftChange={setPortalFieldSnapshot}
+            onDirtyChange={setHasUnsavedFormChanges}
             autofillRequest={portalAutofillRequest}
           />
         </div>
@@ -10998,13 +11049,22 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={handleReturnToPublicApp}
+                  onClick={() => void handleBackFromAdminEditor()}
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  <AppIcon name="play" size={12} className="rotate-180" />
+                  Back
+                </button>
+                <button
+                  onClick={() => void runWithUnsavedCreateGuard(() => {
+                    handleReturnToPublicApp();
+                  })}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Public App
                 </button>
                 <button
-                  onClick={handleAdminLogout}
+                  onClick={() => void runWithUnsavedCreateGuard(() => handleAdminLogout())}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:text-rose-500"
                 >
                   Logout
@@ -11012,21 +11072,19 @@ export default function App() {
               </div>
             </div>
             {renderImportedDraftSwitcher()}
+            {hasUnsavedFormChanges ? (
+              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                Unsaved changes
+              </p>
+            ) : null}
             <CreateDealForm
               onSubmit={handleCreateDeal}
-              onCancel={() => {
-                setIsCreating(false);
-                setDealDraft(null);
-                setPortalFieldSnapshot(null);
-                setPortalAutofillRequest(null);
-                setEditingDealId(null);
-                setBulkImportCandidates([]);
-                setSelectedBulkImportIndex(0);
-              }}
+              onCancel={closeCreateEditor}
               userLocation={userLocation}
               hasPreciseUserLocation={hasPreciseUserLocation}
               initialData={dealDraft}
               onDraftChange={setPortalFieldSnapshot}
+              onDirtyChange={setHasUnsavedFormChanges}
               autofillRequest={portalAutofillRequest}
             />
           </div>

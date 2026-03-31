@@ -1,4 +1,5 @@
 import { Deal, UserLocation } from '../types';
+import predatorBifrostImage from '../assets/predator-bifrost-arc-a770.png';
 
 /**
  * Generates a set of realistic demo deals around a center location.
@@ -824,6 +825,32 @@ export function generateSeededOnlineDeals(): Deal[] {
       currentClaims: 67,
       claimCount: 67,
       category: 'Fashion',
+    },
+    {
+      id: 'online-seed-acer-bifrost-a770',
+      businessType: 'online',
+      businessName: 'Acer Online Store',
+      title: 'Predator BiFrost Intel Arc A770 OC Graphics Card',
+      description: 'Intel Arc A770 OC graphics card with 2.40 GHz boost, AI-enhanced XeSS upscaling, 16 GB GDDR6 memory, PCIe 4.0 host interface, HDMI, and DisplayPort.',
+      offerText: '$399.99',
+      currentPrice: 399.99,
+      imageUrl: predatorBifrostImage,
+      affiliateUrl: 'https://store.acer.com/en-us/predator-bifrost-intel-arc-a770-oc-graphics-card?f=19&fp=3984',
+      websiteUrl: 'https://store.acer.com',
+      productUrl: 'https://store.acer.com/en-us/predator-bifrost-intel-arc-a770-oc-graphics-card?f=19&fp=3984',
+      hasTimer: true,
+      distance: 'Online',
+      lat: 0,
+      lng: 0,
+      createdAt: now - 4 * 60 * 1000,
+      expiresAt: now + 3 * 60 * 60 * 1000,
+      maxClaims: 999,
+      currentClaims: 14,
+      claimCount: 14,
+      category: 'Tech',
+      brand: 'Acer',
+      availability: 'In Stock',
+      stockStatus: 'in-stock',
     },
   ];
 }
