@@ -782,8 +782,80 @@ const isExcludedOnlineDeal = (deal: Deal) => {
 const isManagedLocalSeedDeal = (deal: Deal) =>
   deal.businessType !== 'online' && deal.id.startsWith('seed-');
 
+const MOCK_ONLINE_SOURCE_ID_PATTERN = /^mock-online-\d+-\d+-\d+-(.+)$/;
+
+const extractMockOnlineSourceId = (dealId: string) => {
+  const match = dealId.match(MOCK_ONLINE_SOURCE_ID_PATTERN);
+  return match?.[1] ?? null;
+};
+
+const normalizeDealUrlForMatch = (value?: string | null) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return '';
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    return `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/+$/, '').toLowerCase()}`;
+  } catch {
+    return '';
+  }
+};
+
+const normalizeDealIdentityText = (value?: string | null) =>
+  (value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+const isLikelySameOnlineDeal = (left: Deal, right: Deal) => {
+  const leftSourceId = extractMockOnlineSourceId(left.id);
+  const rightSourceId = extractMockOnlineSourceId(right.id);
+  const leftCanonicalId = leftSourceId ?? left.id;
+  const rightCanonicalId = rightSourceId ?? right.id;
+  if (leftCanonicalId === rightCanonicalId) return true;
+
+  const leftProductUrl = normalizeDealUrlForMatch(left.productUrl);
+  const rightProductUrl = normalizeDealUrlForMatch(right.productUrl);
+  if (leftProductUrl && rightProductUrl && leftProductUrl === rightProductUrl) return true;
+
+  const leftAffiliateUrl = normalizeDealUrlForMatch(left.affiliateUrl);
+  const rightAffiliateUrl = normalizeDealUrlForMatch(right.affiliateUrl);
+  if (leftAffiliateUrl && rightAffiliateUrl && leftAffiliateUrl === rightAffiliateUrl) return true;
+
+  const leftKey = `${normalizeDealIdentityText(left.businessName)}::${normalizeDealIdentityText(left.title)}`;
+  const rightKey = `${normalizeDealIdentityText(right.businessName)}::${normalizeDealIdentityText(right.title)}`;
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+};
+
+const hydrateSeededOnlineDealsWithOverrides = (existingDeals: Deal[]) => {
+  const baseSeedDeals = generateSeededOnlineDeals();
+  const overrideCandidates = existingDeals.filter(
+    (deal) => deal.businessType === 'online' && !deal.id.startsWith('mock-online-'),
+  );
+
+  return baseSeedDeals.map((seedDeal) => {
+    const override = overrideCandidates.find((candidate) => isLikelySameOnlineDeal(candidate, seedDeal));
+    if (!override) return seedDeal;
+
+    return {
+      ...seedDeal,
+      ...override,
+      id: seedDeal.id,
+      businessType: 'online' as const,
+      createdAt: seedDeal.createdAt,
+      expiresAt: seedDeal.expiresAt,
+      currentClaims: seedDeal.currentClaims,
+      claimCount: seedDeal.claimCount,
+      maxClaims: seedDeal.maxClaims,
+      status: seedDeal.status,
+      hasTimer: seedDeal.hasTimer,
+    };
+  });
+};
+
 const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
-  const synced = mergeDealsWithMockOnlinePipeline(existingDeals, generateSeededOnlineDeals()).deals;
+  const seededOnlineDeals = hydrateSeededOnlineDealsWithOverrides(existingDeals);
+  const synced = mergeDealsWithMockOnlinePipeline(existingDeals, seededOnlineDeals).deals;
   return synced.filter((deal) => !isExcludedOnlineDeal(deal));
 };
 
@@ -2036,6 +2108,26 @@ const normalizeUuidOrNull = (value?: string | null) => {
   return trimmed && UUID_PATTERN.test(trimmed) ? trimmed : null;
 };
 
+const hashString32 = (value: string, seed: number) => {
+  let hash = seed >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const createStableUuidFromString = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  const hash1 = hashString32(normalized, 0x811c9dc5).toString(16).padStart(8, '0');
+  const hash2 = hashString32(normalized, 0x9e3779b1).toString(16).padStart(8, '0');
+  const hash3 = hashString32(normalized, 0x85ebca77).toString(16).padStart(8, '0');
+  const hash4 = hashString32(normalized, 0xc2b2ae3d).toString(16).padStart(8, '0');
+  const variant = ((parseInt(hash3.slice(0, 4), 16) & 0x3fff) | 0x8000).toString(16).padStart(4, '0');
+
+  return `${hash1}-${hash2.slice(0, 4)}-4${hash2.slice(1, 4)}-${variant}-${hash3.slice(4, 8)}${hash4}`.toLowerCase();
+};
+
 const canonicalizeSourceProductUrl = (value?: string | null) => {
   const trimmed = value?.trim() ?? '';
   if (!trimmed) return '';
@@ -2120,7 +2212,15 @@ const createUuid = () => {
   });
 };
 
-const ensureUuid = (value?: string | null) => normalizeUuidOrNull(value) ?? createUuid();
+const ensureUuid = (value?: string | null) => {
+  const normalized = normalizeUuidOrNull(value);
+  if (normalized) return normalized;
+
+  const trimmed = value?.trim();
+  if (trimmed) return createStableUuidFromString(trimmed);
+
+  return createUuid();
+};
 
 const parseDealTimestampOrFallback = (value: string | null | undefined, fallback: number) => {
   const parsed = value ? new Date(value).getTime() : Number.NaN;
@@ -4274,7 +4374,7 @@ export default function App() {
 
     const { data, error } = await getDealsTableClient()
       .update(payload)
-      .eq('id', deal.id)
+      .eq('id', ensureUuid(deal.id))
       .select()
       .single();
 
@@ -4388,10 +4488,10 @@ export default function App() {
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
-  const deleteDealFromBackend = async (dealId: string) => {
-    const { error } = await getDealsTableClient()
-      .delete()
-      .eq('id', dealId);
+const deleteDealFromBackend = async (dealId: string) => {
+  const { error } = await getDealsTableClient()
+    .delete()
+    .eq('id', ensureUuid(dealId));
 
     if (error) {
       console.error('[LiveDrop] Supabase deal delete failed', {
@@ -6020,26 +6120,34 @@ export default function App() {
     }
 
     const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
-    const normalizedEditingDealId = normalizeUuidOrNull(editingDealId);
+    const isEditingExistingDeal = Boolean(editingDealId && existingDraft);
+    const persistedEditingDealId = editingDealId ? ensureUuid(editingDealId) : null;
+    const now = Date.now();
+    const relaunchedCreatedAt = isEditingExistingDeal ? now : existingDraft?.createdAt ?? now;
+    const nextStatus: Deal['status'] = isEditingExistingDeal
+      ? 'active'
+      : shouldPublish
+        ? 'active'
+        : 'draft';
     const localDeal: Deal = {
       ...dealData,
-      id: normalizedEditingDealId ?? createUuid(),
-      createdAt: existingDraft?.createdAt ?? Date.now(),
+      id: persistedEditingDealId ?? createUuid(),
+      createdAt: relaunchedCreatedAt,
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
-      status: shouldPublish ? 'active' : 'draft',
+      status: nextStatus,
       featured: dealData.featured ?? existingDraft?.featured ?? false,
       adminTag: dealData.adminTag ?? existingDraft?.adminTag ?? null,
     };
 
     let publishedDeal = localDeal;
     let sharedWriteSucceeded = false;
-    const sharedWriteMode: SharedPublishFailure['mode'] = normalizedEditingDealId ? 'update' : 'insert';
+    const sharedWriteMode: SharedPublishFailure['mode'] = editingDealId ? 'update' : 'insert';
 
     if (supabase && hasSupabaseConfig) {
       try {
-        publishedDeal = normalizedEditingDealId
-          ? await updateDealInBackend(localDeal)
+        publishedDeal = editingDealId
+          ? await upsertDealInBackend(localDeal)
           : await publishDealToBackend(localDeal);
         sharedWriteSucceeded = true;
         setLastSharedPublishFailure(null);
@@ -6056,14 +6164,22 @@ export default function App() {
       setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
     }
 
-    setDeals(prev => [
-      publishedDeal,
-      ...prev.filter((deal) =>
-        deal.id !== publishedDeal.id &&
-        deal.id !== localDeal.id &&
-        deal.id !== editingDealId,
-      ),
-    ]);
+    setDeals((prev) => {
+      const mergedDeals = [
+        publishedDeal,
+        ...prev.filter((deal) =>
+          deal.id !== publishedDeal.id &&
+          deal.id !== localDeal.id &&
+          deal.id !== editingDealId,
+        ),
+      ];
+
+      if (publishedDeal.businessType === 'online') {
+        return syncSharedOnlineDeals(mergedDeals);
+      }
+
+      return mergedDeals;
+    });
     setDealDraft(null);
     setPortalFieldSnapshot(null);
     setPortalAutofillStatus({
@@ -6078,20 +6194,26 @@ export default function App() {
     setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
-    if (shouldPublish && publishedDeal.businessType !== 'online') {
+    if ((shouldPublish || isEditingExistingDeal) && publishedDeal.businessType !== 'online') {
       setRadius(prev => Math.max(prev, getRadiusForDeal(userLocation, publishedDeal)));
       setDropMode('local');
-    } else if (shouldPublish) {
+    } else if (shouldPublish || isEditingExistingDeal) {
       setDropMode('online');
     }
-    if (shouldPublish) {
+    if (shouldPublish || isEditingExistingDeal) {
       setSelectedCategory('All');
       setSelectedFeedFilter('all');
     }
-    setPortalSuccessMessage(shouldPublish ? 'Deal published' : 'Deal saved');
-    pushToast(shouldPublish ? 'Deal published' : 'Deal saved', shouldPublish ? 'new_deal' : 'share');
+    const didRelaunchEdit = isEditingExistingDeal && !shouldPublish;
+    const successMessage = shouldPublish
+      ? 'Deal published'
+      : didRelaunchEdit
+        ? 'Deal updated and relaunched'
+        : 'Deal saved';
+    setPortalSuccessMessage(successMessage);
+    pushToast(successMessage, shouldPublish || didRelaunchEdit ? 'new_deal' : 'share');
     setIsCreating(false);
-    if (!isAdminRoute && shouldPublish) {
+    if (!isAdminRoute && (shouldPublish || isEditingExistingDeal)) {
       setCurrentView('live-deals');
     }
   };
@@ -6384,11 +6506,33 @@ export default function App() {
     setDeals(prev => prev.filter(d => d.id !== dealId));
   };
 
+  const resolveEditableDealFromCard = (inputDeal: Deal): Deal => {
+    if (inputDeal.businessType !== 'online') {
+      return inputDeal;
+    }
+
+    const sourceId = extractMockOnlineSourceId(inputDeal.id);
+    const nonMockOnlineDeals = deals
+      .filter((deal) => deal.businessType === 'online' && !deal.id.startsWith('mock-online-'))
+      .sort((left, right) => right.createdAt - left.createdAt);
+
+    if (sourceId) {
+      const sourceMatch = nonMockOnlineDeals.find((deal) => deal.id === sourceId);
+      if (sourceMatch) {
+        return sourceMatch;
+      }
+    }
+
+    const likelyMatch = nonMockOnlineDeals.find((deal) => isLikelySameOnlineDeal(deal, inputDeal));
+    return likelyMatch ?? inputDeal;
+  };
+
   const handleEditDeal = (deal: Deal) => {
+    const latestDeal = resolveEditableDealFromCard(deal);
     setPortalSuccessMessage('');
-    setDealDraft(deal);
-    setPortalFieldSnapshot(deal);
-    setEditingDealId(deal.id);
+    setDealDraft(latestDeal);
+    setPortalFieldSnapshot(latestDeal);
+    setEditingDealId(latestDeal.id);
     setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
