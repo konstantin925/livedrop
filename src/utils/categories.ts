@@ -60,6 +60,7 @@ const ONLINE_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
     'Loungewear',
     'Bags',
     'Wallets',
+    'Wigs',
   ],
   Gaming: [
     'Consoles',
@@ -152,6 +153,9 @@ const CATEGORY_ALIASES: Record<string, string> = {
   clothes: 'Fashion',
   shoes: 'Fashion',
   sneakers: 'Fashion',
+  wig: 'Fashion',
+  wigs: 'Fashion',
+  weave: 'Fashion',
   beauty: 'Fashion',
   skincare: 'Fashion',
   makeup: 'Fashion',
@@ -178,7 +182,7 @@ const CATEGORY_ALIASES: Record<string, string> = {
 
 const ONLINE_CATEGORY_KEYWORDS: Record<string, string[]> = {
   Tech: ['laptop', 'monitor', 'headphone', 'charger', 'desk lamp', 'phone', 'camera', 'router', 'usb', 'bluetooth', 'keyboard', 'mouse'],
-  Fashion: ['shirt', 'hoodie', 'shoe', 'dress', 'sneaker', 'bag', 'jacket', 'serum', 'skincare', 'makeup', 'watch'],
+  Fashion: ['shirt', 'hoodie', 'shoe', 'dress', 'sneaker', 'bag', 'jacket', 'serum', 'skincare', 'makeup', 'watch', 'wig', 'wigs', 'weave', 'lace front'],
   Gaming: ['gaming', 'xbox', 'playstation', 'steam', 'controller', 'nintendo', 'pc game', 'gaming mouse', 'gpu'],
   Digital: ['template', 'download', 'notion', 'canva', 'prompt', 'software', 'saas', 'digital', 'bundle', 'ebook', 'course'],
   Home: ['table', 'chair', 'lamp', 'kitchen', 'bedding', 'pantry', 'console table', 'nightstand', 'sofa', 'storage'],

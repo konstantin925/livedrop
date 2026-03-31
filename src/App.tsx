@@ -362,6 +362,7 @@ const ONLINE_FASHION_SUBCATEGORY_OPTIONS = [
   'Loungewear',
   'Bags',
   'Wallets',
+  'Wigs',
 ] as const;
 
 const ONLINE_FASHION_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -380,6 +381,7 @@ const ONLINE_FASHION_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Loungewear: ['lounge', 'loungewear', 'pajama', 'pj', 'sweatpant'],
   Bags: ['bag', 'tote', 'backpack', 'handbag', 'crossbody'],
   Wallets: ['wallet', 'card holder'],
+  Wigs: ['wig', 'wigs', 'lace front', 'human hair wig', 'synthetic wig', 'wig cap', 'wig glue'],
 };
 
 const LOCAL_SUBCATEGORY_KEYWORDS: Record<string, Record<string, string[]>> = {
@@ -653,7 +655,9 @@ const readStoredDeals = (): Deal[] => {
     const raw = localStorage.getItem(DEALS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? sanitizeDealsCollection(parsed as Array<Partial<Deal> | null | undefined>)
+      : [];
   } catch {
     return [];
   }
@@ -705,6 +709,26 @@ const readStoredRole = (): UserRole => {
     return LOCAL_ADMIN_MODE ? 'business' : 'customer';
   } catch {
     return LOCAL_ADMIN_MODE ? 'business' : 'customer';
+  }
+};
+
+const safeSetLocalStorageItem = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    console.warn('[LiveDrop] localStorage write failed', { key, error });
+    return false;
+  }
+};
+
+const safeRemoveLocalStorageItem = (key: string) => {
+  try {
+    localStorage.removeItem(key);
+    return true;
+  } catch (error) {
+    console.warn('[LiveDrop] localStorage remove failed', { key, error });
+    return false;
   }
 };
 
@@ -780,17 +804,21 @@ const isExcludedOnlineDeal = (deal: Deal) => {
 };
 
 const isManagedLocalSeedDeal = (deal: Deal) =>
-  deal.businessType !== 'online' && deal.id.startsWith('seed-');
+  deal.businessType !== 'online' && typeof deal.id === 'string' && deal.id.startsWith('seed-');
 
 const MOCK_ONLINE_SOURCE_ID_PATTERN = /^mock-online-\d+-\d+-\d+-(.+)$/;
 
-const extractMockOnlineSourceId = (dealId: string) => {
+const extractMockOnlineSourceId = (dealId: unknown) => {
+  if (typeof dealId !== 'string') {
+    return null;
+  }
+
   const match = dealId.match(MOCK_ONLINE_SOURCE_ID_PATTERN);
   return match?.[1] ?? null;
 };
 
-const normalizeDealUrlForMatch = (value?: string | null) => {
-  const trimmed = value?.trim();
+const normalizeDealUrlForMatch = (value?: unknown) => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!trimmed) return '';
 
   try {
@@ -804,15 +832,15 @@ const normalizeDealUrlForMatch = (value?: string | null) => {
   }
 };
 
-const normalizeDealIdentityText = (value?: string | null) =>
-  (value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+const normalizeDealIdentityText = (value?: unknown) =>
+  (typeof value === 'string' ? value : '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 const isLikelySameOnlineDeal = (left: Deal, right: Deal) => {
   const leftSourceId = extractMockOnlineSourceId(left.id);
   const rightSourceId = extractMockOnlineSourceId(right.id);
-  const leftCanonicalId = leftSourceId ?? left.id;
-  const rightCanonicalId = rightSourceId ?? right.id;
-  if (leftCanonicalId === rightCanonicalId) return true;
+  const leftCanonicalId = leftSourceId ?? (typeof left.id === 'string' ? left.id : '');
+  const rightCanonicalId = rightSourceId ?? (typeof right.id === 'string' ? right.id : '');
+  if (leftCanonicalId && rightCanonicalId && leftCanonicalId === rightCanonicalId) return true;
 
   const leftProductUrl = normalizeDealUrlForMatch(left.productUrl);
   const rightProductUrl = normalizeDealUrlForMatch(right.productUrl);
@@ -830,7 +858,7 @@ const isLikelySameOnlineDeal = (left: Deal, right: Deal) => {
 const hydrateSeededOnlineDealsWithOverrides = (existingDeals: Deal[]) => {
   const baseSeedDeals = generateSeededOnlineDeals();
   const overrideCandidates = existingDeals.filter(
-    (deal) => deal.businessType === 'online' && !deal.id.startsWith('mock-online-'),
+    (deal) => deal.businessType === 'online' && typeof deal.id === 'string' && !deal.id.startsWith('mock-online-'),
   );
 
   return baseSeedDeals.map((seedDeal) => {
@@ -854,8 +882,15 @@ const hydrateSeededOnlineDealsWithOverrides = (existingDeals: Deal[]) => {
 };
 
 const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
-  const seededOnlineDeals = hydrateSeededOnlineDealsWithOverrides(existingDeals);
-  const synced = mergeDealsWithMockOnlinePipeline(existingDeals, seededOnlineDeals).deals;
+  const safeExistingDeals = existingDeals.filter(
+    (deal): deal is Deal =>
+      Boolean(deal)
+      && typeof deal === 'object'
+      && typeof (deal as Deal).id === 'string'
+      && typeof (deal as Deal).businessType === 'string',
+  );
+  const seededOnlineDeals = hydrateSeededOnlineDealsWithOverrides(safeExistingDeals);
+  const synced = mergeDealsWithMockOnlinePipeline(safeExistingDeals, seededOnlineDeals).deals;
   return synced.filter((deal) => !isExcludedOnlineDeal(deal));
 };
 
@@ -1335,7 +1370,7 @@ const PORTAL_FIELD_FALLBACK_SOURCES: Record<keyof PortalAutofillPayload, string[
 const ONLINE_CATEGORY_SUBCATEGORY_HINTS: Record<string, readonly string[]> = {
   Tech: ['Phones', 'Laptops', 'Tablets', 'Smartwatches', 'Headphones', 'Earbuds', 'Speakers', 'Gaming', 'PC Accessories', 'Keyboards', 'Mice', 'Monitors', 'TVs', 'Cameras', 'Drones'],
   Home: ['Furniture', 'Home Decor', 'Kitchen', 'Bedding', 'Bath', 'Storage', 'Cleaning', 'Appliances', 'Smart Home', 'Lighting', 'Outdoor', 'Patio'],
-  Fashion: ['Men Clothing', 'Women Clothing', 'Shoes', 'Sneakers', 'Boots', 'Sandals', 'Jackets', 'Hoodies', 'T-Shirts', 'Jeans', 'Dresses', 'Activewear', 'Loungewear', 'Bags', 'Wallets'],
+  Fashion: ['Men Clothing', 'Women Clothing', 'Shoes', 'Sneakers', 'Boots', 'Sandals', 'Jackets', 'Hoodies', 'T-Shirts', 'Jeans', 'Dresses', 'Activewear', 'Loungewear', 'Bags', 'Wallets', 'Wigs'],
 };
 
 const ONLINE_SUBCATEGORY_KEYWORDS: Record<string, readonly string[]> = {
@@ -1381,6 +1416,7 @@ const ONLINE_SUBCATEGORY_KEYWORDS: Record<string, readonly string[]> = {
   Loungewear: ['loungewear', 'pajama', 'sleepwear'],
   Bags: ['bag', 'backpack', 'tote'],
   Wallets: ['wallet'],
+  Wigs: ['wig', 'wigs', 'lace front', 'human hair wig', 'synthetic wig', 'weave'],
 };
 
 const buildPortalAutofillPayload = (
@@ -3439,6 +3475,7 @@ export default function App() {
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
+  const [liveClockNow, setLiveClockNow] = useState(() => Date.now());
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
   const [cityName, setCityName] = useState<string>('');
   const [showDebug, setShowDebug] = useState(false);
@@ -3448,9 +3485,9 @@ export default function App() {
   const [dealEngagementPending, setDealEngagementPending] = useState<Record<string, DealEngagementAction | null>>({});
   const [viewedDealIds, setViewedDealIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set();
-    const stored = window.localStorage.getItem('livedrop_viewed_deals');
-    if (!stored) return new Set();
     try {
+      const stored = window.localStorage.getItem('livedrop_viewed_deals');
+      if (!stored) return new Set();
       return new Set(JSON.parse(stored));
     } catch {
       return new Set();
@@ -3520,8 +3557,12 @@ export default function App() {
   const [showAdvancedBackendLogs, setShowAdvancedBackendLogs] = useState(false);
   const [adminDealsView, setAdminDealsView] = useState<'local' | 'online'>(() => {
     if (typeof window === 'undefined') return 'local';
-    const stored = window.localStorage.getItem('livedrop_admin_deals_view');
-    return stored === 'online' ? 'online' : 'local';
+    try {
+      const stored = window.localStorage.getItem('livedrop_admin_deals_view');
+      return stored === 'online' ? 'online' : 'local';
+    } catch {
+      return 'local';
+    }
   });
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
@@ -3598,13 +3639,13 @@ export default function App() {
   });
 
   const applyDealsState = (nextDeals: Deal[]) => {
-    setDeals(nextDeals);
+    setDeals(sanitizeDealsCollection(nextDeals as Array<Partial<Deal> | null | undefined>));
   };
 
   useEffect(() => {
     seenDealIdsRef.current = new Set(deals.map((deal) => deal.id));
     latestDealsRef.current = deals;
-  }, [deals]);
+  }, [deals, liveClockNow]);
 
   useEffect(() => {
     latestClaimsRef.current = claims;
@@ -3655,7 +3696,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('livedrop_admin_deals_view', adminDealsView);
+    safeSetLocalStorageItem('livedrop_admin_deals_view', adminDealsView);
   }, [adminDealsView]);
 
   useEffect(() => {
@@ -5192,9 +5233,9 @@ const deleteDealFromBackend = async (dealId: string) => {
     setCurrentView('live-deals');
 
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-      window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
-      window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_SESSION_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_EMAIL_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_FLAG_STORAGE_KEY);
     }
     console.info('[LiveDrop] Admin logout completed', {
       routePath,
@@ -5506,12 +5547,13 @@ const deleteDealFromBackend = async (dealId: string) => {
       setCityName('');
     }
 
-      const clearManagedSeedDeals = () => {
-        setDeals((prevDeals) => {
-          const nextDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-          return nextDeals;
-        });
-      };
+    const applyFallbackLocalSeedDeals = (fallbackLocation: UserLocation) => {
+      setDeals((prevDeals) => {
+        const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
+        const nextDeals = composeDealsWithLocationContext(preservedDeals, fallbackLocation, true);
+        return nextDeals;
+      });
+    };
 
     const handleLocationFailure = (status: 'denied' | 'error', nextCityName: string) => {
       if (locationRequestIdRef.current !== requestId) {
@@ -5543,7 +5585,7 @@ const deleteDealFromBackend = async (dealId: string) => {
       reverseGeocodeRequestIdRef.current += 1;
       setLocationStatus(status);
       setCityName(nextCityName);
-      clearManagedSeedDeals();
+      applyFallbackLocalSeedDeals(DEFAULT_LOCATION);
     };
 
     const handleLocationSuccess = (position: GeolocationPosition) => {
@@ -5733,12 +5775,12 @@ const deleteDealFromBackend = async (dealId: string) => {
     };
   }, [locationStatus, userLocation.lat, userLocation.lng]);
 
-  // Periodic refresh to move deals from "Live" to "Expired"
+  // Lightweight live clock tick used for expiry/status refresh without rewriting deal state.
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Force re-render to update filtered lists
-      setDeals(prev => [...prev]);
-    }, 10000); // Every 10 seconds
+    const interval = window.setInterval(() => {
+      setLiveClockNow(Date.now());
+    }, 10000);
+
     return () => clearInterval(interval);
   }, []);
 
@@ -5753,7 +5795,7 @@ const deleteDealFromBackend = async (dealId: string) => {
       const hasChanges = nextClaims.some((claim, index) => claim.status !== prevClaims[index]?.status);
       return hasChanges ? nextClaims : prevClaims;
     });
-  }, [deals]);
+  }, [deals, liveClockNow]);
 
   useEffect(() => {
     if (catalogDropWarnings.length > 0) {
@@ -5814,28 +5856,28 @@ const deleteDealFromBackend = async (dealId: string) => {
         });
       }
     });
-  }, [deals, radius, hasPreciseUserLocation, userLocation.lat, userLocation.lng]);
+  }, [deals, radius, hasPreciseUserLocation, userLocation.lat, userLocation.lng, liveClockNow]);
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
     const persistedDeals = deals.filter((deal) => !isManagedLocalSeedDeal(deal));
-    localStorage.setItem(DEALS_STORAGE_KEY, JSON.stringify(persistedDeals));
+    safeSetLocalStorageItem(DEALS_STORAGE_KEY, JSON.stringify(persistedDeals));
   }, [deals]);
 
   useEffect(() => {
-    localStorage.setItem(CLAIMS_STORAGE_KEY, JSON.stringify(claims));
+    safeSetLocalStorageItem(CLAIMS_STORAGE_KEY, JSON.stringify(claims));
   }, [claims]);
 
   useEffect(() => {
-    localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(catalogCoupons));
+    safeSetLocalStorageItem(CATALOG_STORAGE_KEY, JSON.stringify(catalogCoupons));
   }, [catalogCoupons]);
 
   useEffect(() => {
-    localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
+    safeSetLocalStorageItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
   }, [notifications]);
 
   useEffect(() => {
-    localStorage.setItem(ROLE_STORAGE_KEY, role);
+    safeSetLocalStorageItem(ROLE_STORAGE_KEY, role);
   }, [role]);
 
   useEffect(() => {
@@ -5867,9 +5909,9 @@ const deleteDealFromBackend = async (dealId: string) => {
     if (normalizedEmail === APPROVED_ADMIN_EMAIL) {
       setAdminSessionEmail(APPROVED_ADMIN_EMAIL);
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
-        window.localStorage.setItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
-        window.localStorage.setItem(ADMIN_FLAG_STORAGE_KEY, 'true');
+        safeSetLocalStorageItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        safeSetLocalStorageItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+        safeSetLocalStorageItem(ADMIN_FLAG_STORAGE_KEY, 'true');
       }
       return;
     }
@@ -5877,9 +5919,9 @@ const deleteDealFromBackend = async (dealId: string) => {
     if (authUser && normalizedEmail !== APPROVED_ADMIN_EMAIL && adminSessionEmail === APPROVED_ADMIN_EMAIL) {
       setAdminSessionEmail(null);
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-        window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
-        window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+        safeRemoveLocalStorageItem(ADMIN_SESSION_STORAGE_KEY);
+        safeRemoveLocalStorageItem(ADMIN_EMAIL_STORAGE_KEY);
+        safeRemoveLocalStorageItem(ADMIN_FLAG_STORAGE_KEY);
       }
     }
   }, [adminSessionEmail, authUser]);
@@ -6625,7 +6667,7 @@ const deleteDealFromBackend = async (dealId: string) => {
       const next = new Set(prev);
       next.add(deal.id);
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+        safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
       }
       return next;
     });
@@ -6871,11 +6913,11 @@ const deleteDealFromBackend = async (dealId: string) => {
         email: normalizedEmail,
       });
       setAdminSessionEmail(APPROVED_ADMIN_EMAIL);
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
-        window.localStorage.setItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
-        window.localStorage.setItem(ADMIN_FLAG_STORAGE_KEY, 'true');
-      }
+    if (typeof window !== 'undefined') {
+      safeSetLocalStorageItem(ADMIN_SESSION_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+      safeSetLocalStorageItem(ADMIN_EMAIL_STORAGE_KEY, APPROVED_ADMIN_EMAIL);
+      safeSetLocalStorageItem(ADMIN_FLAG_STORAGE_KEY, 'true');
+    }
       setAuthModalOpen(false);
       setAuthLoading(false);
       setAuthInfo('');
@@ -6945,9 +6987,9 @@ const deleteDealFromBackend = async (dealId: string) => {
     setAdminSessionEmail(null);
     resetAdminUiState();
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-      window.localStorage.removeItem(ADMIN_EMAIL_STORAGE_KEY);
-      window.localStorage.removeItem(ADMIN_FLAG_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_SESSION_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_EMAIL_STORAGE_KEY);
+      safeRemoveLocalStorageItem(ADMIN_FLAG_STORAGE_KEY);
     }
     if (supabase) {
       await supabase.auth.signOut();
@@ -7073,7 +7115,7 @@ const deleteDealFromBackend = async (dealId: string) => {
       const next = new Set(prev);
       next.add(deal.id);
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
+        safeSetLocalStorageItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
       }
       return next;
     });
@@ -7102,7 +7144,7 @@ const deleteDealFromBackend = async (dealId: string) => {
       const next = new Set(prev);
       next.add(deal.id);
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
+        safeSetLocalStorageItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
       }
       return next;
     });
