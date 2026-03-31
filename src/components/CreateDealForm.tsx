@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Deal, UserLocation } from '../types';
-import { getCategoryIconName, getCategoryLabel, getDefaultCategoryForMode, getCategoryOptionsForMode, normalizeCategoryValue } from '../utils/categories';
+import {
+  getCategoryIconName,
+  getCategoryLabel,
+  getDefaultCategoryForMode,
+  getCategoryOptionsForMode,
+  getSubcategoryOptionsForCategory,
+  normalizeCategoryValue,
+  normalizeSubcategoryValue,
+} from '../utils/categories';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
 
@@ -177,6 +185,16 @@ const getInitialFormData = (
       affiliateUrl: normalizeTextValue(initialData.affiliateUrl),
     });
 
+    const normalizedCategory = normalizeCategoryValue(initialData.category, businessMode, [
+      initialData.title,
+      initialData.description,
+      initialData.businessName,
+      initialData.offerText,
+    ]);
+    const savedSubcategory = businessMode === 'online'
+      ? initialData.onlineSubcategory
+      : initialData.localSubcategory;
+
     return {
       businessMode,
       businessName: normalizeTextValue(initialData.businessName),
@@ -185,12 +203,8 @@ const getInitialFormData = (
       affiliateUrl: linkState.affiliateUrl,
       title: normalizeTextValue(initialData.title),
       description: normalizeTextValue(initialData.description),
-      category: normalizeCategoryValue(initialData.category, businessMode, [
-        initialData.title,
-        initialData.description,
-        initialData.businessName,
-        initialData.offerText,
-      ]),
+      category: normalizedCategory,
+      subcategory: normalizeSubcategoryValue(savedSubcategory, businessMode, normalizedCategory),
       offerType: inferredOfferType,
       discountValue: getDiscountValueFromDeal(initialData),
       customOfferText: inferredOfferType === 'custom' ? normalizeTextValue(initialData.offerText) : '',
@@ -204,18 +218,19 @@ const getInitialFormData = (
     };
   }
 
+  const defaultBusinessMode = (savedDefaults?.businessMode ?? 'local') as BusinessMode;
+  const defaultCategory = normalizeCategoryValue(savedDefaults?.category, defaultBusinessMode);
+
   return {
-    businessMode: savedDefaults?.businessMode ?? 'local' as BusinessMode,
+    businessMode: defaultBusinessMode,
     businessName: savedDefaults?.businessName ?? '',
     websiteUrl: '',
     productUrl: '',
     affiliateUrl: '',
     title: '',
     description: '',
-    category: normalizeCategoryValue(
-      savedDefaults?.category,
-      (savedDefaults?.businessMode ?? 'local') as BusinessMode,
-    ),
+    category: defaultCategory,
+    subcategory: '',
     offerType: 'percentage' as OfferType,
     discountValue: '30',
     customOfferText: '',
@@ -289,6 +304,13 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         customOfferText: nextOfferType === 'custom' ? normalizeTextValue(autofillRequest.payload.offerText) : '',
         imageUrl: normalizeTextValue(autofillRequest.payload.imageUrl),
       };
+      const normalizedCategory = normalizeCategoryValue(nextState.category, 'online', [
+        nextState.title,
+        nextState.description,
+        nextState.businessName,
+        nextState.customOfferText,
+      ]);
+      nextState.subcategory = normalizeSubcategoryValue('', 'online', normalizedCategory);
 
       console.info('[LiveDrop] CreateDealForm applied autofill request', {
         autofillRequest,
@@ -324,6 +346,14 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   const availableCategoryOptions = useMemo(
     () => getCategoryOptionsForMode(formData.businessMode),
     [formData.businessMode],
+  );
+  const availableSubcategoryOptions = useMemo(
+    () => getSubcategoryOptionsForCategory(formData.businessMode, normalizedCategory),
+    [formData.businessMode, normalizedCategory],
+  );
+  const normalizedSubcategory = useMemo(
+    () => normalizeSubcategoryValue(formData.subcategory, formData.businessMode, normalizedCategory),
+    [formData.businessMode, formData.subcategory, normalizedCategory],
   );
 
   const offerText = useMemo(() => {
@@ -364,6 +394,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
       category: normalizedCategory,
+      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
+      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
     };
   }, [
     durationMinutes,
@@ -375,6 +407,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.durationPreset,
     formData.imageUrl,
     formData.quantity,
+    formData.subcategory,
     formData.title,
     initialData?.affiliateUrl,
     initialData?.discountPercent,
@@ -384,6 +417,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     initialData?.status,
     initialData?.stockStatus,
     normalizedCategory,
+    normalizedSubcategory,
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
     normalizedLinkState.websiteUrl,
@@ -423,6 +457,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
       category: normalizedCategory,
+      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
+      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
     };
   }, [
     durationMinutes,
@@ -434,8 +470,10 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.durationPreset,
     formData.imageUrl,
     formData.quantity,
+    formData.subcategory,
     formData.title,
     normalizedCategory,
+    normalizedSubcategory,
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
     normalizedLinkState.websiteUrl,
@@ -455,6 +493,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title).trim(),
       description: normalizeTextValue(formData.description).trim(),
       category: normalizedCategory,
+      subcategory: normalizedSubcategory,
       offerType: formData.offerType,
       discountValue: normalizeTextValue(formData.discountValue).trim(),
       customOfferText: normalizeTextValue(formData.customOfferText).trim(),
@@ -520,6 +559,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Number(formData.currentClaims),
       claimCount: Number(formData.currentClaims),
       category: normalizedCategory,
+      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
+      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
       logoUrl: undefined,
     } as Omit<Deal, 'id' | 'createdAt'>;
   };
@@ -539,6 +580,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
     if (!normalizedCategory.trim()) {
       return 'Please choose a category.';
+    }
+    if (availableSubcategoryOptions.length > 0 && !normalizedSubcategory.trim()) {
+      return 'Please choose a subcategory.';
     }
 
     if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
@@ -687,6 +731,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
                     option.id as BusinessMode,
                     [prev.title, prev.description, prev.businessName, prev.customOfferText],
                   ) || getDefaultCategoryForMode(option.id as BusinessMode),
+                  subcategory: '',
                 }))}
                 className={`rounded-[1.5rem] border px-4 py-4 text-left transition-all ${
                   active
@@ -982,22 +1027,49 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
               </select>
             </div>
           ) : (
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
-              <select
-                required
-                className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                value={normalizedCategory}
-                onChange={e => setFormData({ ...formData, category: e.target.value })}
-              >
-                <option value="">Select category</option>
-                {availableCategoryOptions.map(option => (
-                  <option key={option} value={option}>
-                    {getCategoryLabel(option)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
+                <select
+                  required
+                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                  value={normalizedCategory}
+                  onChange={e => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
+                >
+                  <option value="">Select category</option>
+                  {availableCategoryOptions.map(option => (
+                    <option key={option} value={option}>
+                      {getCategoryLabel(option)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Subcategory</label>
+                {availableSubcategoryOptions.length > 0 ? (
+                  <select
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                    value={normalizedSubcategory}
+                    onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
+                  >
+                    <option value="">Select subcategory</option>
+                    {availableSubcategoryOptions.map(option => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    disabled
+                    value="No subcategories available"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-slate-400 outline-none cursor-not-allowed"
+                  />
+                )}
+              </div>
+            </>
           )}
         </div>
 
@@ -1043,22 +1115,49 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         </div>
 
         {formData.businessMode === 'local' ? (
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
-            <select
-              required
-              className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-              value={normalizedCategory}
-              onChange={e => setFormData({ ...formData, category: e.target.value })}
-            >
-              <option value="">Select category</option>
-              {availableCategoryOptions.map(option => (
-                <option key={option} value={option}>
-                  {getCategoryLabel(option)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
+              <select
+                required
+                className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                value={normalizedCategory}
+                onChange={e => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
+              >
+                <option value="">Select category</option>
+                {availableCategoryOptions.map(option => (
+                  <option key={option} value={option}>
+                    {getCategoryLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Subcategory</label>
+              {availableSubcategoryOptions.length > 0 ? (
+                <select
+                  required
+                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                  value={normalizedSubcategory}
+                  onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
+                >
+                  <option value="">Select subcategory</option>
+                  {availableSubcategoryOptions.map(option => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  disabled
+                  value="No subcategories available"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-slate-400 outline-none cursor-not-allowed"
+                />
+              )}
+            </div>
+          </>
         ) : null}
 
         <label className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">

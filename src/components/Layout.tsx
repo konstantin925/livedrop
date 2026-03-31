@@ -19,6 +19,8 @@ interface LayoutProps {
   onOpenAuth?: () => void;
   onSignOut?: () => void;
   isDropModeHighlighted?: boolean;
+  isAdminSession?: boolean;
+  adminLabel?: string;
 }
 
 export const Layout: React.FC<LayoutProps> = ({
@@ -37,6 +39,8 @@ export const Layout: React.FC<LayoutProps> = ({
   onOpenAuth,
   onSignOut,
   isDropModeHighlighted = false,
+  isAdminSession = false,
+  adminLabel,
 }) => {
   const mainContentStyle: React.CSSProperties = {
     paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
@@ -122,6 +126,12 @@ export const Layout: React.FC<LayoutProps> = ({
           )}
         </div>
       </header>
+
+      {isAdminSession ? (
+        <div className="border-b border-indigo-100/80 bg-indigo-50/85 px-3.5 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700 max-[359px]:px-2.5">
+          {adminLabel ? `Admin: ${adminLabel}` : 'Logged in as Admin'}
+        </div>
+      ) : null}
 
       {notificationsOpen ? (
         <div className="absolute left-2.5 right-2.5 top-[76px] z-[90] max-[359px]:left-2 max-[359px]:right-2 max-[359px]:top-[70px]">

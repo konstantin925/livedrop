@@ -16,7 +16,13 @@ import { calculateDistance, formatDistance } from './utils/distance';
 import { generateSeededDeals, generateSeededOnlineDeals } from './utils/seed';
 import { formatDateTime } from './utils/time';
 import { copyTextToClipboard, ClipboardCopyResult } from './utils/clipboard';
-import { getCategoryIconName, getCategoryLabel, getDefaultCategoryForMode, normalizeCategoryValue } from './utils/categories';
+import {
+  getCategoryIconName,
+  getCategoryLabel,
+  getDefaultCategoryForMode,
+  normalizeCategoryValue,
+  normalizeSubcategoryValue,
+} from './utils/categories';
 import { mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
@@ -410,6 +416,13 @@ const LOCAL_SUBCATEGORY_KEYWORDS: Record<string, Record<string, string[]>> = {
 };
 
 const getLocalDealSubcategory = (deal: Deal) => {
+  const explicitSubcategory = normalizeSubcategoryValue(
+    deal.localSubcategory,
+    'local',
+    deal.category,
+  );
+  if (explicitSubcategory) return explicitSubcategory;
+
   const matchers = LOCAL_SUBCATEGORY_KEYWORDS[deal.category];
   if (!matchers) return null;
 
@@ -479,6 +492,13 @@ const getOnlineFashionSubcategory = (deal: Deal) => {
 };
 
 const getOnlineDealSubcategory = (deal: Deal) => {
+  const explicitSubcategory = normalizeSubcategoryValue(
+    deal.onlineSubcategory,
+    'online',
+    deal.category,
+  );
+  if (explicitSubcategory) return explicitSubcategory;
+
   if (deal.category === 'Tech') return getOnlineTechSubcategory(deal);
   if (deal.category === 'Home') return getOnlineHomeSubcategory(deal);
   if (deal.category === 'Fashion') return getOnlineFashionSubcategory(deal);
@@ -1925,6 +1945,8 @@ type DealRow = {
   current_claims: number;
   claim_count: number;
   category: string;
+  local_subcategory: string | null;
+  online_subcategory: string | null;
   owner_id: string | null;
 };
 
@@ -1990,6 +2012,8 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
   'current_claims',
   'claim_count',
   'category',
+  'local_subcategory',
+  'online_subcategory',
   'owner_id',
 ] as const satisfies ReadonlyArray<keyof DealRow>;
 
@@ -2285,6 +2309,20 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     : expiresAt <= Date.now()
       ? 'expired'
       : 'active';
+  const normalizedCategory = normalizeDealCategoryValue(input.category, businessType, [
+    input.title,
+    input.description,
+    input.offerText,
+    input.businessName,
+    input.merchant,
+    input.brand,
+  ]);
+  const normalizedLocalSubcategory = businessType === 'local'
+    ? normalizeSubcategoryValue(input.localSubcategory, 'local', normalizedCategory) || undefined
+    : undefined;
+  const normalizedOnlineSubcategory = businessType === 'online'
+    ? normalizeSubcategoryValue(input.onlineSubcategory, 'online', normalizedCategory) || undefined
+    : undefined;
 
   return {
     id: trimDealTextValue(input.id) || createUuid(),
@@ -2322,14 +2360,9 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     maxClaims,
     currentClaims,
     claimCount,
-    category: normalizeDealCategoryValue(input.category, businessType, [
-      input.title,
-      input.description,
-      input.offerText,
-      input.businessName,
-      input.merchant,
-      input.brand,
-    ]),
+    category: normalizedCategory,
+    localSubcategory: normalizedLocalSubcategory,
+    onlineSubcategory: normalizedOnlineSubcategory,
   };
 };
 
@@ -2396,6 +2429,16 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
   const rawLat = parseDealNumberOrFallback(row.lat, fallback?.lat ?? 0);
   const rawLng = parseDealNumberOrFallback(row.lng, fallback?.lng ?? 0);
   const hasValidLocalCoordinates = businessType !== 'online' && hasUsableCoordinates(rawLat, rawLng);
+  const normalizedCategory = normalizeDealCategoryValue(
+    row.category ?? fallback?.category ?? DEAL_CATEGORY_FALLBACK,
+    businessType,
+    [
+      row.title ?? fallback?.title,
+      row.description ?? fallback?.description,
+      row.offer_text ?? fallback?.offerText,
+      row.business_name ?? row.merchant ?? fallback?.businessName,
+    ],
+  );
 
   return sanitizeDealRecord({
     id: row.id ?? fallback?.id ?? createUuid(),
@@ -2432,16 +2475,17 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     maxClaims,
     currentClaims,
     claimCount,
-    category: normalizeDealCategoryValue(
-      row.category ?? fallback?.category ?? DEAL_CATEGORY_FALLBACK,
-      businessType,
-      [
-        row.title ?? fallback?.title,
-        row.description ?? fallback?.description,
-        row.offer_text ?? fallback?.offerText,
-        row.business_name ?? row.merchant ?? fallback?.businessName,
-      ],
-    ),
+    category: normalizedCategory,
+    localSubcategory: normalizeSubcategoryValue(
+      row.local_subcategory ?? fallback?.localSubcategory,
+      'local',
+      normalizedCategory,
+    ) || undefined,
+    onlineSubcategory: normalizeSubcategoryValue(
+      row.online_subcategory ?? fallback?.onlineSubcategory,
+      'online',
+      normalizedCategory,
+    ) || undefined,
   })!;
 };
 
@@ -2485,6 +2529,8 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     current_claims: deal.currentClaims,
     claim_count: deal.claimCount ?? deal.currentClaims,
     category: deal.category,
+    local_subcategory: deal.localSubcategory ?? null,
+    online_subcategory: deal.onlineSubcategory ?? null,
     owner_id: normalizedOwnerId,
   };
 };
@@ -3408,6 +3454,15 @@ export default function App() {
   }, [hasPreciseUserLocation, userLocation]);
   const adminEmail = (adminSessionEmail ?? authUser?.email ?? '').toLowerCase();
   const hasAdminAccess = adminEmail === APPROVED_ADMIN_EMAIL;
+  const adminDisplayName = (() => {
+    const metadataName =
+      typeof authUser?.user_metadata?.full_name === 'string'
+        ? authUser.user_metadata.full_name.trim()
+        : '';
+    if (metadataName) return metadataName;
+    return (authUser?.email ?? adminSessionEmail ?? '').trim();
+  })();
+  const adminStatusLabel = adminDisplayName || 'Admin';
   const selectedAIFinderCandidate = useMemo(
     () =>
       aiFinderCandidates.find((candidate) => candidate.url === selectedAIFinderUrl)
@@ -6751,7 +6806,7 @@ export default function App() {
       return;
     }
 
-    if (!session) {
+    if (!session && !hasAdminAccess) {
       setAuthError('Sign in with Google to start business access.');
       setAuthModalOpen(true);
       return;
@@ -7270,6 +7325,33 @@ export default function App() {
                 onShare={handleShareDeal}
               />
             </div>
+            {hasAdminAccess ? (
+              <div
+                className="mt-3 grid grid-cols-2 gap-2"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleEditDeal(deal)}
+                  className="inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAdminDeleteDeal(deal)}
+                  disabled={deletingDealIds.has(deal.id)}
+                  className={`inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                    deletingDealIds.has(deal.id)
+                      ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                      : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+                  }`}
+                >
+                  {deletingDealIds.has(deal.id) ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            ) : null}
             {isAdminRoute && showDebug ? (
               <p className="mb-3 mt-3 truncate rounded-[0.9rem] bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-400">
                 Link: {primaryActionUrl ?? 'No link saved'}
@@ -7386,6 +7468,33 @@ export default function App() {
                 onShare={handleShareDeal}
               />
             </div>
+            {hasAdminAccess ? (
+              <div
+                className="grid grid-cols-2 gap-2"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleEditDeal(deal)}
+                  className="inline-flex h-8.5 items-center justify-center rounded-[0.9rem] border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAdminDeleteDeal(deal)}
+                  disabled={deletingDealIds.has(deal.id)}
+                  className={`inline-flex h-8.5 items-center justify-center rounded-[0.9rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] transition-colors ${
+                    deletingDealIds.has(deal.id)
+                      ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                      : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+                  }`}
+                >
+                  {deletingDealIds.has(deal.id) ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
@@ -7814,6 +7923,10 @@ export default function App() {
                   onLike={handleLikeDeal}
                   onDislike={handleDislikeDeal}
                   onShare={handleShareDeal}
+                  showAdminActions={hasAdminAccess}
+                  onEditDeal={handleEditDeal}
+                  onDeleteDeal={handleAdminDeleteDeal}
+                  isDeleting={deletingDealIds.has(deal.id)}
                 />
               ))
             ) : (
@@ -8519,6 +8632,10 @@ export default function App() {
                       onLike={handleLikeDeal}
                       onDislike={handleDislikeDeal}
                       onShare={handleShareDeal}
+                      showAdminActions={hasAdminAccess}
+                      onEditDeal={handleEditDeal}
+                      onDeleteDeal={handleAdminDeleteDeal}
+                      isDeleting={deletingDealIds.has(deal.id)}
                     />
                   ))}
                 </div>
@@ -10844,7 +10961,7 @@ export default function App() {
       );
     }
 
-    if (!session) {
+    if (!session && !hasAdminAccess) {
       return (
         <BusinessPaywall
           isAuthenticated={false}
@@ -10858,7 +10975,7 @@ export default function App() {
       );
     }
 
-    if (!hasPortalAccess) {
+    if (!hasPortalAccess && !hasAdminAccess) {
       return (
         <BusinessPaywall
           isAuthenticated
@@ -11102,6 +11219,9 @@ export default function App() {
       return (
         <div className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900">
           <div className="mx-auto max-w-[430px] space-y-4">
+            <div className="rounded-[1rem] border border-indigo-100 bg-indigo-50/85 px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+              {`Logged in as Admin: ${adminStatusLabel}`}
+            </div>
             <div className="flex items-center justify-between rounded-[1.75rem] border border-slate-100 bg-white px-4 py-3 shadow-sm">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Admin</p>
@@ -11155,6 +11275,9 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 px-3 py-4 text-slate-900">
         <div className="mx-auto max-w-[1200px] space-y-4">
+          <div className="rounded-[1rem] border border-indigo-100 bg-indigo-50/85 px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+            {`Logged in as Admin: ${adminStatusLabel}`}
+          </div>
           <div className="rounded-[1.75rem] border border-slate-100 bg-white px-4 py-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -11558,6 +11681,8 @@ export default function App() {
       isAuthenticated={Boolean(session)}
       userEmail={authUser?.email}
       userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
+      isAdminSession={hasAdminAccess}
+      adminLabel={adminStatusLabel}
       isDropModeHighlighted={false}
       onOpenAuth={() => {
         setAuthError('');

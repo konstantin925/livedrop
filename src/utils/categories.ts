@@ -18,6 +18,85 @@ export type BusinessCategoryMode = 'local' | 'online';
 const LOCAL_CATEGORY_OPTIONS = CATEGORY_OPTIONS.filter((category) => category !== 'All');
 const REMOTE_CATEGORY_OPTIONS = ONLINE_CATEGORY_OPTIONS.filter((category) => category !== 'All');
 
+const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
+  'Fast Food': ['Burgers', 'Tacos', 'Sandwiches', 'Sweets'],
+  Coffee: ['Hot Coffee', 'Iced Coffee', 'Espresso', 'Bakery'],
+  Fitness: ['Gyms', 'Protein', 'Supplements', 'Activewear'],
+  Pet: ['Grooming', 'Treats', 'Toys', 'Wellness'],
+  Home: ['Cleaning', 'Books', 'Furniture', 'Services'],
+};
+
+const ONLINE_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
+  Tech: [
+    'Phones',
+    'Laptops',
+    'Tablets',
+    'Smartwatches',
+    'Headphones',
+    'Earbuds',
+    'Speakers',
+    'Gaming',
+    'PC Accessories',
+    'Keyboards',
+    'Mice',
+    'Monitors',
+    'TVs',
+    'Cameras',
+    'Drones',
+  ],
+  Fashion: [
+    "Men's Clothing",
+    "Women's Clothing",
+    'Shoes',
+    'Sneakers',
+    'Boots',
+    'Sandals',
+    'Jackets',
+    'Hoodies',
+    'T-Shirts',
+    'Jeans',
+    'Dresses',
+    'Activewear',
+    'Loungewear',
+    'Bags',
+    'Wallets',
+  ],
+  Gaming: [
+    'Consoles',
+    'Games',
+    'Controllers',
+    'Headsets',
+    'Keyboards',
+    'Mice',
+    'Monitors',
+    'Gaming Chairs',
+  ],
+  Digital: [
+    'Software',
+    'Subscriptions',
+    'Courses',
+    'Ebooks',
+    'Templates',
+    'Design Assets',
+    'AI Tools',
+  ],
+  Home: [
+    'Furniture',
+    'Home Decor',
+    'Kitchen',
+    'Bedding',
+    'Bath',
+    'Storage',
+    'Cleaning',
+    'Appliances',
+    'Smart Home',
+    'Lighting',
+    'Outdoor',
+    'Patio',
+  ],
+  Freebies: ['Samples', 'Trials', 'Coupon Codes', 'Free Shipping', 'Giveaways'],
+};
+
 const CATEGORY_ICONS: Record<string, CategoryIconName> = {
   'Fast Food': 'deal',
   Coffee: 'coffee',
@@ -140,6 +219,30 @@ export const getCategoryOptionsForMode = (mode: BusinessCategoryMode) =>
 
 export const getDefaultCategoryForMode = (mode: BusinessCategoryMode) =>
   mode === 'online' ? 'Tech' : 'Fast Food';
+
+export const getSubcategoryOptionsForCategory = (
+  mode: BusinessCategoryMode,
+  category: string,
+) => {
+  const normalizedCategory = normalizeCategoryValue(category, mode);
+  const options = mode === 'online'
+    ? ONLINE_SUBCATEGORY_OPTIONS[normalizedCategory]
+    : LOCAL_SUBCATEGORY_OPTIONS[normalizedCategory];
+  return options ? [...options] : [];
+};
+
+export const normalizeSubcategoryValue = (
+  subcategory: unknown,
+  mode: BusinessCategoryMode,
+  category: string,
+) => {
+  const normalizedInput = normalizeCategoryToken(subcategory);
+  if (!normalizedInput) return '';
+
+  const options = getSubcategoryOptionsForCategory(mode, category);
+  const matched = options.find((option) => normalizeCategoryToken(option) === normalizedInput);
+  return matched ?? '';
+};
 
 export function normalizeCategoryValue(
   category: unknown,

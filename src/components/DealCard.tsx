@@ -23,6 +23,10 @@ interface DealCardProps {
   onLike?: (deal: Deal) => void;
   onDislike?: (deal: Deal) => void;
   onShare?: (deal: Deal) => void;
+  showAdminActions?: boolean;
+  onEditDeal?: (deal: Deal) => void;
+  onDeleteDeal?: (deal: Deal) => void | Promise<void>;
+  isDeleting?: boolean;
 }
 
 export const DealCard: React.FC<DealCardProps> = ({
@@ -41,6 +45,10 @@ export const DealCard: React.FC<DealCardProps> = ({
   onLike,
   onDislike,
   onShare,
+  showAdminActions = false,
+  onEditDeal,
+  onDeleteDeal,
+  isDeleting = false,
 }) => {
   const [isExpired, setIsExpired] = useState(deal.expiresAt <= Date.now());
   const getBadgeIcon = (badge: string) => {
@@ -122,6 +130,30 @@ export const DealCard: React.FC<DealCardProps> = ({
             onShare={onShare!}
           />
         ) : null}
+
+        {showAdminActions && onEditDeal && onDeleteDeal ? (
+          <div className="mt-2.5 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onEditDeal(deal)}
+              className="inline-flex h-9.5 items-center justify-center rounded-[1rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDeleteDeal(deal)}
+              disabled={isDeleting}
+              className={`inline-flex h-9.5 items-center justify-center rounded-[1rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                isDeleting
+                  ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                  : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+              }`}
+            >
+              {isDeleting ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -192,6 +224,30 @@ export const DealCard: React.FC<DealCardProps> = ({
           onDislike={onDislike!}
           onShare={onShare!}
         />
+      ) : null}
+
+      {showAdminActions && onEditDeal && onDeleteDeal ? (
+        <div className="mb-3 mt-2.5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onEditDeal(deal)}
+            className="inline-flex h-10 items-center justify-center rounded-[1rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => void onDeleteDeal(deal)}
+            disabled={isDeleting}
+            className={`inline-flex h-10 items-center justify-center rounded-[1rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+              isDeleting
+                ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+            }`}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
       ) : null}
 
       <div className="space-y-2">
