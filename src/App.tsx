@@ -38,6 +38,7 @@ const CLAIMS_STORAGE_KEY = 'livedrop_claims';
 const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
+const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
 const LOCAL_ADMIN_MODE = false;
 const ADMIN_SESSION_STORAGE_KEY = 'livedrop_admin_session';
@@ -684,6 +685,19 @@ const readStoredRole = (): UserRole => {
     return LOCAL_ADMIN_MODE ? 'business' : 'customer';
   } catch {
     return LOCAL_ADMIN_MODE ? 'business' : 'customer';
+  }
+};
+
+const readHiddenDealIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(HIDDEN_DEALS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))
+      : new Set();
+  } catch {
+    return new Set();
   }
 };
 
@@ -3249,13 +3263,20 @@ export default function App() {
   });
   const [userLocation, setUserLocation] = useState<UserLocation>(DEFAULT_LOCATION);
   const [radius, setRadius] = useState<number>(5);
+  const [hiddenDealIds, setHiddenDealIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    return readHiddenDealIds();
+  });
+  const hiddenDealIdsRef = useRef(hiddenDealIds);
+  const [deletingDealIds, setDeletingDealIds] = useState<Set<string>>(new Set());
   const setDeals = (value: React.SetStateAction<Deal[]>) => {
     setRawDeals((previousDeals) => {
       const resolvedDeals = typeof value === 'function'
         ? (value as (currentDeals: Deal[]) => Deal[])(previousDeals)
         : value;
 
-      return sanitizeDealsCollection(Array.isArray(resolvedDeals) ? resolvedDeals : []);
+      const sanitizedDeals = sanitizeDealsCollection(Array.isArray(resolvedDeals) ? resolvedDeals : []);
+      return sanitizedDeals.filter((deal) => !hiddenDealIdsRef.current.has(deal.id));
     });
   };
   const selectedDetailDeal = useMemo(
@@ -3334,6 +3355,9 @@ export default function App() {
   const [aiFinderResult, setAiFinderResult] = useState<AIDealFinderResult | null>(null);
   const [aiFinderCandidates, setAiFinderCandidates] = useState<AIDealFinderCandidate[]>([]);
   const [aiFinderSearchSnapshot, setAiFinderSearchSnapshot] = useState<AIDealFinderResult | null>(null);
+  useEffect(() => {
+    hiddenDealIdsRef.current = hiddenDealIds;
+  }, [hiddenDealIds]);
   const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
   const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
   const [showSearchMeter, setShowSearchMeter] = useState(false);
@@ -6371,11 +6395,38 @@ export default function App() {
   };
 
   const handleAdminDeleteDeal = async (deal: Deal) => {
+    const confirmed = window.confirm(`Delete "${deal.title}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeletingDealIds((prev) => {
+      const next = new Set(prev);
+      next.add(deal.id);
+      return next;
+    });
+
+    setHiddenDealIds((prev) => {
+      const next = new Set(prev);
+      next.add(deal.id);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+
     try {
-      await deleteDealFromBackend(deal.id);
       setDeals((prev) => prev.filter((item) => item.id !== deal.id));
+      if (supabase && hasSupabaseConfig) {
+        await deleteDealFromBackend(deal.id);
+      }
+      pushToast('Deal deleted.', 'share');
     } catch {
-      setDealsError('Could not delete the shared deal.');
+      setDealsError('Could not delete from shared backend. Deal was removed locally.');
+    } finally {
+      setDeletingDealIds((prev) => {
+        const next = new Set(prev);
+        next.delete(deal.id);
+        return next;
+      });
     }
   };
 
@@ -10989,7 +11040,10 @@ export default function App() {
     const onlineManagedDeals = managedDeals.filter((deal) => deal.businessType === 'online');
     const expiredManagedDeals = managedDeals.filter((deal) => isExpiredDeal(deal));
 
-    const renderAdminDealCard = (deal: Deal) => (
+    const renderAdminDealCard = (deal: Deal) => {
+      const isDeleting = deletingDealIds.has(deal.id);
+
+      return (
       <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -11031,12 +11085,18 @@ export default function App() {
           <button onClick={() => void handleAdminToggleTrending(deal)} className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${deal.adminTag === 'trending' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'}`}>
             {deal.adminTag === 'trending' ? 'Trending' : 'Mark Trending'}
           </button>
-          <button onClick={() => void handleAdminDeleteDeal(deal)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500" aria-label="Delete deal">
+          <button
+            onClick={() => void handleAdminDeleteDeal(deal)}
+            disabled={isDeleting}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Delete deal"
+          >
             <AppIcon name="trash" size={16} />
           </button>
         </div>
       </div>
-    );
+      );
+    };
 
     if (isCreating) {
       return (
