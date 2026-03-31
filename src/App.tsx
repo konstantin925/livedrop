@@ -3347,7 +3347,11 @@ export default function App() {
   const [adminAccessError, setAdminAccessError] = useState('');
   const [adminLogs, setAdminLogs] = useState<AdminLogEntry[]>([]);
   const [showAdvancedBackendLogs, setShowAdvancedBackendLogs] = useState(false);
-  const [adminDealsOpenSection, setAdminDealsOpenSection] = useState<'local' | 'online' | null>('local');
+  const [adminDealsView, setAdminDealsView] = useState<'local' | 'online'>(() => {
+    if (typeof window === 'undefined') return 'local';
+    const stored = window.localStorage.getItem('livedrop_admin_deals_view');
+    return stored === 'online' ? 'online' : 'local';
+  });
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(LOCAL_ADMIN_MODE ? 'active' : 'inactive');
@@ -3467,6 +3471,11 @@ export default function App() {
       setSelectedDetailDealId(null);
     }
   }, [currentView, selectedDetailDeal, selectedDetailDealId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('livedrop_admin_deals_view', adminDealsView);
+  }, [adminDealsView]);
 
   useEffect(() => {
     if (!pendingPortalAutofill || !portalFieldSnapshot) {
@@ -3916,13 +3925,63 @@ export default function App() {
       includeAllStatuses,
     });
 
-    const baseQuery = getDealsTableClient()
-      .select('*')
-      .order('created_at', { ascending: false });
+    const runSharedDealsQuery = async (options: { useStatusFilter: boolean; useCreatedAtSort: boolean }) => {
+      let query = getDealsTableClient().select('*');
+      if (options.useStatusFilter) {
+        query = query.eq('status', 'active');
+      }
+      if (options.useCreatedAtSort) {
+        query = query.order('created_at', { ascending: false });
+      }
+      return query;
+    };
 
-    const { data, error } = includeAllStatuses
-      ? await baseQuery
-      : await baseQuery.eq('status', 'active');
+    let useStatusFilter = !includeAllStatuses;
+    let useCreatedAtSort = true;
+
+    let { data, error } = await runSharedDealsQuery({
+      useStatusFilter,
+      useCreatedAtSort,
+    });
+
+    if (error) {
+      const missingColumns = extractMissingDealColumns(error);
+      const needsStatusFallback = missingColumns.includes('status') && useStatusFilter;
+      const needsCreatedAtFallback = missingColumns.includes('created_at') && useCreatedAtSort;
+
+      if (needsStatusFallback || needsCreatedAtFallback) {
+        if (needsStatusFallback) {
+          useStatusFilter = false;
+        }
+        if (needsCreatedAtFallback) {
+          useCreatedAtSort = false;
+        }
+
+        console.warn('[LiveDrop] Retrying shared deals fetch with legacy-compatible query', {
+          projectUrl: resolvedSupabaseUrl,
+          missingColumns,
+          useStatusFilter,
+          useCreatedAtSort,
+        });
+
+        pushAdminLog('warn', 'Shared deals fetch retried with legacy-compatible query', buildSharedWriteLogDetail({
+          operation: 'select',
+          error,
+          missingColumns,
+          payloadKeys: [
+            useStatusFilter ? 'status-filter:on' : 'status-filter:off',
+            useCreatedAtSort ? 'created_at-sort:on' : 'created_at-sort:off',
+          ],
+        }));
+
+        const retryResult = await runSharedDealsQuery({
+          useStatusFilter,
+          useCreatedAtSort,
+        });
+        data = retryResult.data;
+        error = retryResult.error;
+      }
+    }
 
     if (error) {
       console.error('[LiveDrop] Supabase deals query failed', {
@@ -11216,7 +11275,54 @@ export default function App() {
             ))}
           </div>
 
-          <div className="mt-4 grid gap-6 md:grid-cols-2">
+          <div className="mt-4 space-y-4">
+            <div className="rounded-[1.5rem] border border-slate-100 bg-white p-3 shadow-sm">
+              <div className="inline-flex w-full rounded-xl border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setAdminDealsView('local')}
+                  aria-pressed={adminDealsView === 'local'}
+                  className={`inline-flex h-9 flex-1 items-center justify-center rounded-lg px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                    adminDealsView === 'local'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-indigo-600'
+                  }`}
+                >
+                  Local ({localManagedDeals.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminDealsView('online')}
+                  aria-pressed={adminDealsView === 'online'}
+                  className={`inline-flex h-9 flex-1 items-center justify-center rounded-lg px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                    adminDealsView === 'online'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-indigo-600'
+                  }`}
+                >
+                  Online ({onlineManagedDeals.length})
+                </button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {adminDealsView === 'local' ? (
+                localManagedDeals.length === 0 ? (
+                  <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
+                    No local deals yet.
+                  </div>
+                ) : (
+                  localManagedDeals.map((deal) => renderAdminDealCard(deal))
+                )
+              ) : onlineManagedDeals.length === 0 ? (
+                <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
+                  No online deals yet.
+                </div>
+              ) : (
+                onlineManagedDeals.map((deal) => renderAdminDealCard(deal))
+              )}
+            </div>
+            {/*
+            {adminDealsView === 'local' ? (
             <div className="min-w-0">
               <button
                 type="button"
@@ -11294,6 +11400,7 @@ export default function App() {
                 </div>
               </div>
             </div>
+            */}
           </div>
         </div>
       </div>
