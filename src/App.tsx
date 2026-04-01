@@ -23,7 +23,7 @@ import {
   normalizeCategoryValue,
   normalizeSubcategoryValue,
 } from './utils/categories';
-import { mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
+import { isManagedMockOnlineDeal, mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
 import { ToastStack } from './components/ToastStack';
@@ -40,6 +40,7 @@ import brandBoltLogo3d from './assets/bolt-3d.png';
 import brandBoltLogo3dActive from './assets/bolt-3d-active.png';
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
+const DEALS_STORAGE_BACKUP_KEY = 'livedrop_deals_backup';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
 const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
@@ -48,6 +49,10 @@ const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
 const DISABLE_DEAL_EXPIRY = true;
+const SHARED_DEALS_CACHE_TTL_MS = 20_000;
+const CLOUD_STATE_SYNC_DEBOUNCE_MS = 1_200;
+const MAX_PENDING_DELETE_RETRIES = 3;
+const BULK_RELEASE_MAX_DEALS = 10;
 
 type DealDeleteDescriptor = {
   id: string;
@@ -61,6 +66,9 @@ type DealDeleteDescriptor = {
   websiteUrl?: string;
   identityKeys: string[];
   queuedAt: number;
+  retryCount?: number;
+  lastAttemptAt?: number;
+  lastError?: string;
 };
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
 const LOCAL_ADMIN_MODE = false;
@@ -667,17 +675,86 @@ const isStoredManagedLocalSeedDeal = (deal: Partial<Deal>) =>
   typeof deal.id === 'string' &&
   deal.id.startsWith('seed-');
 
-const readStoredDeals = (): Deal[] => {
-  try {
-    const raw = localStorage.getItem(DEALS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? sanitizeDealsCollection(parsed as Array<Partial<Deal> | null | undefined>)
-      : [];
-  } catch {
-    return [];
+const INLINE_IMAGE_DATA_URL_MAX_LENGTH = 180_000;
+
+const trimLargeInlineImageForStorage = (deal: Deal): Deal => {
+  const imageUrl = typeof deal.imageUrl === 'string' ? deal.imageUrl.trim() : '';
+  if (!imageUrl.startsWith('data:image/')) {
+    return deal;
   }
+
+  if (imageUrl.length <= INLINE_IMAGE_DATA_URL_MAX_LENGTH) {
+    return deal;
+  }
+
+  return {
+    ...deal,
+    imageUrl: undefined,
+  };
+};
+
+const parseStoredDealsPayload = (raw: string | null): { ok: boolean; deals: Deal[] } => {
+  if (!raw) {
+    return { ok: false, deals: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return { ok: false, deals: [] };
+    }
+
+    const deals = sanitizeDealsCollection(parsed as Array<Partial<Deal> | null | undefined>)
+      .filter((deal) => !isManagedMockOnlineDeal(deal) && !isStoredManagedLocalSeedDeal(deal));
+
+    return {
+      ok: true,
+      deals,
+    };
+  } catch {
+    return {
+      ok: false,
+      deals: [],
+    };
+  }
+};
+
+const buildDealsStorageSnapshot = (deals: Deal[]) =>
+  deals
+    .filter((deal) => !isManagedLocalSeedDeal(deal) && !isManagedMockOnlineDeal(deal))
+    .map((deal) => trimLargeInlineImageForStorage(deal));
+
+const persistDealsSnapshot = (deals: Deal[]) => {
+  const snapshot = buildDealsStorageSnapshot(deals);
+  const serializedSnapshot = JSON.stringify(snapshot);
+
+  const wrotePrimary = safeSetLocalStorageItem(DEALS_STORAGE_KEY, serializedSnapshot);
+  if (wrotePrimary) {
+    safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, serializedSnapshot);
+    return true;
+  }
+
+  const compactSnapshot = snapshot.map((deal) => ({
+    ...deal,
+    imageUrl:
+      typeof deal.imageUrl === 'string' && deal.imageUrl.startsWith('data:image/')
+        ? undefined
+        : deal.imageUrl,
+  }));
+  const compactSerializedSnapshot = JSON.stringify(compactSnapshot);
+  const wroteCompactPrimary = safeSetLocalStorageItem(DEALS_STORAGE_KEY, compactSerializedSnapshot);
+  if (wroteCompactPrimary) {
+    safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, compactSerializedSnapshot);
+  }
+  return wroteCompactPrimary;
+};
+
+const readStoredDeals = (): Deal[] => {
+  const primary = parseStoredDealsPayload(localStorage.getItem(DEALS_STORAGE_KEY));
+  if (primary.ok) return primary.deals;
+
+  const backup = parseStoredDealsPayload(localStorage.getItem(DEALS_STORAGE_BACKUP_KEY));
+  return backup.ok ? backup.deals : [];
 };
 
 const readStoredClaims = (): Claim[] => {
@@ -820,6 +897,15 @@ const readPendingDeleteDescriptors = (): DealDeleteDescriptor[] => {
           websiteUrl: typeof record.websiteUrl === 'string' ? record.websiteUrl : undefined,
           identityKeys,
           queuedAt: typeof record.queuedAt === 'number' && Number.isFinite(record.queuedAt) ? record.queuedAt : Date.now(),
+          retryCount:
+            typeof record.retryCount === 'number' && Number.isFinite(record.retryCount) && record.retryCount >= 0
+              ? Math.floor(record.retryCount)
+              : 0,
+          lastAttemptAt:
+            typeof record.lastAttemptAt === 'number' && Number.isFinite(record.lastAttemptAt) && record.lastAttemptAt > 0
+              ? Math.floor(record.lastAttemptAt)
+              : undefined,
+          lastError: typeof record.lastError === 'string' ? record.lastError : undefined,
         };
       })
       .filter((entry): entry is DealDeleteDescriptor => Boolean(entry));
@@ -875,15 +961,6 @@ const getEffectiveLocalDealDistance = (
   }
 
   return Number.POSITIVE_INFINITY;
-};
-
-const EXCLUDED_ONLINE_DEAL_TITLES = new Set([
-  'Laptop Stand Bundle Deal',
-  'Creator Desk Essentials Sale',
-]);
-
-const isExcludedOnlineDeal = (deal: Deal) => {
-  return deal.businessType === 'online' && EXCLUDED_ONLINE_DEAL_TITLES.has(deal.title);
 };
 
 const isManagedLocalSeedDeal = (deal: Deal) =>
@@ -1016,21 +1093,42 @@ const syncSharedOnlineDeals = (existingDeals: Deal[]): Deal[] => {
   );
   const seededOnlineDeals = hydrateSeededOnlineDealsWithOverrides(safeExistingDeals);
   const synced = mergeDealsWithMockOnlinePipeline(safeExistingDeals, seededOnlineDeals).deals;
-  return synced.filter((deal) => !isExcludedOnlineDeal(deal));
+  return synced;
 };
 
 const composeDealsWithLocationContext = (
   sourceDeals: Deal[],
   location: UserLocation,
   includeManagedLocalSeeds: boolean,
+  options?: {
+    includeManagedOnlinePipeline?: boolean;
+  },
 ): Deal[] => {
-  const syncedDeals = syncSharedOnlineDeals(sourceDeals).filter((deal) => !isManagedLocalSeedDeal(deal));
+  const includeManagedOnlinePipeline = options?.includeManagedOnlinePipeline ?? false;
+  const baseDeals = includeManagedOnlinePipeline
+    ? syncSharedOnlineDeals(sourceDeals)
+    : sanitizeDealsCollection(sourceDeals);
+  const syncedDeals = baseDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
 
   if (!includeManagedLocalSeeds || !hasUsableUserLocation(location)) {
     return syncedDeals;
   }
 
   return [...generateSeededDeals(location), ...syncedDeals];
+};
+
+const mergeRemoteDealsWithLocalFallback = (
+  remoteDeals: Deal[],
+  localDeals: Deal[],
+  options?: {
+    allowLocalFallbackWhenRemoteEmpty?: boolean;
+  },
+) => {
+  if (remoteDeals.length > 0 || !options?.allowLocalFallbackWhenRemoteEmpty) {
+    return sanitizeDealsCollection(remoteDeals);
+  }
+
+  return sanitizeDealsCollection(localDeals);
 };
 
 const deriveWebsiteOrigin = (value?: string | null) => {
@@ -2183,6 +2281,19 @@ type DealRow = {
   owner_id: string | null;
 };
 
+type SharedDealsFetchMode = 'admin-all-statuses' | 'public-active-only';
+
+type SharedDealsCacheEntry = {
+  mode: SharedDealsFetchMode;
+  fetchedAt: number;
+  deals: Deal[];
+};
+
+type SharedDealsInFlightEntry = {
+  mode: SharedDealsFetchMode;
+  promise: Promise<Deal[]>;
+};
+
 type DealPublishPayload = Partial<DealRow>;
 
 type SharedPublishFailure = {
@@ -2473,9 +2584,21 @@ const choosePreferredDealRecord = (currentDeal: Deal, nextDeal: Deal) => {
 };
 
 const getDealDedupKey = (deal: Deal) => {
-  const strongestUrl = getFirstSafeExternalUrl(deal.productUrl, deal.websiteUrl, deal.affiliateUrl);
-  if (strongestUrl) {
-    return `url:${strongestUrl}`;
+  // Never dedupe by website origin alone (for example many Amazon deals share one origin).
+  // Prefer product/affiliate links first, then fall back to business+title+offer identity.
+  const productOrAffiliateUrl = getFirstSafeExternalUrl(deal.productUrl, deal.affiliateUrl);
+  if (productOrAffiliateUrl) {
+    return `url:${productOrAffiliateUrl}`;
+  }
+
+  const websiteOrigin = deriveWebsiteOrigin(deal.websiteUrl);
+  if (websiteOrigin) {
+    return [
+      `site:${websiteOrigin.toLowerCase()}`,
+      trimDealTextValue(deal.businessName).toLowerCase(),
+      trimDealTextValue(deal.title).toLowerCase(),
+      trimDealTextValue(deal.offerText).toLowerCase(),
+    ].join('|');
   }
 
   return [
@@ -3427,6 +3550,41 @@ const buildSharedWriteLogDetail = (options: {
     error: options.error ? getSupabaseErrorContext(options.error) : null,
   });
 
+const isTransientSupabaseError = (error: unknown) => {
+  const context = getSupabaseErrorContext(error);
+  const reason = context.reason.toLowerCase();
+  const code = (context.code ?? '').toLowerCase();
+
+  return (
+    reason.includes('timeout')
+    || reason.includes('timed out')
+    || reason.includes('network')
+    || reason.includes('failed to fetch')
+    || reason.includes('connection')
+    || reason.includes('gateway')
+    || reason.includes('temporar')
+    || code === '08001'
+    || code === '08006'
+    || code === '57p01'
+  );
+};
+
+const isDeletePermissionError = (error: unknown) => {
+  const context = getSupabaseErrorContext(error);
+  const reason = context.reason.toLowerCase();
+  const code = (context.code ?? '').toLowerCase();
+
+  return (
+    code === '42501'
+    || reason.includes('permission denied')
+    || reason.includes('not allowed')
+    || reason.includes('row-level security')
+    || reason.includes('rls')
+    || reason.includes('not authenticated')
+    || reason.includes('jwt')
+  );
+};
+
 const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
   const candidate = JSON.parse(input);
 
@@ -3600,6 +3758,7 @@ export default function App() {
     websiteUrl: deal.websiteUrl,
     identityKeys: getDealHiddenIdentityKeys(deal),
     queuedAt: Date.now(),
+    retryCount: 0,
   });
   const enqueuePendingDeleteDescriptorByDescriptor = (descriptor: DealDeleteDescriptor) => {
     setPendingDeleteDescriptors((previous) => {
@@ -3686,6 +3845,10 @@ export default function App() {
   const latestClaimsRef = useRef<Claim[]>([]);
   const latestUserLocationRef = useRef<UserLocation>(DEFAULT_LOCATION);
   const latestHasPreciseLocationRef = useRef(false);
+  const sharedDealsCacheRef = useRef<SharedDealsCacheEntry | null>(null);
+  const sharedDealsInFlightRef = useRef<SharedDealsInFlightEntry | null>(null);
+  const cloudStateSyncTimerRef = useRef<number | null>(null);
+  const lastCloudStateSyncSignatureRef = useRef<string>('');
   const dealEngagementLocksRef = useRef<Set<string>>(new Set());
   const recentExternalActionRef = useRef<{ key: string; at: number } | null>(null);
   const locationRequestIdRef = useRef(0);
@@ -3766,15 +3929,37 @@ export default function App() {
   const [adminAccessError, setAdminAccessError] = useState('');
   const [adminLogs, setAdminLogs] = useState<AdminLogEntry[]>([]);
   const [showAdvancedBackendLogs, setShowAdvancedBackendLogs] = useState(false);
-  const [adminDealsView, setAdminDealsView] = useState<'local' | 'online'>(() => {
-    if (typeof window === 'undefined') return 'local';
+  const [adminDealsTab, setAdminDealsTab] = useState<'drafts' | 'published' | 'expired' | 'online' | 'local'>(() => {
+    if (typeof window === 'undefined') return 'published';
     try {
-      const stored = window.localStorage.getItem('livedrop_admin_deals_view');
-      return stored === 'online' ? 'online' : 'local';
+      const stored = window.localStorage.getItem('livedrop_admin_deals_tab');
+      if (stored === 'drafts' || stored === 'published' || stored === 'expired' || stored === 'online' || stored === 'local') {
+        return stored;
+      }
+      return 'published';
     } catch {
-      return 'local';
+      return 'published';
     }
   });
+  const [adminSelectedDealIds, setAdminSelectedDealIds] = useState<Set<string>>(() => new Set());
+  const [bulkReleaseDrafts, setBulkReleaseDrafts] = useState<Array<Deal | null>>(() =>
+    Array.from({ length: BULK_RELEASE_MAX_DEALS }, () => null),
+  );
+  const [bulkReleaseInitialData, setBulkReleaseInitialData] = useState<Array<Deal | null>>(() =>
+    Array.from({ length: BULK_RELEASE_MAX_DEALS }, () => null),
+  );
+  const [bulkReleaseValidation, setBulkReleaseValidation] = useState<Array<string>>(() =>
+    Array.from({ length: BULK_RELEASE_MAX_DEALS }, () => ''),
+  );
+  const [bulkReleaseOpenSections, setBulkReleaseOpenSections] = useState<Set<number>>(() => new Set([0]));
+  const [bulkReleaseFormKeys, setBulkReleaseFormKeys] = useState<Array<number>>(() =>
+    Array.from({ length: BULK_RELEASE_MAX_DEALS }, () => 0),
+  );
+  const [bulkReleaseCopySource, setBulkReleaseCopySource] = useState<Array<number>>(() =>
+    Array.from({ length: BULK_RELEASE_MAX_DEALS }, (_, index) => (index === 0 ? 1 : 0)),
+  );
+  const [bulkReleaseMessage, setBulkReleaseMessage] = useState('');
+  const [bulkReleaseError, setBulkReleaseError] = useState('');
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => readAdminSessionEmail());
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   const [hasUnsavedFormChanges, setHasUnsavedFormChanges] = useState(false);
@@ -3853,6 +4038,12 @@ export default function App() {
     setDeals(sanitizeDealsCollection(nextDeals as Array<Partial<Deal> | null | undefined>));
   };
 
+  const cloneDealsForCache = (input: Deal[]) => input.map((deal) => ({ ...deal }));
+
+  const invalidateSharedDealsCache = () => {
+    sharedDealsCacheRef.current = null;
+  };
+
   useEffect(() => {
     seenDealIdsRef.current = new Set(deals.map((deal) => deal.id));
     latestDealsRef.current = deals;
@@ -3907,8 +4098,9 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    safeSetLocalStorageItem('livedrop_admin_deals_view', adminDealsView);
-  }, [adminDealsView]);
+    safeSetLocalStorageItem('livedrop_admin_deals_tab', adminDealsTab);
+    setAdminSelectedDealIds(new Set());
+  }, [adminDealsTab]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -4363,93 +4555,263 @@ export default function App() {
     navigateToPath('/');
   };
 
-  const fetchSharedDeals = async () => {
+  const fetchSharedDeals = async (options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
     const includeAllStatuses = isAdminRoute && hasAdminAccess;
-    console.info('[LiveDrop] Querying shared deals table:', `${DEALS_SCHEMA}.${DEALS_TABLE}`, {
-      projectUrl: resolvedSupabaseUrl,
-      includeAllStatuses,
-    });
+    const fetchMode: SharedDealsFetchMode = includeAllStatuses ? 'admin-all-statuses' : 'public-active-only';
+    const now = Date.now();
 
-    const runSharedDealsQuery = async (options: { useStatusFilter: boolean; useCreatedAtSort: boolean }) => {
-      let query = getDealsTableClient().select('*');
-      if (options.useStatusFilter) {
-        query = query.eq('status', 'active');
+    if (!force) {
+      const cachedEntry = sharedDealsCacheRef.current;
+      if (
+        cachedEntry
+        && cachedEntry.mode === fetchMode
+        && now - cachedEntry.fetchedAt < SHARED_DEALS_CACHE_TTL_MS
+      ) {
+        return cloneDealsForCache(cachedEntry.deals);
       }
-      if (options.useCreatedAtSort) {
-        query = query.order('created_at', { ascending: false });
+
+      const inFlightEntry = sharedDealsInFlightRef.current;
+      if (inFlightEntry && inFlightEntry.mode === fetchMode) {
+        return inFlightEntry.promise;
       }
-      return query;
-    };
+    }
 
-    let useStatusFilter = !includeAllStatuses;
-    let useCreatedAtSort = true;
+    const requestPromise = (async () => {
+      console.info('[LiveDrop] Querying shared deals table:', `${DEALS_SCHEMA}.${DEALS_TABLE}`, {
+        projectUrl: resolvedSupabaseUrl,
+        includeAllStatuses,
+        force,
+      });
 
-    let { data, error } = await runSharedDealsQuery({
-      useStatusFilter,
-      useCreatedAtSort,
-    });
+      let selectedColumns = [...PUBLIC_DEALS_SCHEMA_FIELDS];
+      let useStatusFilter = !includeAllStatuses;
+      let useCreatedAtSort = true;
+      try {
+        const { columns } = await fetchDealsSchemaColumns();
+        const availableColumns = new Set(columns);
+        const schemaCompatibleColumns = PUBLIC_DEALS_SCHEMA_FIELDS.filter((column) => availableColumns.has(column));
 
-    if (error) {
-      const missingColumns = extractMissingDealColumns(error);
-      const needsStatusFallback = missingColumns.includes('status') && useStatusFilter;
-      const needsCreatedAtFallback = missingColumns.includes('created_at') && useCreatedAtSort;
+        if (schemaCompatibleColumns.length > 0) {
+          selectedColumns = schemaCompatibleColumns;
+        }
 
-      if (needsStatusFallback || needsCreatedAtFallback) {
+        useStatusFilter = !includeAllStatuses && availableColumns.has('status');
+        useCreatedAtSort = availableColumns.has('created_at');
+      } catch (schemaError) {
+        console.warn('[LiveDrop] Could not pre-load deals schema columns before fetch', schemaError);
+        selectedColumns = [
+          'id',
+          'status',
+          'business_type',
+          'business_name',
+          'merchant',
+          'image_url',
+          'image',
+          'title',
+          'description',
+          'offer_text',
+          'affiliate_url',
+          'website_url',
+          'product_link',
+          'created_at',
+          'category',
+          'claim_count',
+          'like_count',
+          'dislike_count',
+          'share_count',
+        ];
+      }
+
+      const runSharedDealsQuery = async (queryOptions: { useStatusFilter: boolean; useCreatedAtSort: boolean }) => {
+        const selectColumns = selectedColumns.length > 0 ? selectedColumns.join(',') : 'id';
+        let query = getDealsTableClient().select(selectColumns);
+        if (queryOptions.useStatusFilter) {
+          query = query.eq('status', 'active');
+        }
+        if (queryOptions.useCreatedAtSort) {
+          query = query.order('created_at', { ascending: false });
+        }
+        return query;
+      };
+
+      const isTransientSharedDealsError = (queryError: unknown) => {
+        const reason = getSupabaseErrorContext(queryError).reason.toLowerCase();
+        return (
+          reason.includes('timeout')
+          || reason.includes('timed out')
+          || reason.includes('network')
+          || reason.includes('fetch')
+          || reason.includes('failed to fetch')
+          || reason.includes('gateway timeout')
+          || reason.includes('connection')
+        );
+      };
+
+      let attempt = 0;
+      let data: unknown[] | null = null;
+      let error: unknown = null;
+      const maxAttempts = 12;
+
+      while (attempt < maxAttempts) {
+        const result = await runSharedDealsQuery({
+          useStatusFilter,
+          useCreatedAtSort,
+        });
+        data = result.data as unknown[] | null;
+        error = result.error;
+        if (!error) {
+          break;
+        }
+
+        const missingColumns = extractMissingDealColumns(error);
+        const needsStatusFallback = missingColumns.includes('status') && useStatusFilter;
+        const needsCreatedAtFallback = missingColumns.includes('created_at') && useCreatedAtSort;
+        const missingProjectedColumns = missingColumns.filter((column) =>
+          selectedColumns.includes(column as (typeof PUBLIC_DEALS_SCHEMA_FIELDS)[number]),
+        );
+        const needsProjectionFallback = missingProjectedColumns.length > 0;
+        const shouldRetryTransiently = missingColumns.length === 0 && isTransientSharedDealsError(error) && attempt < 2;
+
+        if (!(needsStatusFallback || needsCreatedAtFallback || needsProjectionFallback || shouldRetryTransiently)) {
+          break;
+        }
+
         if (needsStatusFallback) {
           useStatusFilter = false;
         }
         if (needsCreatedAtFallback) {
           useCreatedAtSort = false;
         }
+        if (needsProjectionFallback) {
+          selectedColumns = selectedColumns.filter((column) => !missingProjectedColumns.includes(column));
+          if (selectedColumns.length === 0) {
+            selectedColumns = ['id'];
+          }
+        }
 
-        console.warn('[LiveDrop] Retrying shared deals fetch with legacy-compatible query', {
+        console.warn('[LiveDrop] Retrying shared deals fetch with compatibility fallback', {
           projectUrl: resolvedSupabaseUrl,
+          attempt,
           missingColumns,
           useStatusFilter,
           useCreatedAtSort,
+          selectedColumns,
+          shouldRetryTransiently,
         });
 
-        pushAdminLog('info', 'Shared deals fetch retried with legacy-compatible query', buildSharedWriteLogDetail({
+        pushAdminLog('info', 'Shared deals fetch retried with compatibility fallback', buildSharedWriteLogDetail({
           operation: 'select',
           error,
           missingColumns,
           payloadKeys: [
+            `attempt:${attempt + 1}`,
             useStatusFilter ? 'status-filter:on' : 'status-filter:off',
             useCreatedAtSort ? 'created_at-sort:on' : 'created_at-sort:off',
+            `select-columns:${selectedColumns.join(',')}`,
+            shouldRetryTransiently ? 'retry:transient-network' : 'retry:schema-compat',
           ],
         }));
 
-        const retryResult = await runSharedDealsQuery({
-          useStatusFilter,
-          useCreatedAtSort,
-        });
-        data = retryResult.data;
-        error = retryResult.error;
+        attempt += 1;
+        if (shouldRetryTransiently) {
+          await new Promise((resolve) => globalThis.setTimeout(resolve, 300 * attempt));
+        }
       }
+
+      if (error) {
+        console.error('[LiveDrop] Supabase deals query failed', {
+          projectUrl: resolvedSupabaseUrl,
+          schema: DEALS_SCHEMA,
+          table: DEALS_TABLE,
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        pushAdminLog('error', 'Shared deals fetch failed', buildSharedWriteLogDetail({
+          operation: 'select',
+          error,
+        }));
+        throw error;
+      }
+
+      pushAdminLog('info', `Fetched ${data?.length ?? 0} shared deals from Supabase`, buildSharedWriteLogDetail({
+        operation: 'select',
+      }));
+
+      const mappedDeals = (data ?? []).map((row) => mapDealRowToDeal(row as Partial<DealRow>));
+      sharedDealsCacheRef.current = {
+        mode: fetchMode,
+        fetchedAt: Date.now(),
+        deals: cloneDealsForCache(mappedDeals),
+      };
+      return mappedDeals;
+    })();
+
+    if (!force) {
+      sharedDealsInFlightRef.current = {
+        mode: fetchMode,
+        promise: requestPromise,
+      };
     }
 
+    try {
+      return await requestPromise;
+    } finally {
+      if (sharedDealsInFlightRef.current?.promise === requestPromise) {
+        sharedDealsInFlightRef.current = null;
+      }
+    }
+  };
+
+  const fetchSharedDealById = async (dealId: string) => {
+    if (!supabase || !hasSupabaseConfig) {
+      return null;
+    }
+
+    const normalizedId = ensureUuid(dealId);
+    let selectedColumns = [...PUBLIC_DEALS_SCHEMA_FIELDS];
+
+    try {
+      const { columns } = await fetchDealsSchemaColumns();
+      const availableColumns = new Set(columns);
+      const compatibleColumns = PUBLIC_DEALS_SCHEMA_FIELDS.filter((column) => availableColumns.has(column));
+      if (compatibleColumns.length > 0) {
+        selectedColumns = compatibleColumns;
+      }
+    } catch (schemaError) {
+      console.warn('[LiveDrop] Could not pre-load deals schema columns before single deal fetch', schemaError);
+      selectedColumns = [
+        'id',
+        'status',
+        'business_type',
+        'business_name',
+        'merchant',
+        'image_url',
+        'image',
+        'title',
+        'description',
+        'offer_text',
+        'affiliate_url',
+        'website_url',
+        'product_link',
+        'created_at',
+        'category',
+      ];
+    }
+
+    const selectColumns = selectedColumns.length > 0 ? selectedColumns.join(',') : 'id';
+    const { data, error } = await getDealsTableClient()
+      .select(selectColumns)
+      .eq('id', normalizedId)
+      .maybeSingle();
+
     if (error) {
-      console.error('[LiveDrop] Supabase deals query failed', {
-        projectUrl: resolvedSupabaseUrl,
-        schema: DEALS_SCHEMA,
-        table: DEALS_TABLE,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-      });
-      pushAdminLog('error', 'Shared deals fetch failed', buildSharedWriteLogDetail({
-        operation: 'select',
-        error,
-      }));
       throw error;
     }
 
-    pushAdminLog('info', `Fetched ${data?.length ?? 0} shared deals from Supabase`, buildSharedWriteLogDetail({
-      operation: 'select',
-    }));
-
-    return (data ?? []).map((row) => mapDealRowToDeal(row as Partial<DealRow>));
+    return data ? mapDealRowToDeal(data as Partial<DealRow>) : null;
   };
 
   const publishDealToBackend = async (deal: Deal) => {
@@ -4521,6 +4883,7 @@ export default function App() {
       missingColumns,
     }));
 
+    invalidateSharedDealsCache();
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
@@ -4601,6 +4964,7 @@ export default function App() {
       missingColumns,
     }));
 
+    invalidateSharedDealsCache();
     const inputDealsById = new Map(inputDeals.map((deal) => [ensureUuid(deal.id), deal]));
     return (data ?? []).map((row) => {
       const fallbackDeal = inputDealsById.get(String((row as Partial<DealRow>).id ?? ''));
@@ -4677,6 +5041,7 @@ export default function App() {
       payloadKeys,
       missingColumns,
     }));
+    invalidateSharedDealsCache();
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
@@ -4749,6 +5114,7 @@ export default function App() {
       missingColumns,
     }));
 
+    invalidateSharedDealsCache();
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
@@ -4769,124 +5135,110 @@ const deleteDealFromBackend = async (
   if (deleteIds.length === 0) {
     return {
       deletedIds: [],
+      alreadyAbsent: true,
+      strategy: 'noop' as const,
     };
   }
 
-  const deleteQuery = getDealsTableClient().delete();
-  const { data: deletedRows, error } = deleteIds.length === 1
-    ? await deleteQuery.eq('id', deleteIds[0]).select('id')
-    : await deleteQuery.in('id', deleteIds).select('id');
+  const executeDeleteById = async () => {
+    const deleteQuery = getDealsTableClient().delete();
+    return deleteIds.length === 1
+      ? deleteQuery.eq('id', deleteIds[0]).select('id')
+      : deleteQuery.in('id', deleteIds).select('id');
+  };
 
-  if (error) {
-    console.error('[LiveDrop] Supabase deal delete failed', {
-      projectUrl: resolvedSupabaseUrl,
-      schema: DEALS_SCHEMA,
-      table: DEALS_TABLE,
-      dealId: deal.id,
-      deleteIds,
-      code: error.code,
-      message: error.message,
-      details: error.details,
-      hint: error.hint,
-    });
-    pushAdminLog('error', 'Shared deal delete failed', buildSharedWriteLogDetail({
-      operation: 'delete',
-      payload: {
-        dealId: deal.id,
-        deleteIds,
-      },
-      error,
-    }));
-    throw error;
-  }
+  const collectDeletedIds = (rows: Array<{ id?: string | null }> | null) =>
+    new Set(
+      (rows ?? [])
+        .map((row) => String(row?.id ?? '').trim())
+        .filter(Boolean),
+    );
 
-  const deletedIds = new Set(
-    (deletedRows ?? [])
-      .map((row) => String((row as { id?: string | null }).id ?? '').trim())
-      .filter(Boolean),
-  );
+  let deletedRows: Array<{ id?: string | null }> | null = null;
+  let strategy: 'hard-delete' | 'soft-delete' = 'hard-delete';
+  const { data: deleteData, error: deleteError } = await executeDeleteById();
+  deletedRows = deleteData as Array<{ id?: string | null }> | null;
 
-  const targetIdentityKeys = new Set(
-    (Array.isArray(deal.identityKeys) && deal.identityKeys.length > 0
-      ? deal.identityKeys
-      : getDealHiddenIdentityKeys(deal)
-    ).filter(Boolean),
-  );
-  const businessType = deal.businessType === 'online' ? 'online' : 'local';
-  const { data: candidateRows, error: candidateError } = await getDealsTableClient()
-    .select('*')
-    .eq('business_type', businessType);
-
-  if (candidateError) {
-    console.warn('[LiveDrop] Could not load candidates for delete matching', candidateError);
-  } else {
-    const matchedCandidateIds = (candidateRows ?? [])
-      .map((row) => {
-        const rowId = String((row as { id?: string | null }).id ?? '').trim();
-        if (!rowId || deletedIds.has(rowId)) return '';
-
-        const candidateDeal = mapDealRowToDeal(row as Partial<DealRow>);
-        const candidateIdentityKeys = getDealHiddenIdentityKeys(candidateDeal);
-        if (candidateIdentityKeys.some((key) => targetIdentityKeys.has(key))) {
-          return rowId;
+  if (deleteError) {
+    if (isDeletePermissionError(deleteError)) {
+      try {
+        const { columns } = await fetchDealsSchemaColumns();
+        if (columns.includes('status')) {
+          const softDeleteQuery = getDealsTableClient().update({ status: 'draft' });
+          const { data: softDeletedRows, error: softDeleteError } = deleteIds.length === 1
+            ? await softDeleteQuery.eq('id', deleteIds[0]).select('id')
+            : await softDeleteQuery.in('id', deleteIds).select('id');
+          if (softDeleteError) {
+            throw softDeleteError;
+          }
+          deletedRows = softDeletedRows as Array<{ id?: string | null }> | null;
+          strategy = 'soft-delete';
+        } else {
+          throw deleteError;
         }
-        return '';
-      })
-      .filter(Boolean);
-
-    if (matchedCandidateIds.length > 0) {
-      const { data: matchedDeletedRows, error: matchedDeleteError } = await getDealsTableClient()
-        .delete()
-        .in('id', matchedCandidateIds)
-        .select('id');
-
-      if (matchedDeleteError) {
-        console.error('[LiveDrop] Supabase canonical delete failed', {
+      } catch (softDeleteFailure) {
+        console.error('[LiveDrop] Supabase soft-delete fallback failed', {
           projectUrl: resolvedSupabaseUrl,
           schema: DEALS_SCHEMA,
           table: DEALS_TABLE,
           dealId: deal.id,
-          matchedCandidateIds,
-          code: matchedDeleteError.code,
-          message: matchedDeleteError.message,
-          details: matchedDeleteError.details,
-          hint: matchedDeleteError.hint,
+          deleteIds,
+          error: softDeleteFailure,
         });
-        pushAdminLog('error', 'Shared canonical delete failed', buildSharedWriteLogDetail({
+        pushAdminLog('error', 'Shared soft delete fallback failed', buildSharedWriteLogDetail({
           operation: 'delete',
           payload: {
             dealId: deal.id,
-            matchedCandidateIds,
+            deleteIds,
+            strategy: 'soft-delete',
           },
-          error: matchedDeleteError,
+          error: softDeleteFailure,
         }));
-        throw matchedDeleteError;
+        throw softDeleteFailure;
       }
-
-      (matchedDeletedRows ?? []).forEach((row) => {
-        const matchedDeletedId = String((row as { id?: string | null }).id ?? '').trim();
-        if (matchedDeletedId) {
-          deletedIds.add(matchedDeletedId);
-        }
+    } else {
+      console.error('[LiveDrop] Supabase deal delete failed', {
+        projectUrl: resolvedSupabaseUrl,
+        schema: DEALS_SCHEMA,
+        table: DEALS_TABLE,
+        dealId: deal.id,
+        deleteIds,
+        code: (deleteError as { code?: string }).code,
+        message: (deleteError as { message?: string }).message,
       });
+      pushAdminLog('error', 'Shared deal delete failed', buildSharedWriteLogDetail({
+        operation: 'delete',
+        payload: {
+          dealId: deal.id,
+          deleteIds,
+          strategy: 'hard-delete',
+        },
+        error: deleteError,
+      }));
+      throw deleteError;
     }
   }
 
+  const deletedIds = collectDeletedIds(deletedRows);
+  invalidateSharedDealsCache();
   pushAdminLog(
     'info',
-    `Deleted deal ${deal.id} from shared backend (${deletedIds.size} row${deletedIds.size === 1 ? '' : 's'})`,
+    `${strategy === 'hard-delete' ? 'Deleted' : 'Soft-deleted'} deal ${deal.id} in shared backend (${deletedIds.size} row${deletedIds.size === 1 ? '' : 's'})`,
     buildSharedWriteLogDetail({
       operation: 'delete',
       payload: {
         dealId: deal.id,
         deleteIds,
         deletedIds: [...deletedIds],
+        strategy,
       },
     }),
   );
 
   return {
     deletedIds: [...deletedIds],
+    alreadyAbsent: deletedIds.size === 0,
+    strategy,
   };
 };
 
@@ -5630,6 +5982,20 @@ const deleteDealFromBackend = async (
       : null;
 
     const mergedState = mergeCloudState(getLocalCloudState(), remoteState ?? emptyCloudAppState);
+    const mergedStateSignature = JSON.stringify({
+      claims: mergedState.claims,
+      catalog_coupons: mergedState.catalog_coupons,
+      notifications: mergedState.notifications,
+      preferences: mergedState.preferences,
+    });
+    const remoteStateSignature = remoteState
+      ? JSON.stringify({
+          claims: remoteState.claims,
+          catalog_coupons: remoteState.catalog_coupons,
+          notifications: remoteState.notifications,
+          preferences: remoteState.preferences,
+        })
+      : '';
 
     setClaims(mergedState.claims);
     setCatalogCoupons(refreshCatalogCoupons(mergedState.catalog_coupons).coupons);
@@ -5641,15 +6007,18 @@ const deleteDealFromBackend = async (
     setSubscriptionStatus((profile?.subscription_status as SubscriptionStatus | undefined) ?? 'inactive');
     setSubscriptionPlan(profile?.subscription_plan ?? null);
     setSubscriptionMessage('');
+    lastCloudStateSyncSignatureRef.current = mergedStateSignature;
 
-    await supabase.from(USER_STATE_TABLE).upsert({
-      user_id: user.id,
-      claims: mergedState.claims,
-      catalog_coupons: mergedState.catalog_coupons,
-      notifications: mergedState.notifications,
-      preferences: mergedState.preferences,
-      updated_at: new Date().toISOString(),
-    });
+    if (!appState || mergedStateSignature !== remoteStateSignature) {
+      await supabase.from(USER_STATE_TABLE).upsert({
+        user_id: user.id,
+        claims: mergedState.claims,
+        catalog_coupons: mergedState.catalog_coupons,
+        notifications: mergedState.notifications,
+        preferences: mergedState.preferences,
+        updated_at: new Date().toISOString(),
+      });
+    }
 
     cloudHydratedRef.current = true;
     setCloudReady(true);
@@ -5746,6 +6115,9 @@ const deleteDealFromBackend = async (
     let cancelled = false;
 
     const savedDeals = readStoredDeals();
+    if (savedDeals.length > 0) {
+      safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, JSON.stringify(buildDealsStorageSnapshot(savedDeals)));
+    }
     const savedClaims = readStoredClaims();
     const savedCatalog = readStoredCatalog();
     const savedNotifications = readStoredNotifications();
@@ -5754,6 +6126,7 @@ const deleteDealFromBackend = async (
       savedDeals,
       latestUserLocationRef.current,
       latestHasPreciseLocationRef.current,
+      { includeManagedOnlinePipeline: !hasSupabaseConfig },
     );
 
     applyDealsState(fallbackDeals);
@@ -5789,15 +6162,15 @@ const deleteDealFromBackend = async (
         const remoteDeals = await fetchSharedDeals();
         if (cancelled) return;
 
-        const nextDeals = remoteDeals.length > 0
-          ? composeDealsWithLocationContext(
-              remoteDeals,
-              latestUserLocationRef.current,
-              latestHasPreciseLocationRef.current,
-            )
-          : fallbackDeals;
+        const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(remoteDeals, savedDeals);
+        const nextDeals = composeDealsWithLocationContext(
+          mergedHydratedDeals,
+          latestUserLocationRef.current,
+          latestHasPreciseLocationRef.current,
+          { includeManagedOnlinePipeline: false },
+        );
         applyDealsState(nextDeals);
-        setDealsError(remoteDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
+        setDealsError(remoteDeals.length > 0 ? '' : 'Shared feed is empty.');
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to load shared deals:', error);
@@ -5859,6 +6232,11 @@ const deleteDealFromBackend = async (
         setCloudSyncEnabled(false);
         setCloudReady(true);
         cloudHydratedRef.current = false;
+        lastCloudStateSyncSignatureRef.current = '';
+        if (cloudStateSyncTimerRef.current !== null) {
+          window.clearTimeout(cloudStateSyncTimerRef.current);
+          cloudStateSyncTimerRef.current = null;
+        }
         setSubscriptionStatus('inactive');
         setSubscriptionPlan(null);
         setSubscriptionMessage('');
@@ -5888,7 +6266,9 @@ const deleteDealFromBackend = async (
     const applyFallbackLocalSeedDeals = (fallbackLocation: UserLocation) => {
       setDeals((prevDeals) => {
         const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-        const nextDeals = composeDealsWithLocationContext(preservedDeals, fallbackLocation, true);
+        const nextDeals = composeDealsWithLocationContext(preservedDeals, fallbackLocation, true, {
+          includeManagedOnlinePipeline: !hasSupabaseConfig,
+        });
         return nextDeals;
       });
     };
@@ -5950,7 +6330,9 @@ const deleteDealFromBackend = async (
 
       setDeals((prevDeals) => {
         const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-        const nextDeals = composeDealsWithLocationContext(preservedDeals, newLocation, true);
+        const nextDeals = composeDealsWithLocationContext(preservedDeals, newLocation, true, {
+          includeManagedOnlinePipeline: !hasSupabaseConfig,
+        });
         return nextDeals;
       });
     };
@@ -6030,7 +6412,9 @@ const deleteDealFromBackend = async (
 
     setDeals((prevDeals) => {
       const preservedDeals = prevDeals.filter((deal) => !isManagedLocalSeedDeal(deal));
-      const nextDeals = composeDealsWithLocationContext(preservedDeals, nextLocation, true);
+      const nextDeals = composeDealsWithLocationContext(preservedDeals, nextLocation, true, {
+        includeManagedOnlinePipeline: !hasSupabaseConfig,
+      });
       return nextDeals;
     });
 
@@ -6043,6 +6427,10 @@ const deleteDealFromBackend = async (
   }, []);
 
   useEffect(() => {
+    if (hasSupabaseConfig) {
+      return;
+    }
+
     const runMockDealRefresh = () => {
       setDeals((prevDeals) => {
         const nextDeals = syncSharedOnlineDeals(prevDeals);
@@ -6064,7 +6452,7 @@ const deleteDealFromBackend = async (
         window.clearInterval(intervalId);
       }
     };
-  }, []);
+  }, [hasSupabaseConfig]);
 
   // Fetch city name from coordinates
   useEffect(() => {
@@ -6198,8 +6586,10 @@ const deleteDealFromBackend = async (
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
-    const persistedDeals = deals.filter((deal) => !isManagedLocalSeedDeal(deal));
-    safeSetLocalStorageItem(DEALS_STORAGE_KEY, JSON.stringify(persistedDeals));
+    const persisted = persistDealsSnapshot(deals);
+    if (!persisted) {
+      console.warn('[LiveDrop] Could not persist deals snapshot to localStorage. Local-only changes may not survive reload.');
+    }
   }, [deals]);
 
   useEffect(() => {
@@ -6219,10 +6609,15 @@ const deleteDealFromBackend = async (
   }, [role]);
 
   useEffect(() => {
-    if (!supabase || !authUser || !cloudSyncEnabled || !cloudHydratedRef.current) return;
+    if (!supabase || !authUser || !cloudSyncEnabled || !cloudHydratedRef.current) {
+      if (cloudStateSyncTimerRef.current !== null) {
+        window.clearTimeout(cloudStateSyncTimerRef.current);
+        cloudStateSyncTimerRef.current = null;
+      }
+      return;
+    }
 
-    void supabase.from(USER_STATE_TABLE).upsert({
-      user_id: authUser.id,
+    const nextCloudState = {
       claims,
       catalog_coupons: catalogCoupons,
       notifications,
@@ -6232,8 +6627,42 @@ const deleteDealFromBackend = async (
         selectedFeedFilter,
         role,
       },
-      updated_at: new Date().toISOString(),
-    });
+    };
+    const nextSignature = JSON.stringify(nextCloudState);
+    if (lastCloudStateSyncSignatureRef.current === nextSignature) {
+      return;
+    }
+
+    if (cloudStateSyncTimerRef.current !== null) {
+      window.clearTimeout(cloudStateSyncTimerRef.current);
+      cloudStateSyncTimerRef.current = null;
+    }
+
+    const userId = authUser.id;
+    cloudStateSyncTimerRef.current = window.setTimeout(() => {
+      void supabase.from(USER_STATE_TABLE).upsert({
+        user_id: userId,
+        ...nextCloudState,
+        updated_at: new Date().toISOString(),
+      }).then(({ error }) => {
+        if (error) {
+          console.warn('[LiveDrop] Cloud app state sync failed', {
+            userId,
+            message: error.message,
+            code: error.code,
+          });
+          return;
+        }
+        lastCloudStateSyncSignatureRef.current = nextSignature;
+      });
+    }, CLOUD_STATE_SYNC_DEBOUNCE_MS);
+
+    return () => {
+      if (cloudStateSyncTimerRef.current !== null) {
+        window.clearTimeout(cloudStateSyncTimerRef.current);
+        cloudStateSyncTimerRef.current = null;
+      }
+    };
   }, [authUser, claims, catalogCoupons, notifications, radius, role, selectedCategory, selectedFeedFilter, cloudSyncEnabled]);
 
   useEffect(() => {
@@ -6535,15 +6964,18 @@ const deleteDealFromBackend = async (
     };
 
     let publishedDeal = localDeal;
-    let sharedWriteSucceeded = false;
     const sharedWriteMode: SharedPublishFailure['mode'] = editingDealId ? 'update' : 'insert';
+    const requiresSharedPersistence = Boolean(
+      supabase
+      && hasSupabaseConfig
+      && (shouldPublish || isEditingExistingDeal),
+    );
 
     if (supabase && hasSupabaseConfig) {
       try {
         publishedDeal = editingDealId
           ? await upsertDealInBackend(localDeal)
           : await publishDealToBackend(localDeal);
-        sharedWriteSucceeded = true;
         setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
@@ -6552,6 +6984,11 @@ const deleteDealFromBackend = async (
         setLastSharedPublishFailure(failure);
         pushAdminLog('error', `Using local fallback after shared ${sharedWriteMode} failure`, formatAdminLogDetail(failure));
         setDealsError(`Could not ${sharedWriteMode} to ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Showing your local copy for now.`);
+        if (requiresSharedPersistence) {
+          setPortalSuccessMessage('');
+          pushToast('Save failed. Shared database was not updated.', 'error');
+          return;
+        }
       }
     } else if (shouldPublish) {
       setLastSharedPublishFailure(null);
@@ -6559,7 +6996,7 @@ const deleteDealFromBackend = async (
     }
 
     setDeals((prev) => {
-      const mergedDeals = [
+      return [
         publishedDeal,
         ...prev.filter((deal) =>
           deal.id !== publishedDeal.id &&
@@ -6567,12 +7004,6 @@ const deleteDealFromBackend = async (
           deal.id !== editingDealId,
         ),
       ];
-
-      if (publishedDeal.businessType === 'online') {
-        return syncSharedOnlineDeals(mergedDeals);
-      }
-
-      return mergedDeals;
     });
     setDealDraft(null);
     setPortalFieldSnapshot(null);
@@ -6680,6 +7111,184 @@ const deleteDealFromBackend = async (
     setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
+  };
+
+  const isBulkDraftEmpty = (draft: Deal | null) => {
+    if (!draft) return true;
+    const signals = [
+      draft.businessName,
+      draft.title,
+      draft.description,
+      draft.offerText,
+      draft.imageUrl,
+      draft.websiteUrl,
+      draft.productUrl,
+      draft.affiliateUrl,
+    ];
+    return signals.every((value) => !value || !value.trim());
+  };
+
+  const buildBulkDraftPayload = (draft: Deal) => {
+    const { id, createdAt, ...rest } = draft;
+    return rest as Omit<Deal, 'id' | 'createdAt'>;
+  };
+
+  const bumpBulkFormKey = (index: number) => {
+    setBulkReleaseFormKeys((prev) => {
+      const next = [...prev];
+      next[index] = (next[index] ?? 0) + 1;
+      return next;
+    });
+  };
+
+  const handleClearBulkSection = (index: number) => {
+    setBulkReleaseInitialData((prev) => {
+      const next = [...prev];
+      next[index] = null;
+      return next;
+    });
+    setBulkReleaseDrafts((prev) => {
+      const next = [...prev];
+      next[index] = null;
+      return next;
+    });
+    setBulkReleaseValidation((prev) => {
+      const next = [...prev];
+      next[index] = '';
+      return next;
+    });
+    setBulkReleaseMessage('');
+    setBulkReleaseError('');
+    bumpBulkFormKey(index);
+  };
+
+  const handleCopyBulkSection = (targetIndex: number) => {
+    const sourceIndex = bulkReleaseCopySource[targetIndex];
+    const sourceDraft = bulkReleaseDrafts[sourceIndex];
+    if (!sourceDraft || isBulkDraftEmpty(sourceDraft)) {
+      setBulkReleaseError(`Deal ${sourceIndex + 1} is empty. Add details before copying.`);
+      setBulkReleaseMessage('');
+      return;
+    }
+
+    const nextSeed: Deal = {
+      ...sourceDraft,
+      id: createUuid(),
+      createdAt: Date.now(),
+      status: sourceDraft.status ?? 'draft',
+    };
+
+    setBulkReleaseInitialData((prev) => {
+      const next = [...prev];
+      next[targetIndex] = nextSeed;
+      return next;
+    });
+    setBulkReleaseDrafts((prev) => {
+      const next = [...prev];
+      next[targetIndex] = nextSeed;
+      return next;
+    });
+    setBulkReleaseValidation((prev) => {
+      const next = [...prev];
+      next[targetIndex] = '';
+      return next;
+    });
+    setBulkReleaseMessage(`Copied deal ${sourceIndex + 1} into deal ${targetIndex + 1}.`);
+    setBulkReleaseError('');
+    bumpBulkFormKey(targetIndex);
+  };
+
+  const toggleBulkSectionOpen = (index: number) => {
+    setBulkReleaseOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkSaveDrafts = async () => {
+    const entries = bulkReleaseDrafts
+      .map((draft, index) => ({ draft, index }))
+      .filter(({ draft }) => !isBulkDraftEmpty(draft));
+
+    if (entries.length === 0) {
+      setBulkReleaseError('No bulk sections have content yet.');
+      setBulkReleaseMessage('');
+      return;
+    }
+
+    setBulkReleaseError('');
+    setBulkReleaseMessage('');
+    setEditingDealId(null);
+
+    let savedCount = 0;
+    for (const entry of entries) {
+      try {
+        await handleCreateDeal(buildBulkDraftPayload(entry.draft as Deal), { mode: 'draft' });
+        savedCount += 1;
+      } catch (error) {
+        console.error('[LiveDrop] Bulk draft save failed', {
+          dealIndex: entry.index,
+          error,
+        });
+      }
+    }
+
+    setBulkReleaseMessage(`Saved ${savedCount} draft${savedCount === 1 ? '' : 's'} from the bulk release.`);
+  };
+
+  const handleBulkPublishAll = async () => {
+    const entries = bulkReleaseDrafts
+      .map((draft, index) => ({ draft, index, error: bulkReleaseValidation[index] }))
+      .filter(({ draft }) => !isBulkDraftEmpty(draft));
+
+    if (entries.length === 0) {
+      setBulkReleaseError('No bulk sections have content yet.');
+      setBulkReleaseMessage('');
+      return;
+    }
+
+    const invalidEntries = entries.filter((entry) => Boolean(entry.error));
+    if (invalidEntries.length === entries.length) {
+      setBulkReleaseError(`Every filled deal needs attention: ${invalidEntries.map((entry) => `Deal ${entry.index + 1}: ${entry.error}`).join(' | ')}`);
+      setBulkReleaseMessage('');
+      return;
+    }
+
+    setBulkReleaseError('');
+    setBulkReleaseMessage('');
+    setEditingDealId(null);
+
+    let publishedCount = 0;
+    const failures: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.error) {
+        failures.push(`Deal ${entry.index + 1}: ${entry.error}`);
+        continue;
+      }
+
+      try {
+        await handleCreateDeal(buildBulkDraftPayload(entry.draft as Deal), { mode: 'publish' });
+        publishedCount += 1;
+      } catch (error) {
+        failures.push(`Deal ${entry.index + 1}: publish failed`);
+        console.error('[LiveDrop] Bulk publish failed', {
+          dealIndex: entry.index,
+          error,
+        });
+      }
+    }
+
+    if (failures.length > 0) {
+      setBulkReleaseError(failures.join(' | '));
+    }
+
+    setBulkReleaseMessage(`Published ${publishedCount} deal${publishedCount === 1 ? '' : 's'} from the bulk release.`);
   };
 
   const createReusedDealPayload = (
@@ -6905,6 +7514,104 @@ const deleteDealFromBackend = async (
     setIsCreating(false);
   };
 
+  const createDuplicateDealPayload = (sourceDeal: Deal): Deal => {
+    const createdAt = Date.now();
+    const expiresAt = createdAt + 30 * 24 * 60 * 60 * 1000;
+    return {
+      ...sourceDeal,
+      id: createUuid(),
+      status: 'draft',
+      createdAt,
+      expiresAt,
+      currentClaims: 0,
+      claimCount: 0,
+      hasTimer: false,
+    };
+  };
+
+  const mergeUpdatedDealsIntoState = (nextDeals: Deal[]) => {
+    setDeals((prevDeals) => {
+      const nextMap = new Map<string, Deal>();
+      prevDeals.forEach((deal) => nextMap.set(deal.id, deal));
+      nextDeals
+        .filter((deal) => !isTombstonedDeal(deal))
+        .forEach((deal) => nextMap.set(deal.id, deal));
+      return [...nextMap.values()].sort((left, right) => right.createdAt - left.createdAt);
+    });
+  };
+
+  const handleAdminDuplicateDeal = (deal: Deal) => {
+    const nextDraft = createDuplicateDealPayload(deal);
+    setPortalSuccessMessage('');
+    setEditingDealId(null);
+    setHasUnsavedFormChanges(false);
+    setBulkImportCandidates([]);
+    setSelectedBulkImportIndex(0);
+    setDealDraft(nextDraft);
+    setPortalFieldSnapshot(nextDraft);
+    setIsCreating(true);
+  };
+
+  const handleAdminMarkExpired = async (deal: Deal) => {
+    await handleAdminSetDealStatus(deal, 'expired');
+  };
+
+  const handleBulkPublishSelected = async (selectedDeals: Deal[]) => {
+    if (selectedDeals.length === 0) return;
+    const now = Date.now();
+    const publishableDeals = selectedDeals.map((deal) => ({
+      ...deal,
+      status: 'active' as const,
+      expiresAt: deal.expiresAt > now ? deal.expiresAt : now + 30 * 60 * 1000,
+    }));
+
+    let persistedDeals = publishableDeals;
+    let sharedWriteSucceeded = false;
+
+    if (supabase && hasSupabaseConfig) {
+      try {
+        persistedDeals = await publishDealsToBackend(publishableDeals);
+        sharedWriteSucceeded = true;
+        setLastSharedPublishFailure(null);
+        setDealsError('');
+      } catch (error) {
+        const sampleFailure = createSharedPublishFailure(publishableDeals[0], 'insert', error);
+        setLastSharedPublishFailure(sampleFailure);
+        setDealsError(`Could not bulk publish deals to ${sampleFailure.schema}.${sampleFailure.table}. ${sampleFailure.reason}. Showing your local copies for now.`);
+      }
+    }
+
+    mergeUpdatedDealsIntoState(persistedDeals);
+    setPortalSuccessMessage(sharedWriteSucceeded
+      ? `Published ${persistedDeals.length} deals.`
+      : `Published ${persistedDeals.length} deals locally. Shared sync will retry later.`);
+    pushToast(`Published ${persistedDeals.length} deals`, 'new_deal');
+    setAdminSelectedDealIds(new Set());
+  };
+
+  const handleBulkExpireSelected = async (selectedDeals: Deal[]) => {
+    if (selectedDeals.length === 0) return;
+    const expiredDeals = selectedDeals.map((deal) => ({ ...deal, status: 'expired' as const }));
+    let persistedDeals = expiredDeals;
+
+    if (supabase && hasSupabaseConfig) {
+      try {
+        persistedDeals = await publishDealsToBackend(expiredDeals);
+        setLastSharedPublishFailure(null);
+        setDealsError('');
+      } catch (error) {
+        const sampleFailure = createSharedPublishFailure(expiredDeals[0], 'insert', error);
+        setLastSharedPublishFailure(sampleFailure);
+        setDealsError(`Could not mark deals expired in ${sampleFailure.schema}.${sampleFailure.table}. ${sampleFailure.reason}. Showing your local copies for now.`);
+      }
+    }
+
+    mergeUpdatedDealsIntoState(persistedDeals);
+    setPortalSuccessMessage(`Marked ${persistedDeals.length} deals as expired.`);
+    pushToast(`Expired ${persistedDeals.length} deals`, 'share');
+    setAdminSelectedDealIds(new Set());
+  };
+
   const handleCancelDeal = (dealId: string) => {
     setDeals(prev => prev.filter(d => d.id !== dealId));
   };
@@ -6916,7 +7623,7 @@ const deleteDealFromBackend = async (
 
     const sourceId = extractMockOnlineSourceId(inputDeal.id);
     const nonMockOnlineDeals = deals
-      .filter((deal) => deal.businessType === 'online' && !deal.id.startsWith('mock-online-'))
+      .filter((deal) => deal.businessType === 'online' && !isManagedMockOnlineDeal(deal))
       .sort((left, right) => right.createdAt - left.createdAt);
 
     if (sourceId) {
@@ -6930,8 +7637,24 @@ const deleteDealFromBackend = async (
     return likelyMatch ?? inputDeal;
   };
 
-  const handleEditDeal = (deal: Deal) => {
-    const latestDeal = resolveEditableDealFromCard(deal);
+  const handleEditDeal = async (deal: Deal) => {
+    let latestDeal = resolveEditableDealFromCard(deal);
+
+    if (supabase && hasSupabaseConfig) {
+      try {
+        const latestPersistedDeal = await fetchSharedDealById(latestDeal.id);
+        if (latestPersistedDeal && !isTombstonedDeal(latestPersistedDeal)) {
+          latestDeal = latestPersistedDeal;
+          setDeals((prev) => [latestPersistedDeal, ...prev.filter((item) => item.id !== latestPersistedDeal.id)]);
+        }
+      } catch (error) {
+        console.warn('[LiveDrop] Falling back to in-memory deal snapshot for edit', {
+          dealId: latestDeal.id,
+          error,
+        });
+      }
+    }
+
     setPortalSuccessMessage('');
     setDealDraft(latestDeal);
     setPortalFieldSnapshot(latestDeal);
@@ -6974,29 +7697,55 @@ const deleteDealFromBackend = async (
 
   const syncPendingDeletesWithBackend = async () => {
     if (!supabase || !hasSupabaseConfig) return;
-    // Shared delete is an authenticated admin action. Skip background retries when signed out.
-    if (!authUser) return;
     if (pendingDeleteDescriptorsRef.current.length === 0) return;
 
     const remainingDescriptors: DealDeleteDescriptor[] = [];
 
     for (const descriptor of pendingDeleteDescriptorsRef.current) {
       try {
-        const result = await deleteDealFromBackend(descriptor);
-        if (result.deletedIds.length === 0) {
-          remainingDescriptors.push(descriptor);
+        await deleteDealFromBackend(descriptor);
+      } catch (error) {
+        const nextRetryCount = (descriptor.retryCount ?? 0) + 1;
+        if (!isTransientSupabaseError(error) || nextRetryCount >= MAX_PENDING_DELETE_RETRIES) {
+          pushAdminLog('error', 'Dropping pending delete after non-retryable failure', buildSharedWriteLogDetail({
+            operation: 'delete',
+            payload: {
+              dealId: descriptor.id,
+              retryCount: nextRetryCount,
+            },
+            error,
+          }));
+          continue;
         }
-      } catch {
-        remainingDescriptors.push(descriptor);
+
+        remainingDescriptors.push({
+          ...descriptor,
+          retryCount: nextRetryCount,
+          lastAttemptAt: Date.now(),
+          lastError: getSupabaseErrorContext(error).reason,
+        });
       }
     }
 
-    if (remainingDescriptors.length !== pendingDeleteDescriptorsRef.current.length) {
+    const hasDescriptorChanges =
+      remainingDescriptors.length !== pendingDeleteDescriptorsRef.current.length
+      || remainingDescriptors.some((entry, index) => {
+        const previous = pendingDeleteDescriptorsRef.current[index];
+        return (
+          !previous
+          || previous.id !== entry.id
+          || previous.sourceId !== entry.sourceId
+          || (previous.retryCount ?? 0) !== (entry.retryCount ?? 0)
+          || previous.lastError !== entry.lastError
+        );
+      });
+    if (hasDescriptorChanges) {
       setPendingDeleteDescriptors(remainingDescriptors);
     }
   };
 
-  const refreshSharedDeals = async () => {
+  const refreshSharedDeals = async (options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
     setDealsLoading(true);
     try {
       try {
@@ -7004,26 +7753,22 @@ const deleteDealFromBackend = async (
       } catch (pendingDeleteSyncError) {
         console.warn('[LiveDrop] Pending delete sync skipped during refresh', pendingDeleteSyncError);
       }
-      const sharedDeals = await fetchSharedDeals();
-      const fallbackDeals = composeDealsWithLocationContext(
-        readStoredDeals(),
+      const sharedDeals = await fetchSharedDeals({ force });
+      const storedDeals = readStoredDeals();
+      const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(sharedDeals, storedDeals);
+      const nextDeals = composeDealsWithLocationContext(
+        mergedHydratedDeals,
         latestUserLocationRef.current,
         latestHasPreciseLocationRef.current,
+        { includeManagedOnlinePipeline: false },
       );
-      const nextDeals = sharedDeals.length > 0
-        ? composeDealsWithLocationContext(
-            sharedDeals,
-            latestUserLocationRef.current,
-            latestHasPreciseLocationRef.current,
-          )
-        : fallbackDeals;
       applyDealsState(nextDeals);
-      setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty. Showing fallback drops.');
-      pushAdminLog('info', 'Force refreshed shared deals');
+      setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty.');
+      pushAdminLog('info', force ? 'Force refreshed shared deals' : 'Refreshed shared deals');
     } catch (error) {
-      console.error('[LiveDrop] Force refresh failed', error);
-      setDealsError('Could not load shared deals. Showing fallback drops.');
-      pushAdminLog('error', 'Force refresh failed', error instanceof Error ? error.message : 'Unknown error');
+      console.error('[LiveDrop] Shared refresh failed', error);
+      setDealsError('Could not load shared deals. Keeping the last synced view.');
+      pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
     } finally {
       setDealsLoading(false);
     }
@@ -7084,21 +7829,26 @@ const deleteDealFromBackend = async (
         prev.filter((item) => !deletedDealIds.has(item.id) && !isDealHiddenByIdentityKeys(item, deleteIdentityKeySet)),
       );
       let sharedDeleteSucceeded = false;
-      let sharedDeleteQueued = false;
 
       if (supabase && hasSupabaseConfig) {
         try {
           const result = await deleteDealFromBackend(deleteDescriptor);
-          sharedDeleteSucceeded = result.deletedIds.length > 0;
-        } catch {
-          enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
-          sharedDeleteQueued = true;
-          setDealsError('Could not delete from shared backend yet. Deal is hidden locally and queued for retry.');
-          pushToast('Deal hidden locally. Shared delete queued.', 'share');
+          sharedDeleteSucceeded = result.deletedIds.length > 0 || result.alreadyAbsent;
+        } catch (deleteError) {
+          if (isTransientSupabaseError(deleteError)) {
+            enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+            setDealsError('Could not delete from shared backend yet. Deal is hidden locally and queued for retry.');
+            pushToast('Deal hidden locally. Shared delete queued.', 'share');
+          } else if (isDeletePermissionError(deleteError)) {
+            setDealsError('Delete requires a valid authenticated admin session in Supabase. Deal is hidden locally on this device.');
+            pushToast('Delete blocked by backend permissions. Sign in to persist delete.', 'error');
+          } else {
+            setDealsError(`Shared delete failed: ${getSupabaseErrorContext(deleteError).reason}`);
+            pushToast('Deal hidden locally. Shared delete failed.', 'error');
+          }
         }
       } else {
         enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
-        sharedDeleteQueued = true;
         setDealsError('Shared backend is unavailable. Deal is hidden locally and queued for retry.');
         pushToast('Deal hidden locally. Shared delete queued.', 'share');
       }
@@ -7107,16 +7857,17 @@ const deleteDealFromBackend = async (
         clearPendingDeleteDescriptorByDescriptor(deleteDescriptor);
         setDealsError('');
         pushToast('Deal deleted.', 'share');
-      } else if (supabase && hasSupabaseConfig && !sharedDeleteQueued) {
-        enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
-        setDealsError('Shared delete returned no affected rows. Deal is hidden locally and queued for retry.');
-        pushToast('Deal hidden locally. Shared delete queued.', 'share');
       }
     } catch (error) {
       console.error('[LiveDrop] Delete flow failed unexpectedly', error);
-      enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
-      setDealsError('Could not complete delete flow. Deal is hidden locally and queued for retry.');
-      pushToast('Deal hidden locally. Shared delete queued.', 'share');
+      if (isTransientSupabaseError(error)) {
+        enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+        setDealsError('Could not complete delete flow. Deal is hidden locally and queued for retry.');
+        pushToast('Deal hidden locally. Shared delete queued.', 'share');
+      } else {
+        setDealsError(`Could not complete delete flow: ${getSupabaseErrorContext(error).reason}`);
+        pushToast('Delete failed.', 'error');
+      }
     } finally {
       setDeletingDealIds((prev) => {
         const next = new Set(prev);
@@ -9437,7 +10188,6 @@ const deleteDealFromBackend = async (
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, 3);
     const fallbackRecommendedDeals = generateSeededOnlineDeals()
-      .filter((deal) => !isExcludedOnlineDeal(deal))
       .filter((deal) => !isExpiredDeal(deal, now) && !savedDealIds.has(deal.id))
       .slice(0, 3);
     const recommendedCatalogDeals = liveRecommendedDeals.length > 0 ? liveRecommendedDeals : fallbackRecommendedDeals;
@@ -11598,7 +12348,6 @@ const deleteDealFromBackend = async (
       if (isCreating) {
         return (
           <div className="space-y-4">
-            {renderImportedDraftSwitcher()}
             {hasUnsavedFormChanges ? (
               <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
                 Unsaved changes
@@ -11919,24 +12668,91 @@ const deleteDealFromBackend = async (
       );
     }
 
-    const managedDeals = [...deals].sort((a, b) => b.createdAt - a.createdAt);
+    const managedDeals = [...deals]
+      .filter((deal) => !isTombstonedDeal(deal))
+      .sort((a, b) => b.createdAt - a.createdAt);
     const localManagedDeals = managedDeals.filter((deal) => deal.businessType !== 'online');
     const onlineManagedDeals = managedDeals.filter((deal) => deal.businessType === 'online');
-    const expiredManagedDeals = managedDeals.filter((deal) => isExpiredDeal(deal));
+    const expiredManagedDeals = managedDeals.filter((deal) => (deal.status ?? 'active') === 'expired' || isExpiredDeal(deal));
+    const draftManagedDeals = managedDeals.filter((deal) => (deal.status ?? 'active') === 'draft');
+    const publishedManagedDeals = managedDeals.filter((deal) => (deal.status ?? 'active') === 'active' && !isExpiredDeal(deal));
+
+    const adminTabs = [
+      { key: 'drafts', label: `Drafts (${draftManagedDeals.length})` },
+      { key: 'published', label: `Published (${publishedManagedDeals.length})` },
+      { key: 'expired', label: `Expired (${expiredManagedDeals.length})` },
+      { key: 'online', label: `Online (${onlineManagedDeals.length})` },
+      { key: 'local', label: `Local (${localManagedDeals.length})` },
+    ] as const;
+
+    const adminTabDeals = adminDealsTab === 'drafts'
+      ? draftManagedDeals
+      : adminDealsTab === 'published'
+        ? publishedManagedDeals
+        : adminDealsTab === 'expired'
+          ? expiredManagedDeals
+          : adminDealsTab === 'online'
+            ? onlineManagedDeals
+            : localManagedDeals;
+
+    const adminEmptyMessage = adminDealsTab === 'drafts'
+      ? 'No draft deals yet.'
+      : adminDealsTab === 'published'
+        ? 'No published deals yet.'
+        : adminDealsTab === 'expired'
+          ? 'No expired deals yet.'
+          : adminDealsTab === 'online'
+            ? 'No online deals yet.'
+            : 'No local deals yet.';
+
+    const selectedAdminDeals = adminTabDeals.filter((deal) => adminSelectedDealIds.has(deal.id));
+
+    const toggleAdminDealSelection = (dealId: string) => {
+      setAdminSelectedDealIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(dealId)) {
+          next.delete(dealId);
+        } else {
+          next.add(dealId);
+        }
+        return next;
+      });
+    };
+
+    const selectAllAdminDeals = () => {
+      setAdminSelectedDealIds(new Set(adminTabDeals.map((deal) => deal.id)));
+    };
+
+    const clearAdminDealSelection = () => {
+      setAdminSelectedDealIds(new Set());
+    };
 
     const renderAdminDealCard = (deal: Deal) => {
       const isDeleting = deletingDealIds.has(deal.id);
+      const isSelected = adminSelectedDealIds.has(deal.id);
+      const isExpired = (deal.status ?? 'active') === 'expired' || isExpiredDeal(deal);
 
       return (
       <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">{deal.businessName}</p>
+          <div className="flex min-w-0 items-start gap-3">
+            <label className="mt-1 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 shadow-sm shadow-slate-200/40">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => toggleAdminDealSelection(deal.id)}
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                aria-label={`Select ${deal.title}`}
+              />
+            </label>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">{deal.businessName}</p>
             <h3 className="mt-1 text-base font-black text-slate-900">{deal.title}</h3>
             <p className="mt-1 text-xs text-slate-500">
               {deal.category} · {deal.businessType === 'online' ? 'Online' : deal.distance}
             </p>
             <p className="mt-2 truncate font-mono text-[10px] text-slate-400">{deal.websiteUrl ?? deal.productUrl ?? 'No external link saved'}</p>
+          </div>
           </div>
           <div className="flex flex-col items-end gap-2">
             <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${deal.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
@@ -11954,6 +12770,9 @@ const deleteDealFromBackend = async (
           <button onClick={() => handleEditDeal(deal)} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
             Edit
           </button>
+          <button onClick={() => handleAdminDuplicateDeal(deal)} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
+            Duplicate
+          </button>
           <button onClick={() => handleReuseDeal(deal)} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
             Reuse
           </button>
@@ -11962,6 +12781,13 @@ const deleteDealFromBackend = async (
           </button>
           <button onClick={() => void handleAdminSetDealStatus(deal, deal.status === 'active' ? 'draft' : 'active')} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600">
             {deal.status === 'active' ? 'Unpublish' : 'Publish'}
+          </button>
+          <button
+            onClick={() => void handleAdminMarkExpired(deal)}
+            disabled={isExpired}
+            className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${isExpired ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300' : 'border border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'}`}
+          >
+            Mark Expired
           </button>
           <button onClick={() => void handleAdminToggleFeatured(deal)} className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${deal.featured ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'}`}>
             {deal.featured ? 'Featured' : 'Mark Featured'}
@@ -12018,7 +12844,6 @@ const deleteDealFromBackend = async (
                 </button>
               </div>
             </div>
-            {renderImportedDraftSwitcher()}
             {hasUnsavedFormChanges ? (
               <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
                 Unsaved changes
@@ -12071,10 +12896,6 @@ const deleteDealFromBackend = async (
 
           {renderDealsErrorBanner()}
 
-          {renderAIDealFinderPanel()}
-
-          {renderBulkImportPanel()}
-
           <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -12088,7 +12909,7 @@ const deleteDealFromBackend = async (
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
-                  onClick={() => void refreshSharedDeals()}
+                  onClick={() => void refreshSharedDeals({ force: true })}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Force Refresh
@@ -12122,6 +12943,157 @@ const deleteDealFromBackend = async (
                   New Deal
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Bulk Release Creator</p>
+                <h2 className="mt-1 text-lg font-black text-slate-900">Publish up to 10 deals at once</h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  Fill only the sections you need. Empty sections are skipped automatically.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => void handleBulkSaveDrafts()}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Save Drafts
+                </button>
+                <button
+                  onClick={() => void handleBulkPublishAll()}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+                >
+                  Publish All
+                </button>
+              </div>
+            </div>
+
+            {bulkReleaseError ? (
+              <p className="mt-4 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-600">
+                {bulkReleaseError}
+              </p>
+            ) : null}
+            {bulkReleaseMessage ? (
+              <p className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-600">
+                {bulkReleaseMessage}
+              </p>
+            ) : null}
+
+            <div className="mt-5 space-y-4">
+              {Array.from({ length: BULK_RELEASE_MAX_DEALS }, (_, index) => {
+                const isOpen = bulkReleaseOpenSections.has(index);
+                const draft = bulkReleaseDrafts[index];
+                const validationError = bulkReleaseValidation[index];
+                const hasContent = !isBulkDraftEmpty(draft);
+                const copyOptions = Array.from({ length: BULK_RELEASE_MAX_DEALS }, (_, optionIndex) => optionIndex)
+                  .filter((optionIndex) => optionIndex !== index);
+
+                return (
+                  <div key={`bulk-release-${index}`} className="rounded-[1.75rem] border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleBulkSectionOpen(index)}
+                        className="inline-flex items-center gap-2 text-left"
+                      >
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-[11px] font-black text-slate-700 shadow-sm shadow-slate-200/60">
+                          {index + 1}
+                        </span>
+                        <div>
+                          <p className="text-sm font-black text-slate-900">Deal {index + 1}</p>
+                          <p className="text-xs text-slate-500">{isOpen ? 'Collapse details' : 'Expand to edit'}</p>
+                        </div>
+                        <AppIcon
+                          name="play"
+                          size={12}
+                          className={`ml-2 text-slate-400 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                        />
+                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {hasContent && validationError ? (
+                          <span className="inline-flex h-7 items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-rose-600">
+                            Needs Attention
+                          </span>
+                        ) : hasContent ? (
+                          <span className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-600">
+                            Ready
+                          </span>
+                        ) : (
+                          <span className="inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                            Empty
+                          </span>
+                        )}
+                        <select
+                          value={bulkReleaseCopySource[index]}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            setBulkReleaseCopySource((prev) => {
+                              const updated = [...prev];
+                              updated[index] = next;
+                              return updated;
+                            });
+                          }}
+                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500"
+                        >
+                          {copyOptions.map((optionIndex) => (
+                            <option key={`bulk-copy-${index}-${optionIndex}`} value={optionIndex}>
+                              Copy from {optionIndex + 1}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handleCopyBulkSection(index)}
+                          className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          onClick={() => handleClearBulkSection(index)}
+                          className="inline-flex h-9 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-rose-600 transition-colors hover:bg-rose-100"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {validationError && hasContent ? (
+                      <p className="mt-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-600">
+                        {validationError}
+                      </p>
+                    ) : null}
+                    <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-[4000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+                      <div className="pt-4">
+                        <CreateDealForm
+                          key={`bulk-release-form-${index}-${bulkReleaseFormKeys[index]}`}
+                          onSubmit={handleCreateDeal}
+                          onCancel={() => {}}
+                          userLocation={userLocation}
+                          hasPreciseUserLocation={hasPreciseUserLocation}
+                          initialData={bulkReleaseInitialData[index]}
+                          onDraftChange={(draft) => {
+                            setBulkReleaseDrafts((prev) => {
+                              const next = [...prev];
+                              next[index] = draft;
+                              return next;
+                            });
+                          }}
+                          onValidationChange={(error) => {
+                            setBulkReleaseValidation((prev) => {
+                              const next = [...prev];
+                              next[index] = error;
+                              return next;
+                            });
+                          }}
+                          showHeader={false}
+                          showActions={false}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -12295,49 +13267,86 @@ const deleteDealFromBackend = async (
           </div>
 
           <div className="mt-4 space-y-4">
-            <div className="rounded-[1.5rem] border border-slate-100 bg-white p-3 shadow-sm">
-              <div className="inline-flex w-full rounded-xl border border-slate-200 bg-slate-50 p-1">
-                <button
-                  type="button"
-                  onClick={() => setAdminDealsView('local')}
-                  aria-pressed={adminDealsView === 'local'}
-                  className={`inline-flex h-9 flex-1 items-center justify-center rounded-lg px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
-                    adminDealsView === 'local'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-500 hover:text-indigo-600'
-                  }`}
-                >
-                  Local ({localManagedDeals.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAdminDealsView('online')}
-                  aria-pressed={adminDealsView === 'online'}
-                  className={`inline-flex h-9 flex-1 items-center justify-center rounded-lg px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
-                    adminDealsView === 'online'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-500 hover:text-indigo-600'
-                  }`}
-                >
-                  Online ({onlineManagedDeals.length})
-                </button>
+            <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                {adminTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setAdminDealsTab(tab.key)}
+                    aria-pressed={adminDealsTab === tab.key}
+                    className={`inline-flex h-9 items-center justify-center rounded-full border px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                      adminDealsTab === tab.key
+                        ? 'border-indigo-200 bg-indigo-600 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={selectAllAdminDeals}
+                    className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearAdminDealSelection}
+                    disabled={adminSelectedDealIds.size === 0}
+                    className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                      adminSelectedDealIds.size > 0
+                        ? 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+                        : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300'
+                    }`}
+                  >
+                    Clear
+                  </button>
+                  <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
+                    {adminSelectedDealIds.size} selected
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkPublishSelected(selectedAdminDeals)}
+                    disabled={selectedAdminDeals.length === 0}
+                    className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                      selectedAdminDeals.length > 0
+                        ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+                        : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300'
+                    }`}
+                  >
+                    Publish Selected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkExpireSelected(selectedAdminDeals)}
+                    disabled={selectedAdminDeals.length === 0}
+                    className={`inline-flex h-9 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                      selectedAdminDeals.length > 0
+                        ? 'border border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'
+                        : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300'
+                    }`}
+                  >
+                    Mark Expired
+                  </button>
+                </div>
               </div>
             </div>
             <div className="space-y-3">
-              {adminDealsView === 'local' ? (
-                localManagedDeals.length === 0 ? (
-                  <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
-                    No local deals yet.
-                  </div>
-                ) : (
-                  localManagedDeals.map((deal) => renderAdminDealCard(deal))
-                )
-              ) : onlineManagedDeals.length === 0 ? (
+              {adminTabDeals.length === 0 ? (
                 <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-5 text-center text-slate-500 shadow-sm">
-                  No online deals yet.
+                  {adminEmptyMessage}
                 </div>
               ) : (
-                onlineManagedDeals.map((deal) => renderAdminDealCard(deal))
+                adminTabDeals.map((deal) => renderAdminDealCard(deal))
               )}
             </div>
             {/*

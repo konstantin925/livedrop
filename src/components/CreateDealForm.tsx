@@ -23,6 +23,9 @@ interface CreateDealFormProps {
   initialData?: Deal | null;
   onDraftChange?: (draft: Deal) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onValidationChange?: (error: string) => void;
+  showHeader?: boolean;
+  showActions?: boolean;
   autofillRequest?: {
     id: number;
     payload: {
@@ -252,6 +255,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   initialData,
   onDraftChange,
   onDirtyChange,
+  onValidationChange,
+  showHeader = true,
+  showActions = true,
   autofillRequest,
 }) => {
   const savedDefaults = readBusinessDefaults();
@@ -627,6 +633,37 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     return '';
   };
 
+  const publishValidationError = useMemo(() => getPublishValidationError(), [
+    availableSubcategoryOptions.length,
+    durationMinutes,
+    formData.affiliateUrl,
+    formData.businessMode,
+    formData.businessName,
+    formData.currentClaims,
+    formData.customOfferText,
+    formData.description,
+    formData.discountValue,
+    formData.durationPreset,
+    formData.imageUrl,
+    formData.offerType,
+    formData.productUrl,
+    formData.quantity,
+    formData.subcategory,
+    formData.title,
+    formData.websiteUrl,
+    hasPreciseUserLocation,
+    normalizedCategory,
+    normalizedLinkState.affiliateUrl,
+    normalizedLinkState.productUrl,
+    normalizedLinkState.websiteUrl,
+    normalizedSubcategory,
+    offerText,
+  ]);
+
+  useEffect(() => {
+    onValidationChange?.(publishValidationError);
+  }, [onValidationChange, publishValidationError]);
+
   const finalizeSavedDefaults = () => {
     localStorage.setItem(BUSINESS_DEFAULTS_KEY, JSON.stringify({
       businessName: normalizeTextValue(formData.businessName).trim(),
@@ -640,7 +677,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
   const handlePublish = async () => {
     setSubmitError('');
-    const validationError = getPublishValidationError();
+    const validationError = publishValidationError;
     if (validationError) {
       setSubmitError(validationError);
       return;
@@ -683,28 +720,35 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (!showActions) {
+      return;
+    }
     void handlePublish();
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex justify-between items-center mb-2">
-        <div>
-          <h2 className="text-2xl font-black">Drop a Deal</h2>
-          <p className="text-xs text-slate-400 font-semibold uppercase tracking-[0.18em] mt-1">
-            {initialData ? 'Review imported details before publishing' : 'Post in under 30 seconds'}
-          </p>
-        </div>
-        <span className="text-zinc-400 text-xs font-bold uppercase tracking-[0.14em]">Editor</span>
-      </div>
+      {showHeader ? (
+        <>
+          <div className="flex justify-between items-center mb-2">
+            <div>
+              <h2 className="text-2xl font-black">Drop a Deal</h2>
+              <p className="text-xs text-slate-400 font-semibold uppercase tracking-[0.18em] mt-1">
+                {initialData ? 'Review imported details before publishing' : 'Post in under 30 seconds'}
+              </p>
+            </div>
+            <span className="text-zinc-400 text-xs font-bold uppercase tracking-[0.14em]">Editor</span>
+          </div>
 
-      {initialData ? (
-        <div className="rounded-[1.75rem] border border-indigo-100 bg-indigo-50/60 px-4 py-4">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Portal Draft Loaded</p>
-          <p className="mt-1 text-sm text-slate-600">
-            This deal was loaded into the portal from imported JSON. Review the fields below, then publish when it looks right.
-          </p>
-        </div>
+          {initialData ? (
+            <div className="rounded-[1.75rem] border border-indigo-100 bg-indigo-50/60 px-4 py-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Portal Draft Loaded</p>
+              <p className="mt-1 text-sm text-slate-600">
+                This deal was loaded into the portal from imported JSON. Review the fields below, then publish when it looks right.
+              </p>
+            </div>
+          ) : null}
+        </>
       ) : null}
 
       <div className="bg-white border border-slate-100 rounded-[2rem] p-5 shadow-sm">
@@ -1179,33 +1223,35 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         <p className="text-sm font-semibold text-rose-500">{submitError}</p>
       ) : null}
 
-      <div className="sticky bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-20 rounded-[1.5rem] border border-slate-200 bg-white/95 p-2 shadow-xl shadow-slate-200/70 backdrop-blur">
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => void handleSaveDraft()}
-            disabled={isSavingDraft || isPublishing}
-            className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSavingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
-          <button
-            type="submit"
-            disabled={isSavingDraft || isPublishing}
-            className="inline-flex h-12 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isPublishing ? 'Publishing…' : 'Publish Deal'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleCancel()}
-            disabled={isSavingDraft || isPublishing}
-            className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Cancel
-          </button>
+      {showActions ? (
+        <div className="sticky bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-20 rounded-[1.5rem] border border-slate-200 bg-white/95 p-2 shadow-xl shadow-slate-200/70 backdrop-blur">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => void handleSaveDraft()}
+              disabled={isSavingDraft || isPublishing}
+              className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSavingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingDraft || isPublishing}
+              className="inline-flex h-12 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPublishing ? 'Publishing…' : 'Publish Deal'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleCancel()}
+              disabled={isSavingDraft || isPublishing}
+              className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
     </form>
   );
 };
