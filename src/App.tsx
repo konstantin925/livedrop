@@ -7956,14 +7956,6 @@ const deleteDealFromBackend = async (
                 {getOnlineDealHeroLabel(displayOfferText)}
               </span>
             </div>
-            {isDropModeActive && deal.hasTimer ? (
-              <div className="pointer-events-none absolute bottom-3 left-3">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-slate-950/70 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white backdrop-blur-sm">
-                  <AppIcon name="clock" size={11} />
-                  Ends soon
-                </span>
-              </div>
-            ) : null}
           </div>
           <div className="p-3.5">
             <div className="mb-2.5 flex items-start justify-between gap-2.5">
@@ -7989,13 +7981,6 @@ const deleteDealFromBackend = async (
                 <h3 className="mt-1 line-clamp-2 break-words text-[1.02rem] font-extrabold leading-[1.2] text-slate-900">{displayTitle}</h3>
                 <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
               </div>
-              {deal.hasTimer ? (
-                <Timer
-                  expiresAt={deal.expiresAt}
-                  onExpire={forceRefreshDealsView}
-                  className={isDropModeActive ? 'rounded-full bg-indigo-50 px-2.5 py-1 text-sm text-indigo-600 shadow-sm shadow-indigo-100/70' : 'text-sm'}
-                />
-              ) : null}
             </div>
             <div className={`mb-2.5 border border-indigo-100 px-3 py-2 ${
               isDropModeActive
@@ -8135,15 +8120,6 @@ const deleteDealFromBackend = async (
               <span className="pointer-events-none absolute right-2 bottom-2 rounded-full bg-white/85 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500 shadow-sm">
                 Viewed
               </span>
-            ) : null}
-            {deal.hasTimer ? (
-              <div className="pointer-events-none absolute bottom-2 left-2">
-                <Timer
-                  expiresAt={deal.expiresAt}
-                  onExpire={forceRefreshDealsView}
-                  className="rounded-full bg-white/92 px-2 py-1 text-[11px] font-black text-indigo-600 shadow-sm"
-                />
-              </div>
             ) : null}
           </div>
           <div className="space-y-2.5 p-3">
@@ -8928,7 +8904,7 @@ const deleteDealFromBackend = async (
                 {selectedDetailDeal.offerText}
               </span>
             </div>
-            {selectedDetailDeal.hasTimer ? (
+            {selectedDetailDeal.businessType !== 'online' && selectedDetailDeal.hasTimer ? (
               <div className="pointer-events-none absolute bottom-4 left-4">
                 <Timer
                   expiresAt={selectedDetailDeal.expiresAt}
