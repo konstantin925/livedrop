@@ -46,7 +46,22 @@ const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
+const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
 const DISABLE_DEAL_EXPIRY = true;
+
+type DealDeleteDescriptor = {
+  id: string;
+  sourceId?: string;
+  businessType: Deal['businessType'];
+  businessName?: string;
+  category?: string;
+  title?: string;
+  productUrl?: string;
+  affiliateUrl?: string;
+  websiteUrl?: string;
+  identityKeys: string[];
+  queuedAt: number;
+};
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
 const LOCAL_ADMIN_MODE = false;
 const ADMIN_SESSION_STORAGE_KEY = 'livedrop_admin_session';
@@ -755,13 +770,61 @@ const readHiddenDealKeys = (): Set<string> => {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set();
 
+    const legacyOverbroadPatterns = [
+      '::title::',
+      '::title_compact::',
+      '::business_title::',
+      '::business_title_compact::',
+    ];
     return new Set(
       parsed
         .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter(Boolean),
+        .filter(Boolean)
+        .filter((value) => !legacyOverbroadPatterns.some((pattern) => value.includes(pattern))),
     );
   } catch {
     return new Set();
+  }
+};
+
+const readPendingDeleteDescriptors = (): DealDeleteDescriptor[] => {
+  try {
+    const raw = localStorage.getItem(PENDING_DELETE_DESCRIPTORS_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((entry): DealDeleteDescriptor | null => {
+        if (!entry || typeof entry !== 'object') return null;
+        const record = entry as Partial<DealDeleteDescriptor>;
+        const id = typeof record.id === 'string' ? record.id.trim() : '';
+        const sourceId = typeof record.sourceId === 'string' ? record.sourceId.trim() : '';
+        const businessType = record.businessType === 'online' ? 'online' : record.businessType === 'local' ? 'local' : null;
+        if (!id || !businessType) return null;
+        const identityKeys = Array.isArray(record.identityKeys)
+          ? record.identityKeys
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter(Boolean)
+          : [];
+        return {
+          id,
+          sourceId: sourceId || undefined,
+          businessType,
+          businessName: typeof record.businessName === 'string' ? record.businessName : undefined,
+          category: typeof record.category === 'string' ? record.category : undefined,
+          title: typeof record.title === 'string' ? record.title : undefined,
+          productUrl: typeof record.productUrl === 'string' ? record.productUrl : undefined,
+          affiliateUrl: typeof record.affiliateUrl === 'string' ? record.affiliateUrl : undefined,
+          websiteUrl: typeof record.websiteUrl === 'string' ? record.websiteUrl : undefined,
+          identityKeys,
+          queuedAt: typeof record.queuedAt === 'number' && Number.isFinite(record.queuedAt) ? record.queuedAt : Date.now(),
+        };
+      })
+      .filter((entry): entry is DealDeleteDescriptor => Boolean(entry));
+  } catch {
+    return [];
   }
 };
 
@@ -826,12 +889,6 @@ const isExcludedOnlineDeal = (deal: Deal) => {
 const isManagedLocalSeedDeal = (deal: Deal) =>
   deal.businessType !== 'online' && typeof deal.id === 'string' && deal.id.startsWith('seed-');
 
-const isFallbackSeedDeal = (deal: Deal) =>
-  isManagedLocalSeedDeal(deal)
-  || (deal.businessType === 'online'
-    && typeof deal.id === 'string'
-    && (deal.id.startsWith('online-seed-') || deal.id.startsWith('mock-online-')));
-
 const MOCK_ONLINE_SOURCE_ID_PATTERN = /^mock-online-\d+-\d+-\d+-(.+)$/;
 
 const extractMockOnlineSourceId = (dealId: unknown) => {
@@ -861,22 +918,40 @@ const normalizeDealUrlForMatch = (value?: unknown) => {
 const normalizeDealIdentityText = (value?: unknown) =>
   (typeof value === 'string' ? value : '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-const getDealHiddenIdentityKeys = (deal: Deal) => {
+const getDealHiddenIdentityKeys = (deal: {
+  id?: unknown;
+  businessType?: Deal['businessType'] | null;
+  businessName?: unknown;
+  category?: unknown;
+  title?: unknown;
+  productUrl?: unknown;
+  affiliateUrl?: unknown;
+  websiteUrl?: unknown;
+}) => {
   const businessType = deal.businessType === 'online' ? 'online' : 'local';
+  const rawId = typeof deal.id === 'string' ? deal.id.trim() : '';
+  const sourceIdFromMock = extractMockOnlineSourceId(rawId);
+  const sourceIdentityId = sourceIdFromMock
+    || (rawId.startsWith('online-seed-') ? rawId : '');
   const business = normalizeDealIdentityText(deal.businessName);
+  const category = normalizeDealIdentityText(deal.category);
   const title = normalizeDealIdentityText(deal.title);
   const product = normalizeDealUrlForMatch(deal.productUrl);
   const affiliate = normalizeDealUrlForMatch(deal.affiliateUrl);
   const website = normalizeDealUrlForMatch(deal.websiteUrl);
+  const hasStrongLocator = Boolean(sourceIdentityId || product || affiliate || (website && title));
   const keys = [
     // Legacy exact key format for backward compatibility.
     `${businessType}::${business}::${title}::${product}::${affiliate}::${website}`,
-    // Stable broad keys to survive id/url churn during relaunch/reuse.
-    `${businessType}::title::${title}`,
-    `${businessType}::business_title::${business}::${title}`,
+    // Stable source key for mock-online rehydration.
+    sourceIdentityId ? `${businessType}::source_id::${sourceIdentityId}` : '',
     product ? `${businessType}::product::${product}` : '',
     affiliate ? `${businessType}::affiliate::${affiliate}` : '',
     website && title ? `${businessType}::website_title::${website}::${title}` : '',
+    // Fallback only when stronger locators are missing, and scope by category to avoid overmatching.
+    !hasStrongLocator && business && title && category
+      ? `${businessType}::business_title_category::${business}::${title}::${category}`
+      : '',
   ];
 
   return [...new Set(keys.filter(Boolean))];
@@ -3505,7 +3580,56 @@ export default function App() {
     return readHiddenDealKeys();
   });
   const hiddenDealKeysRef = useRef(hiddenDealKeys);
+  const [pendingDeleteDescriptors, setPendingDeleteDescriptors] = useState<DealDeleteDescriptor[]>(() => {
+    if (typeof window === 'undefined') return [];
+    return readPendingDeleteDescriptors();
+  });
+  const pendingDeleteDescriptorsRef = useRef<DealDeleteDescriptor[]>(pendingDeleteDescriptors);
   const [deletingDealIds, setDeletingDealIds] = useState<Set<string>>(new Set());
+  const getDeleteDescriptorKey = (descriptor: Pick<DealDeleteDescriptor, 'id' | 'sourceId' | 'businessType' | 'identityKeys'>) =>
+    `${descriptor.businessType}::${descriptor.id}::${descriptor.sourceId ?? ''}::${descriptor.identityKeys[0] ?? ''}`;
+  const buildDeleteDescriptorFromDeal = (deal: Deal): DealDeleteDescriptor => ({
+    id: deal.id,
+    sourceId: extractMockOnlineSourceId(deal.id) ?? undefined,
+    businessType: deal.businessType,
+    businessName: deal.businessName,
+    category: deal.category,
+    title: deal.title,
+    productUrl: deal.productUrl,
+    affiliateUrl: deal.affiliateUrl,
+    websiteUrl: deal.websiteUrl,
+    identityKeys: getDealHiddenIdentityKeys(deal),
+    queuedAt: Date.now(),
+  });
+  const enqueuePendingDeleteDescriptorByDescriptor = (descriptor: DealDeleteDescriptor) => {
+    setPendingDeleteDescriptors((previous) => {
+      const nextByKey = new Map(previous.map((entry) => [getDeleteDescriptorKey(entry), entry]));
+      nextByKey.set(getDeleteDescriptorKey(descriptor), descriptor);
+      return [...nextByKey.values()];
+    });
+  };
+  const clearPendingDeleteDescriptorByDescriptor = (descriptor: DealDeleteDescriptor) => {
+    const descriptorIdentityKeys = new Set(descriptor.identityKeys);
+    const descriptorSourceId = descriptor.sourceId || extractMockOnlineSourceId(descriptor.id);
+    setPendingDeleteDescriptors((previous) =>
+      previous.filter((entry) => {
+        if (
+          entry.businessType === descriptor.businessType
+          && (
+            entry.id === descriptor.id
+            || (descriptorSourceId && entry.id === descriptorSourceId)
+            || (entry.sourceId && entry.sourceId === descriptor.id)
+            || (descriptorSourceId && entry.sourceId === descriptorSourceId)
+          )
+        ) {
+          return false;
+        }
+        return !entry.identityKeys.some((key) => descriptorIdentityKeys.has(key));
+      }),
+    );
+  };
+  const isTombstonedDeal = (deal: Deal) =>
+    hiddenDealIdsRef.current.has(deal.id) || isDealHiddenByIdentityKeys(deal, hiddenDealKeysRef.current);
   const setDeals = (value: React.SetStateAction<Deal[]>) => {
     setRawDeals((previousDeals) => {
       const resolvedDeals = typeof value === 'function'
@@ -3615,6 +3739,20 @@ export default function App() {
       ),
     );
   }, [hiddenDealKeys]);
+  useEffect(() => {
+    pendingDeleteDescriptorsRef.current = pendingDeleteDescriptors;
+    if (typeof window === 'undefined') return;
+
+    if (pendingDeleteDescriptors.length === 0) {
+      safeRemoveLocalStorageItem(PENDING_DELETE_DESCRIPTORS_STORAGE_KEY);
+      return;
+    }
+
+    safeSetLocalStorageItem(
+      PENDING_DELETE_DESCRIPTORS_STORAGE_KEY,
+      JSON.stringify(pendingDeleteDescriptors),
+    );
+  }, [pendingDeleteDescriptors]);
   const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
   const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
   const [showSearchMeter, setShowSearchMeter] = useState(false);
@@ -4614,12 +4752,30 @@ export default function App() {
     return mapDealRowToDeal(data as Partial<DealRow>, deal);
   };
 
-const deleteDealFromBackend = async (deal: Deal) => {
-  const primaryDeleteId = ensureUuid(deal.id);
-  const { data: deletedRows, error } = await getDealsTableClient()
-    .delete()
-    .eq('id', primaryDeleteId)
-    .select('id');
+const deleteDealFromBackend = async (
+  deal: Pick<DealDeleteDescriptor, 'id' | 'sourceId' | 'businessType' | 'businessName' | 'category' | 'title' | 'productUrl' | 'affiliateUrl' | 'websiteUrl'> & {
+    identityKeys?: string[];
+  },
+) => {
+  const deleteCandidates = [
+    deal.id,
+    deal.sourceId,
+    extractMockOnlineSourceId(deal.id),
+  ]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
+    .map((value) => ensureUuid(value));
+  const deleteIds = [...new Set(deleteCandidates)];
+  if (deleteIds.length === 0) {
+    return {
+      deletedIds: [],
+    };
+  }
+
+  const deleteQuery = getDealsTableClient().delete();
+  const { data: deletedRows, error } = deleteIds.length === 1
+    ? await deleteQuery.eq('id', deleteIds[0]).select('id')
+    : await deleteQuery.in('id', deleteIds).select('id');
 
   if (error) {
     console.error('[LiveDrop] Supabase deal delete failed', {
@@ -4627,7 +4783,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
       schema: DEALS_SCHEMA,
       table: DEALS_TABLE,
       dealId: deal.id,
-      deleteId: primaryDeleteId,
+      deleteIds,
       code: error.code,
       message: error.message,
       details: error.details,
@@ -4637,7 +4793,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
       operation: 'delete',
       payload: {
         dealId: deal.id,
-        deleteId: primaryDeleteId,
+        deleteIds,
       },
       error,
     }));
@@ -4650,62 +4806,69 @@ const deleteDealFromBackend = async (deal: Deal) => {
       .filter(Boolean),
   );
 
-  // Online cards can be rendered with a seed id while the backend row has a UUID.
-  // Delete canonical "same deal" matches so deleted cards cannot rehydrate on refresh.
-  if (deal.businessType === 'online') {
-    const { data: candidateRows, error: candidateError } = await getDealsTableClient()
-      .select('*')
-      .eq('business_type', 'online');
+  const targetIdentityKeys = new Set(
+    (Array.isArray(deal.identityKeys) && deal.identityKeys.length > 0
+      ? deal.identityKeys
+      : getDealHiddenIdentityKeys(deal)
+    ).filter(Boolean),
+  );
+  const businessType = deal.businessType === 'online' ? 'online' : 'local';
+  const { data: candidateRows, error: candidateError } = await getDealsTableClient()
+    .select('*')
+    .eq('business_type', businessType);
 
-    if (candidateError) {
-      console.warn('[LiveDrop] Could not load online candidates for delete matching', candidateError);
-    } else {
-      const matchedCandidateIds = (candidateRows ?? [])
-        .map((row) => {
-          const candidateDeal = mapDealRowToDeal(row as Partial<DealRow>);
-          if (!isLikelySameOnlineDeal(candidateDeal, deal)) {
-            return '';
-          }
-          return String((row as { id?: string | null }).id ?? '').trim();
-        })
-        .filter((id) => Boolean(id) && !deletedIds.has(id));
+  if (candidateError) {
+    console.warn('[LiveDrop] Could not load candidates for delete matching', candidateError);
+  } else {
+    const matchedCandidateIds = (candidateRows ?? [])
+      .map((row) => {
+        const rowId = String((row as { id?: string | null }).id ?? '').trim();
+        if (!rowId || deletedIds.has(rowId)) return '';
 
-      if (matchedCandidateIds.length > 0) {
-        const { data: matchedDeletedRows, error: matchedDeleteError } = await getDealsTableClient()
-          .delete()
-          .in('id', matchedCandidateIds)
-          .select('id');
+        const candidateDeal = mapDealRowToDeal(row as Partial<DealRow>);
+        const candidateIdentityKeys = getDealHiddenIdentityKeys(candidateDeal);
+        if (candidateIdentityKeys.some((key) => targetIdentityKeys.has(key))) {
+          return rowId;
+        }
+        return '';
+      })
+      .filter(Boolean);
 
-        if (matchedDeleteError) {
-          console.error('[LiveDrop] Supabase canonical delete failed', {
-            projectUrl: resolvedSupabaseUrl,
-            schema: DEALS_SCHEMA,
-            table: DEALS_TABLE,
+    if (matchedCandidateIds.length > 0) {
+      const { data: matchedDeletedRows, error: matchedDeleteError } = await getDealsTableClient()
+        .delete()
+        .in('id', matchedCandidateIds)
+        .select('id');
+
+      if (matchedDeleteError) {
+        console.error('[LiveDrop] Supabase canonical delete failed', {
+          projectUrl: resolvedSupabaseUrl,
+          schema: DEALS_SCHEMA,
+          table: DEALS_TABLE,
+          dealId: deal.id,
+          matchedCandidateIds,
+          code: matchedDeleteError.code,
+          message: matchedDeleteError.message,
+          details: matchedDeleteError.details,
+          hint: matchedDeleteError.hint,
+        });
+        pushAdminLog('error', 'Shared canonical delete failed', buildSharedWriteLogDetail({
+          operation: 'delete',
+          payload: {
             dealId: deal.id,
             matchedCandidateIds,
-            code: matchedDeleteError.code,
-            message: matchedDeleteError.message,
-            details: matchedDeleteError.details,
-            hint: matchedDeleteError.hint,
-          });
-          pushAdminLog('error', 'Shared canonical delete failed', buildSharedWriteLogDetail({
-            operation: 'delete',
-            payload: {
-              dealId: deal.id,
-              matchedCandidateIds,
-            },
-            error: matchedDeleteError,
-          }));
-          throw matchedDeleteError;
-        }
-
-        (matchedDeletedRows ?? []).forEach((row) => {
-          const matchedDeletedId = String((row as { id?: string | null }).id ?? '').trim();
-          if (matchedDeletedId) {
-            deletedIds.add(matchedDeletedId);
-          }
-        });
+          },
+          error: matchedDeleteError,
+        }));
+        throw matchedDeleteError;
       }
+
+      (matchedDeletedRows ?? []).forEach((row) => {
+        const matchedDeletedId = String((row as { id?: string | null }).id ?? '').trim();
+        if (matchedDeletedId) {
+          deletedIds.add(matchedDeletedId);
+        }
+      });
     }
   }
 
@@ -4716,11 +4879,15 @@ const deleteDealFromBackend = async (deal: Deal) => {
       operation: 'delete',
       payload: {
         dealId: deal.id,
-        deleteId: primaryDeleteId,
+        deleteIds,
         deletedIds: [...deletedIds],
       },
     }),
   );
+
+  return {
+    deletedIds: [...deletedIds],
+  };
 };
 
   const handleLoadBulkImportSample = () => {
@@ -5614,6 +5781,11 @@ const deleteDealFromBackend = async (deal: Deal) => {
       }
 
       try {
+        try {
+          await syncPendingDeletesWithBackend();
+        } catch (pendingDeleteSyncError) {
+          console.warn('[LiveDrop] Pending delete sync skipped during initial hydrate', pendingDeleteSyncError);
+        }
         const remoteDeals = await fetchSharedDeals();
         if (cancelled) return;
 
@@ -6584,9 +6756,11 @@ const deleteDealFromBackend = async (deal: Deal) => {
           nextMap.set(deal.id, deal);
         });
 
-      nextDeals.forEach((deal) => {
-        nextMap.set(deal.id, deal);
-      });
+      nextDeals
+        .filter((deal) => !isTombstonedDeal(deal))
+        .forEach((deal) => {
+          nextMap.set(deal.id, deal);
+        });
 
       const mergedDeals = [...nextMap.values()].sort((left, right) => right.createdAt - left.createdAt);
       return mergedDeals;
@@ -6619,6 +6793,11 @@ const deleteDealFromBackend = async (deal: Deal) => {
   };
 
   const handleReuseDealAndGoLive = async (deal: Deal) => {
+    if (isTombstonedDeal(deal)) {
+      pushToast('This deal was deleted and cannot be relaunched.', 'error');
+      return;
+    }
+
     const nextDeal = createReusedDealPayload(deal, {
       durationMinutes: 30,
       preserveIdentity: true,
@@ -6666,7 +6845,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
   };
 
   const handleReuseAllExpiredDeals = async () => {
-    const expiredDeals = deals.filter((deal) => isExpiredDeal(deal));
+    const expiredDeals = deals.filter((deal) => isExpiredDeal(deal) && !isTombstonedDeal(deal));
     if (expiredDeals.length === 0) {
       pushToast('No expired deals to relaunch right now.', 'share');
       return;
@@ -6793,9 +6972,38 @@ const deleteDealFromBackend = async (deal: Deal) => {
     });
   };
 
+  const syncPendingDeletesWithBackend = async () => {
+    if (!supabase || !hasSupabaseConfig) return;
+    // Shared delete is an authenticated admin action. Skip background retries when signed out.
+    if (!authUser) return;
+    if (pendingDeleteDescriptorsRef.current.length === 0) return;
+
+    const remainingDescriptors: DealDeleteDescriptor[] = [];
+
+    for (const descriptor of pendingDeleteDescriptorsRef.current) {
+      try {
+        const result = await deleteDealFromBackend(descriptor);
+        if (result.deletedIds.length === 0) {
+          remainingDescriptors.push(descriptor);
+        }
+      } catch {
+        remainingDescriptors.push(descriptor);
+      }
+    }
+
+    if (remainingDescriptors.length !== pendingDeleteDescriptorsRef.current.length) {
+      setPendingDeleteDescriptors(remainingDescriptors);
+    }
+  };
+
   const refreshSharedDeals = async () => {
     setDealsLoading(true);
     try {
+      try {
+        await syncPendingDeletesWithBackend();
+      } catch (pendingDeleteSyncError) {
+        console.warn('[LiveDrop] Pending delete sync skipped during refresh', pendingDeleteSyncError);
+      }
       const sharedDeals = await fetchSharedDeals();
       const fallbackDeals = composeDealsWithLocationContext(
         readStoredDeals(),
@@ -6824,7 +7032,23 @@ const deleteDealFromBackend = async (deal: Deal) => {
   const handleAdminDeleteDeal = async (deal: Deal) => {
     const confirmed = window.confirm(`Delete "${deal.title}"? This action cannot be undone.`);
     if (!confirmed) return;
-    const persistPermanentTombstone = !isFallbackSeedDeal(deal);
+    const canonicalDeal = resolveEditableDealFromCard(deal);
+    const resolvedSourceId = extractMockOnlineSourceId(deal.id) ?? extractMockOnlineSourceId(canonicalDeal.id);
+    const deleteIdentityKeys = new Set([
+      ...getDealHiddenIdentityKeys(deal),
+      ...getDealHiddenIdentityKeys(canonicalDeal),
+    ]);
+    const deleteDescriptor: DealDeleteDescriptor = {
+      ...buildDeleteDescriptorFromDeal(canonicalDeal),
+      sourceId: resolvedSourceId ?? undefined,
+      identityKeys: [...deleteIdentityKeys],
+    };
+    const deletedDealIds = new Set(
+      [deal.id, canonicalDeal.id, resolvedSourceId]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean),
+    );
+    const deleteIdentityKeySet = new Set(deleteDescriptor.identityKeys);
 
     setDeletingDealIds((prev) => {
       const next = new Set(prev);
@@ -6832,42 +7056,67 @@ const deleteDealFromBackend = async (deal: Deal) => {
       return next;
     });
 
-    if (persistPermanentTombstone) {
-      setHiddenDealIds((prev) => {
-        const next = new Set(prev);
-        next.add(deal.id);
-        hiddenDealIdsRef.current = next;
-        if (typeof window !== 'undefined') {
-          safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
-        }
-        return next;
+    setHiddenDealIds((prev) => {
+      const next = new Set(prev);
+      deletedDealIds.forEach((id) => {
+        next.add(id);
       });
-      setHiddenDealKeys((prev) => {
-        const next = new Set(prev);
-        getDealHiddenIdentityKeys(deal).forEach((key) => {
-          next.add(key);
-        });
-        hiddenDealKeysRef.current = next;
-        if (typeof window !== 'undefined') {
-          safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
-        }
-        return next;
+      hiddenDealIdsRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+    setHiddenDealKeys((prev) => {
+      const next = new Set(prev);
+      deleteDescriptor.identityKeys.forEach((key) => {
+        next.add(key);
       });
-    }
+      hiddenDealKeysRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
 
     try {
-      setDeals((prev) => prev.filter((item) => item.id !== deal.id));
-      if (supabase && hasSupabaseConfig) {
-        await deleteDealFromBackend(deal);
-      }
-      pushToast(
-        persistPermanentTombstone
-          ? 'Deal deleted permanently.'
-          : 'Fallback deal removed. It can return if shared deals are unavailable.',
-        'share',
+      setDeals((prev) =>
+        prev.filter((item) => !deletedDealIds.has(item.id) && !isDealHiddenByIdentityKeys(item, deleteIdentityKeySet)),
       );
-    } catch {
-      setDealsError('Could not delete from shared backend. Deal was removed locally.');
+      let sharedDeleteSucceeded = false;
+      let sharedDeleteQueued = false;
+
+      if (supabase && hasSupabaseConfig) {
+        try {
+          const result = await deleteDealFromBackend(deleteDescriptor);
+          sharedDeleteSucceeded = result.deletedIds.length > 0;
+        } catch {
+          enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+          sharedDeleteQueued = true;
+          setDealsError('Could not delete from shared backend yet. Deal is hidden locally and queued for retry.');
+          pushToast('Deal hidden locally. Shared delete queued.', 'share');
+        }
+      } else {
+        enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+        sharedDeleteQueued = true;
+        setDealsError('Shared backend is unavailable. Deal is hidden locally and queued for retry.');
+        pushToast('Deal hidden locally. Shared delete queued.', 'share');
+      }
+
+      if (sharedDeleteSucceeded) {
+        clearPendingDeleteDescriptorByDescriptor(deleteDescriptor);
+        setDealsError('');
+        pushToast('Deal deleted.', 'share');
+      } else if (supabase && hasSupabaseConfig && !sharedDeleteQueued) {
+        enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+        setDealsError('Shared delete returned no affected rows. Deal is hidden locally and queued for retry.');
+        pushToast('Deal hidden locally. Shared delete queued.', 'share');
+      }
+    } catch (error) {
+      console.error('[LiveDrop] Delete flow failed unexpectedly', error);
+      enqueuePendingDeleteDescriptorByDescriptor(deleteDescriptor);
+      setDealsError('Could not complete delete flow. Deal is hidden locally and queued for retry.');
+      pushToast('Deal hidden locally. Shared delete queued.', 'share');
     } finally {
       setDeletingDealIds((prev) => {
         const next = new Set(prev);
@@ -6891,6 +7140,14 @@ const deleteDealFromBackend = async (deal: Deal) => {
       hiddenDealKeysRef.current = next;
       if (typeof window !== 'undefined') {
         safeRemoveLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY);
+      }
+      return next;
+    });
+    setPendingDeleteDescriptors(() => {
+      const next: DealDeleteDescriptor[] = [];
+      pendingDeleteDescriptorsRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeRemoveLocalStorageItem(PENDING_DELETE_DESCRIPTORS_STORAGE_KEY);
       }
       return next;
     });
@@ -7577,20 +7834,14 @@ const deleteDealFromBackend = async (deal: Deal) => {
       return true;
     });
     const isDesktopDealGrid = viewportWidth >= 1024;
-    const desktopDealGridColumnCount = viewportWidth >= 1536 ? 5 : viewportWidth >= 1280 ? 4 : 3;
-    const desktopFiveRowDealLimit = desktopDealGridColumnCount * 5;
-    const visibleLocalDeals = isDesktopDealGrid
-      ? filteredActiveLocalDeals.slice(0, desktopFiveRowDealLimit)
-      : filteredActiveLocalDeals;
+    const visibleLocalDeals = filteredActiveLocalDeals;
     const isOnlineCategoryView = isOnlineMode && selectedCategory !== 'All';
     const sortedOnlineDealsByTab = isDropModeActive
       ? filteredOnlineDealsByTab
       : [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const visibleOnlineDealsByTab = isDesktopDealGrid
-      ? sortedOnlineDealsByTab.slice(0, desktopFiveRowDealLimit)
-      : sortedOnlineDealsByTab;
+    const visibleOnlineDealsByTab = sortedOnlineDealsByTab;
     const pagedCategoryOnlineDeals = [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const categoryOnlinePageSize = isDesktopDealGrid ? desktopFiveRowDealLimit : 7;
+    const categoryOnlinePageSize = isDesktopDealGrid ? Math.max(1, pagedCategoryOnlineDeals.length) : 7;
     const categoryOnlineDealPages = chunkItems(pagedCategoryOnlineDeals, categoryOnlinePageSize);
     const totalCategoryOnlinePages = Math.max(1, categoryOnlineDealPages.length);
     const safeOnlineCategoryPage = Math.min(onlineCategoryPage, totalCategoryOnlinePages - 1);
