@@ -854,15 +854,29 @@ const normalizeDealUrlForMatch = (value?: unknown) => {
 const normalizeDealIdentityText = (value?: unknown) =>
   (typeof value === 'string' ? value : '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-const getDealHiddenIdentityKey = (deal: Deal) => {
+const getDealHiddenIdentityKeys = (deal: Deal) => {
   const businessType = deal.businessType === 'online' ? 'online' : 'local';
   const business = normalizeDealIdentityText(deal.businessName);
   const title = normalizeDealIdentityText(deal.title);
   const product = normalizeDealUrlForMatch(deal.productUrl);
   const affiliate = normalizeDealUrlForMatch(deal.affiliateUrl);
   const website = normalizeDealUrlForMatch(deal.websiteUrl);
-  return `${businessType}::${business}::${title}::${product}::${affiliate}::${website}`;
+  const keys = [
+    // Legacy exact key format for backward compatibility.
+    `${businessType}::${business}::${title}::${product}::${affiliate}::${website}`,
+    // Stable broad keys to survive id/url churn during relaunch/reuse.
+    `${businessType}::title::${title}`,
+    `${businessType}::business_title::${business}::${title}`,
+    product ? `${businessType}::product::${product}` : '',
+    affiliate ? `${businessType}::affiliate::${affiliate}` : '',
+    website && title ? `${businessType}::website_title::${website}::${title}` : '',
+  ];
+
+  return [...new Set(keys.filter(Boolean))];
 };
+
+const isDealHiddenByIdentityKeys = (deal: Deal, hiddenKeys: Set<string>) =>
+  getDealHiddenIdentityKeys(deal).some((key) => hiddenKeys.has(key));
 
 const isLikelySameOnlineDeal = (left: Deal, right: Deal) => {
   const leftSourceId = extractMockOnlineSourceId(left.id);
@@ -3493,7 +3507,7 @@ export default function App() {
 
       const sanitizedDeals = sanitizeDealsCollection(Array.isArray(resolvedDeals) ? resolvedDeals : []);
       return sanitizedDeals.filter(
-        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !hiddenDealKeysRef.current.has(getDealHiddenIdentityKey(deal)),
+        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !isDealHiddenByIdentityKeys(deal, hiddenDealKeysRef.current),
       );
     });
   };
@@ -3579,7 +3593,7 @@ export default function App() {
     hiddenDealIdsRef.current = hiddenDealIds;
     setRawDeals((previousDeals) =>
       previousDeals.filter(
-        (deal) => !hiddenDealIds.has(deal.id) && !hiddenDealKeysRef.current.has(getDealHiddenIdentityKey(deal)),
+        (deal) => !hiddenDealIds.has(deal.id) && !isDealHiddenByIdentityKeys(deal, hiddenDealKeysRef.current),
       ),
     );
   }, [hiddenDealIds]);
@@ -3587,7 +3601,7 @@ export default function App() {
     hiddenDealKeysRef.current = hiddenDealKeys;
     setRawDeals((previousDeals) =>
       previousDeals.filter(
-        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !hiddenDealKeys.has(getDealHiddenIdentityKey(deal)),
+        (deal) => !hiddenDealIdsRef.current.has(deal.id) && !isDealHiddenByIdentityKeys(deal, hiddenDealKeys),
       ),
     );
   }, [hiddenDealKeys]);
@@ -6804,7 +6818,9 @@ const deleteDealFromBackend = async (deal: Deal) => {
     });
     setHiddenDealKeys((prev) => {
       const next = new Set(prev);
-      next.add(getDealHiddenIdentityKey(deal));
+      getDealHiddenIdentityKeys(deal).forEach((key) => {
+        next.add(key);
+      });
       hiddenDealKeysRef.current = next;
       if (typeof window !== 'undefined') {
         safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
