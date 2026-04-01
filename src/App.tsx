@@ -11681,7 +11681,9 @@ const deleteDealFromBackend = async (
                         </div>
                       </div>
                       <div className="flex flex-col items-end">
-                        <Timer expiresAt={deal.expiresAt} className="text-xs" />
+                        {deal.businessType !== 'online' && deal.hasTimer !== false ? (
+                          <Timer expiresAt={deal.expiresAt} className="text-xs" />
+                        ) : null}
                         <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full mt-2 ${deal.expiresAt > Date.now() ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
                           {isExpiredDeal(deal) ? 'Expired' : 'Active'}
                         </span>
@@ -11836,7 +11838,9 @@ const deleteDealFromBackend = async (
                       </div>
                     </div>
                     <div className="flex flex-col items-end">
-                      <Timer expiresAt={deal.expiresAt} className="text-xs" />
+                      {deal.businessType !== 'online' && deal.hasTimer !== false ? (
+                        <Timer expiresAt={deal.expiresAt} className="text-xs" />
+                      ) : null}
                       <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full mt-2 ${deal.expiresAt > Date.now() ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
                         {isExpiredDeal(deal) ? 'Expired' : 'Active'}
                       </span>

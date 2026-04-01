@@ -50,7 +50,8 @@ export const DealCard: React.FC<DealCardProps> = ({
   onDeleteDeal,
   isDeleting = false,
 }) => {
-  const [isExpired, setIsExpired] = useState(deal.expiresAt <= Date.now());
+  const showTimer = deal.businessType !== 'online' && deal.hasTimer !== false;
+  const [isExpired, setIsExpired] = useState(showTimer && deal.expiresAt <= Date.now());
   const getBadgeIcon = (badge: string) => {
     if (badge === 'Trending') return 'trending' as const;
     if (badge === 'Ending Soon') return 'ending' as const;
@@ -91,7 +92,9 @@ export const DealCard: React.FC<DealCardProps> = ({
               </p>
             </div>
           </div>
-          <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-[10px] min-[360px]:text-[11px]" />
+          {showTimer ? (
+            <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-[10px] min-[360px]:text-[11px]" />
+          ) : null}
         </div>
 
         <div className="mt-2.5 flex flex-col gap-2 min-[390px]:flex-row min-[390px]:items-center min-[390px]:justify-between">
@@ -198,7 +201,9 @@ export const DealCard: React.FC<DealCardProps> = ({
             ) : null}
           </div>
         </div>
-        <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-[13px] min-[360px]:text-base" />
+        {showTimer ? (
+          <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-[13px] min-[360px]:text-base" />
+        ) : null}
       </div>
 
       <div className={`mb-2.5 rounded-[1rem] border px-3 py-2.5 transition-colors ${isExpired ? 'border-slate-100 bg-slate-50' : 'border-indigo-100/90 bg-[linear-gradient(135deg,rgba(238,242,255,0.92),rgba(224,231,255,0.72))]'}`}>

@@ -38,7 +38,8 @@ export const FeaturedDealCard: React.FC<FeaturedDealCardProps> = ({
   onDislike,
   onShare,
 }) => {
-  const [isExpired, setIsExpired] = useState(deal.expiresAt <= Date.now());
+  const showTimer = deal.businessType !== 'online' && deal.hasTimer !== false;
+  const [isExpired, setIsExpired] = useState(showTimer && deal.expiresAt <= Date.now());
 
   const getBadgeIcon = (badge: string) => {
     if (badge === 'Trending') return 'trending' as const;
@@ -97,7 +98,9 @@ export const FeaturedDealCard: React.FC<FeaturedDealCardProps> = ({
             <h2 className="line-clamp-2 break-words pr-1 text-xl font-extrabold leading-tight text-slate-900">{displayTitle}</h2>
           </div>
         </div>
-        <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-lg font-bold" />
+        {showTimer ? (
+          <Timer expiresAt={deal.expiresAt} onExpire={handleExpire} className="shrink-0 text-lg font-bold" />
+        ) : null}
       </div>
 
       <div className={`mb-3 rounded-xl border-2 px-4 py-3 transition-colors ${isExpired ? 'border-slate-200 bg-slate-100' : 'border-amber-200 bg-gradient-to-r from-amber-100 to-orange-100'}`}>

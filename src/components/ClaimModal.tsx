@@ -50,6 +50,7 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
     }
   };
 
+  const showTimerPanel = deal.businessType !== 'online' && deal.hasTimer !== false;
   const expiresInMinutes = Math.max(
     0,
     Math.floor(((Number.isFinite(deal.expiresAt) ? deal.expiresAt : Date.now()) - Date.now()) / 60000),
@@ -86,12 +87,14 @@ export const ClaimModal: React.FC<ClaimModalProps> = ({ deal, onClose, onConfirm
                 You're about to claim <span className="text-indigo-600 font-bold">{deal.offerText}</span> at <span className="text-slate-900 font-bold">{deal.businessName}</span>.
               </p>
               
-              <div className="bg-indigo-50 rounded-3xl p-6 mb-8 border border-indigo-100/50">
-                <p className="text-[10px] text-indigo-400 uppercase font-black tracking-widest mb-1">Expires in</p>
-                <p className="text-indigo-600 font-mono text-2xl font-black">
-                  {expiresInMinutes} minutes
-                </p>
-              </div>
+              {showTimerPanel ? (
+                <div className="bg-indigo-50 rounded-3xl p-6 mb-8 border border-indigo-100/50">
+                  <p className="text-[10px] text-indigo-400 uppercase font-black tracking-widest mb-1">Expires in</p>
+                  <p className="text-indigo-600 font-mono text-2xl font-black">
+                    {expiresInMinutes} minutes
+                  </p>
+                </div>
+              ) : null}
 
               {claimError ? (
                 <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
