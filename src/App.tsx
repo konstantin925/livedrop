@@ -46,6 +46,7 @@ const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
 const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
+const DISABLE_DEAL_EXPIRY = true;
 const RADIUS_OPTIONS = [1, 3, 5, 10, 25];
 const LOCAL_ADMIN_MODE = false;
 const ADMIN_SESSION_STORAGE_KEY = 'livedrop_admin_session';
@@ -824,6 +825,12 @@ const isExcludedOnlineDeal = (deal: Deal) => {
 
 const isManagedLocalSeedDeal = (deal: Deal) =>
   deal.businessType !== 'online' && typeof deal.id === 'string' && deal.id.startsWith('seed-');
+
+const isFallbackSeedDeal = (deal: Deal) =>
+  isManagedLocalSeedDeal(deal)
+  || (deal.businessType === 'online'
+    && typeof deal.id === 'string'
+    && (deal.id.startsWith('online-seed-') || deal.id.startsWith('mock-online-')));
 
 const MOCK_ONLINE_SOURCE_ID_PATTERN = /^mock-online-\d+-\d+-\d+-(.+)$/;
 
@@ -2485,7 +2492,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     businessType !== 'online' && hasUsableCoordinates(normalizedLat, normalizedLng);
   const nextStatus = input.status === 'draft'
     ? 'draft'
-    : expiresAt <= Date.now()
+    : !DISABLE_DEAL_EXPIRY && expiresAt <= Date.now()
       ? 'expired'
       : 'active';
   const normalizedCategory = normalizeDealCategoryValue(input.category, businessType, [
@@ -2676,7 +2683,7 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   return {
     id: ensureUuid(deal.id),
     business_type: deal.businessType ?? 'local',
-    status: deal.status ?? (deal.expiresAt <= Date.now() ? 'expired' : 'active'),
+    status: deal.status ?? (!DISABLE_DEAL_EXPIRY && deal.expiresAt <= Date.now() ? 'expired' : 'active'),
     featured: deal.featured ?? false,
     admin_tag: deal.adminTag ?? null,
     business_name: deal.businessName,
@@ -3522,6 +3529,9 @@ export default function App() {
   const [selectedLocalSubcategory, setSelectedLocalSubcategory] = useState<string>('All');
   const [selectedOnlineSubcategory, setSelectedOnlineSubcategory] = useState<string>('All');
   const [onlineCategoryPage, setOnlineCategoryPage] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window === 'undefined' ? 1280 : window.innerWidth,
+  );
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
@@ -3761,6 +3771,18 @@ export default function App() {
     if (typeof window === 'undefined') return;
     safeSetLocalStorageItem('livedrop_admin_deals_view', adminDealsView);
   }, [adminDealsView]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => {
+      setViewportWidth(window.innerWidth);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
 
   useEffect(() => {
     if (!pendingPortalAutofill || !portalFieldSnapshot) {
@@ -6534,7 +6556,9 @@ const deleteDealFromBackend = async (deal: Deal) => {
   };
 
   const isExpiredDeal = (deal: Deal, at: number = Date.now()) =>
-    deal.expiresAt <= at || deal.status === 'expired';
+    DISABLE_DEAL_EXPIRY
+      ? false
+      : deal.expiresAt <= at || deal.status === 'expired';
 
   const handleReuseDeal = (deal: Deal) => {
     const nextDraft = createReusedDealPayload(deal, { durationMinutes: 30 });
@@ -6800,6 +6824,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
   const handleAdminDeleteDeal = async (deal: Deal) => {
     const confirmed = window.confirm(`Delete "${deal.title}"? This action cannot be undone.`);
     if (!confirmed) return;
+    const persistPermanentTombstone = !isFallbackSeedDeal(deal);
 
     setDeletingDealIds((prev) => {
       const next = new Set(prev);
@@ -6807,33 +6832,40 @@ const deleteDealFromBackend = async (deal: Deal) => {
       return next;
     });
 
-    setHiddenDealIds((prev) => {
-      const next = new Set(prev);
-      next.add(deal.id);
-      hiddenDealIdsRef.current = next;
-      if (typeof window !== 'undefined') {
-        safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
-      }
-      return next;
-    });
-    setHiddenDealKeys((prev) => {
-      const next = new Set(prev);
-      getDealHiddenIdentityKeys(deal).forEach((key) => {
-        next.add(key);
+    if (persistPermanentTombstone) {
+      setHiddenDealIds((prev) => {
+        const next = new Set(prev);
+        next.add(deal.id);
+        hiddenDealIdsRef.current = next;
+        if (typeof window !== 'undefined') {
+          safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+        }
+        return next;
       });
-      hiddenDealKeysRef.current = next;
-      if (typeof window !== 'undefined') {
-        safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
-      }
-      return next;
-    });
+      setHiddenDealKeys((prev) => {
+        const next = new Set(prev);
+        getDealHiddenIdentityKeys(deal).forEach((key) => {
+          next.add(key);
+        });
+        hiddenDealKeysRef.current = next;
+        if (typeof window !== 'undefined') {
+          safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify(Array.from(next)));
+        }
+        return next;
+      });
+    }
 
     try {
       setDeals((prev) => prev.filter((item) => item.id !== deal.id));
       if (supabase && hasSupabaseConfig) {
         await deleteDealFromBackend(deal);
       }
-      pushToast('Deal deleted.', 'share');
+      pushToast(
+        persistPermanentTombstone
+          ? 'Deal deleted permanently.'
+          : 'Fallback deal removed. It can return if shared deals are unavailable.',
+        'share',
+      );
     } catch {
       setDealsError('Could not delete from shared backend. Deal was removed locally.');
     } finally {
@@ -6843,6 +6875,27 @@ const deleteDealFromBackend = async (deal: Deal) => {
         return next;
       });
     }
+  };
+
+  const handleRestoreHiddenDeals = () => {
+    setHiddenDealIds(() => {
+      const next = new Set<string>();
+      hiddenDealIdsRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeRemoveLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY);
+      }
+      return next;
+    });
+    setHiddenDealKeys(() => {
+      const next = new Set<string>();
+      hiddenDealKeysRef.current = next;
+      if (typeof window !== 'undefined') {
+        safeRemoveLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY);
+      }
+      return next;
+    });
+    pushToast('Hidden deals restored.', 'share');
+    void refreshSharedDeals();
   };
 
   const handleAdminSetDealStatus = async (deal: Deal, status: Deal['status']) => {
@@ -7371,8 +7424,12 @@ const deleteDealFromBackend = async (deal: Deal) => {
     const now = Date.now();
     const isOnlineMode = dropMode === 'online';
     const isDropModeActive = isOnlineMode && dropModeEnabled;
-    const localDeals = deals.filter((deal) => deal.businessType !== 'online' && (deal.status ?? 'active') === 'active');
-    const onlineDeals = deals.filter((deal) => deal.businessType === 'online' && (deal.status ?? 'active') === 'active');
+    const localDeals = deals.filter(
+      (deal) => deal.businessType !== 'online' && (deal.status ?? 'active') !== 'draft' && !isExpiredDeal(deal, now),
+    );
+    const onlineDeals = deals.filter(
+      (deal) => deal.businessType === 'online' && (deal.status ?? 'active') !== 'draft' && !isExpiredDeal(deal, now),
+    );
     const onlineDealsWithSubcategory = onlineDeals.map((deal) => ({
       ...deal,
       onlineSubcategory: getOnlineDealSubcategory(deal),
@@ -7418,7 +7475,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
 
     const activeLocalDeals = dealsWithDistance
       .filter(d =>
-        d.expiresAt > now &&
+        !isExpiredDeal(d, now) &&
         d.computedDistanceValue <= radius &&
         (selectedCategory === 'All' || d.category === selectedCategory) &&
         (
@@ -7442,7 +7499,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
       .filter(d => now - d.createdAt <= 45 * 60 * 1000)
       .sort((a, b) => b.createdAt - a.createdAt);
 
-    const expiredLocalDeals = dealsWithDistance.filter(d => d.expiresAt <= now);
+    const expiredLocalDeals = dealsWithDistance.filter((d) => isExpiredDeal(d, now));
     const trendingIds = new Set(trendingDeals.map(deal => deal.id));
     const endingSoonIds = new Set(endingSoonDeals.map(deal => deal.id));
     const justDroppedIds = new Set(justDroppedDeals.map(deal => deal.id));
@@ -7467,7 +7524,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
 
     const activeOnlineDeals = onlineDealsWithSubcategory.filter(
       (deal) =>
-        deal.expiresAt > now &&
+        !isExpiredDeal(deal, now) &&
         (selectedCategory === 'All' || deal.category === selectedCategory) &&
         (
           !hasOnlineSubcategory ||
@@ -7519,13 +7576,22 @@ const deleteDealFromBackend = async (deal: Deal) => {
       if (selectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
       return true;
     });
+    const isDesktopDealGrid = viewportWidth >= 1024;
+    const desktopDealGridColumnCount = viewportWidth >= 1536 ? 5 : viewportWidth >= 1280 ? 4 : 3;
+    const desktopFiveRowDealLimit = desktopDealGridColumnCount * 5;
+    const visibleLocalDeals = isDesktopDealGrid
+      ? filteredActiveLocalDeals.slice(0, desktopFiveRowDealLimit)
+      : filteredActiveLocalDeals;
     const isOnlineCategoryView = isOnlineMode && selectedCategory !== 'All';
     const sortedOnlineDealsByTab = isDropModeActive
       ? filteredOnlineDealsByTab
       : [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const onlineDealRows = chunkItems(sortedOnlineDealsByTab, 7);
+    const visibleOnlineDealsByTab = isDesktopDealGrid
+      ? sortedOnlineDealsByTab.slice(0, desktopFiveRowDealLimit)
+      : sortedOnlineDealsByTab;
     const pagedCategoryOnlineDeals = [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const categoryOnlineDealPages = chunkItems(pagedCategoryOnlineDeals, 7);
+    const categoryOnlinePageSize = isDesktopDealGrid ? desktopFiveRowDealLimit : 7;
+    const categoryOnlineDealPages = chunkItems(pagedCategoryOnlineDeals, categoryOnlinePageSize);
     const totalCategoryOnlinePages = Math.max(1, categoryOnlineDealPages.length);
     const safeOnlineCategoryPage = Math.min(onlineCategoryPage, totalCategoryOnlinePages - 1);
     const visibleCategoryOnlineDeals = categoryOnlineDealPages[safeOnlineCategoryPage] ?? [];
@@ -8375,7 +8441,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                {filteredActiveLocalDeals.map(deal => (
+                {visibleLocalDeals.map(deal => (
                   <DealCard 
                     key={deal.id} 
                     deal={deal} 
@@ -8500,7 +8566,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
             ) : (
               sortedOnlineDealsByTab.length > 0 ? (
                 <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                  {sortedOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
+                  {visibleOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
                 </div>
               ) : (
                 <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
@@ -8806,7 +8872,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
     });
     const recommendedClaimDeals = deals
       .filter((deal) =>
-        deal.expiresAt > now
+        !isExpiredDeal(deal, now)
         && !claims.some((claim) => claim.dealId === deal.id)
         && deal.currentClaims < deal.maxClaims,
       )
@@ -9140,12 +9206,12 @@ const deleteDealFromBackend = async (deal: Deal) => {
     const progressPercent = Math.round((progressCount / progressTarget) * 100);
     const savedDealIds = new Set(catalogCoupons.map((coupon) => coupon.dealId));
     const liveRecommendedDeals = deals
-      .filter((deal) => canSaveDealToCatalog(deal) && deal.expiresAt > now && !savedDealIds.has(deal.id))
+      .filter((deal) => canSaveDealToCatalog(deal) && !isExpiredDeal(deal, now) && !savedDealIds.has(deal.id))
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, 3);
     const fallbackRecommendedDeals = generateSeededOnlineDeals()
       .filter((deal) => !isExcludedOnlineDeal(deal))
-      .filter((deal) => deal.expiresAt > now && !savedDealIds.has(deal.id))
+      .filter((deal) => !isExpiredDeal(deal, now) && !savedDealIds.has(deal.id))
       .slice(0, 3);
     const recommendedCatalogDeals = liveRecommendedDeals.length > 0 ? liveRecommendedDeals : fallbackRecommendedDeals;
     const openAllDeals = () => {
@@ -11366,7 +11432,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
                       <div className="flex flex-col items-end">
                         <Timer expiresAt={deal.expiresAt} className="text-xs" />
                         <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full mt-2 ${deal.expiresAt > Date.now() ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
-                          {deal.expiresAt > Date.now() ? 'Active' : 'Expired'}
+                          {isExpiredDeal(deal) ? 'Expired' : 'Active'}
                         </span>
                       </div>
                     </div>
@@ -11521,7 +11587,7 @@ const deleteDealFromBackend = async (deal: Deal) => {
                     <div className="flex flex-col items-end">
                       <Timer expiresAt={deal.expiresAt} className="text-xs" />
                       <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full mt-2 ${deal.expiresAt > Date.now() ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
-                        {deal.expiresAt > Date.now() ? 'Active' : 'Expired'}
+                        {isExpiredDeal(deal) ? 'Expired' : 'Active'}
                       </span>
                     </div>
                   </div>
@@ -11795,6 +11861,17 @@ const deleteDealFromBackend = async (deal: Deal) => {
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
                   Force Refresh
+                </button>
+                <button
+                  onClick={handleRestoreHiddenDeals}
+                  disabled={hiddenDealIds.size === 0 && hiddenDealKeys.size === 0}
+                  className={`inline-flex h-10 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                    hiddenDealIds.size > 0 || hiddenDealKeys.size > 0
+                      ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100'
+                      : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300'
+                  }`}
+                >
+                  Restore Hidden Deals
                 </button>
                 <button
                   onClick={() => void handleReuseAllExpiredDeals()}
