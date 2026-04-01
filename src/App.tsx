@@ -8150,9 +8150,17 @@ const deleteDealFromBackend = async (deal: Deal) => {
                 onClick={handleDropModeToggle}
                 aria-pressed={isDropModeActive}
                 aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                className="group relative inline-flex h-16 w-16 min-[360px]:h-[74px] min-[360px]:w-[74px] items-center justify-center rounded-[1.05rem] border border-indigo-200/80 bg-white/35 p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0"
+                className={`group relative inline-flex h-16 w-16 min-[360px]:h-[74px] min-[360px]:w-[74px] items-center justify-center overflow-hidden rounded-[1.05rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
+                  isDropModeActive
+                    ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.26)_0%,rgba(255,255,255,0.18)_58%,rgba(120,125,255,0.22)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_9px_20px_rgba(102,102,255,0.28)]'
+                    : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.95)_55%,rgba(236,241,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_8px_18px_rgba(129,140,248,0.16)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_22px_rgba(99,102,241,0.22)]'
+                }`}
               >
                 <div className="relative h-full w-full flex items-center justify-center">
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-1 top-1 h-[38%] rounded-[0.85rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.4)_64%,rgba(255,255,255,0)_100%)]"
+                  />
                   <img
                     src={brandBoltLogo3d}
                     alt=""
