@@ -8707,7 +8707,13 @@ const deleteDealFromBackend = async (
         ? 'Fresh online deals, newest first.'
         : `Fresh ${getCategoryLabel(selectedCategory).toLowerCase()} deals, newest first.`;
     const onlineHeroIconName = selectedCategory === 'All' ? 'online' : getCategoryIconName(selectedCategory);
-    const discountFilterLabel = discountFilterEnabled ? `${discountFilterValue}%+ Off` : 'All Discounts';
+    const discountSteps = [10, 20, 30, 40, 50, 70, 90];
+    const discountFilterLabel = discountFilterEnabled ? `${discountFilterValue}%+` : '10%+';
+    const discountSliderIndex = discountFilterEnabled
+      ? Math.max(0, discountSteps.indexOf(discountFilterValue))
+      : 0;
+    const discountSliderProgress = (discountSliderIndex / (discountSteps.length - 1)) * 100;
+    const discountThumbSize = 22;
 
     const getOnlineDealHeroLabel = (offerText?: string | null) => {
       const normalizedOffer = (typeof offerText === 'string' ? offerText : '').trim();
@@ -9336,53 +9342,107 @@ const deleteDealFromBackend = async (
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
-            <div className="relative z-10 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 min-[360px]:gap-3">
-              <div className="min-w-0 pr-1.5">
+            <div className="relative z-10 flex flex-col gap-2.5 min-[640px]:grid min-[640px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] min-[640px]:items-center min-[640px]:gap-3">
+              <div className="flex items-center justify-between min-[640px]:hidden">
                 <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
+                <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
+                  isDropModeActive
+                    ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
+                    : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
+                }`}>
+                  {sortedOnlineDealsByTab.length} Drops
+                </span>
+              </div>
+
+              <div className="min-w-0 pr-1.5">
+                <p className="hidden text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90 min-[640px]:block">Online</p>
                 <h2 className="mt-1 text-[1.12rem] min-[360px]:text-[1.24rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
                   {onlineHeadline}
                 </h2>
-                <p className="mt-1 max-w-[14rem] min-[360px]:max-w-[16rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
+                <p className="mt-1 max-w-[16rem] min-[360px]:max-w-[18rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
                   {onlineCategoryDescription}
                 </p>
               </div>
-              <div className="flex min-w-0 flex-col items-center gap-1 px-1">
-                <div className="flex w-[180px] min-[360px]:w-[210px] min-[1024px]:w-[260px] flex-col items-center gap-1.5">
-                  <div className="flex w-full items-center justify-between text-[9px] min-[360px]:text-[10px] font-black uppercase tracking-[0.16em]">
-                    <span className="text-slate-500">Discount</span>
-                    <span className="text-indigo-600">{discountFilterLabel}</span>
-                  </div>
-                  <div className="w-full rounded-full bg-slate-200/70 px-2 py-1 shadow-inner shadow-white/80 ring-1 ring-white/60">
-                    <input
-                      type="range"
-                      min={10}
-                      max={90}
-                      step={10}
-                      value={discountFilterValue}
-                      onChange={(event) => {
-                        const nextValue = Number(event.target.value);
-                        setDiscountFilterValue(nextValue);
-                        setDiscountFilterEnabled(true);
-                      }}
-                      aria-label="Minimum discount percentage"
-                      className="h-1.5 w-full cursor-pointer accent-indigo-600"
-                    />
-                  </div>
+
+              <div className="flex min-w-0 flex-col items-stretch gap-2 min-[640px]:hidden">
+                <div
+                  className="discount-meter discount-meter--mobile"
+                  style={{
+                    '--discount-progress': `${discountSliderProgress}%`,
+                    '--discount-thumb-size': `${discountThumbSize}px`,
+                  } as React.CSSProperties}
+                >
                   <button
                     type="button"
                     onClick={() => setDiscountFilterEnabled(false)}
-                    disabled={!discountFilterEnabled}
-                    className={`text-[9px] font-black uppercase tracking-[0.14em] transition-colors ${
-                      discountFilterEnabled
-                        ? 'text-indigo-500 hover:text-indigo-600'
-                        : 'cursor-default text-slate-400'
-                    }`}
+                    className="discount-meter__label"
                   >
-                    All Discounts
+                    DISCOUNTS
                   </button>
+                  <div className="discount-meter__track">
+                    <div className="discount-meter__track-fill" />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={discountSteps.length - 1}
+                    step={1}
+                    value={discountSliderIndex}
+                    onChange={(event) => {
+                      const nextIndex = Number(event.target.value);
+                      const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
+                      setDiscountFilterValue(nextValue);
+                      setDiscountFilterEnabled(true);
+                    }}
+                    aria-label="Minimum discount percentage"
+                    className="discount-meter__range"
+                  />
+                  <div className="discount-meter__value">
+                    {discountFilterLabel}
+                  </div>
                 </div>
               </div>
-              <div className="flex justify-end">
+
+              <div className="hidden min-[640px]:flex min-w-0 flex-col items-center gap-1 px-1">
+                <div
+                  className="discount-meter discount-meter--desktop"
+                  style={{
+                    '--discount-progress': `${discountSliderProgress}%`,
+                    '--discount-thumb-size': `${discountThumbSize}px`,
+                  } as React.CSSProperties}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setDiscountFilterEnabled(false)}
+                    className="discount-meter__label"
+                  >
+                    DISCOUNTS
+                  </button>
+                  <div className="discount-meter__track">
+                    <div className="discount-meter__track-fill" />
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={discountSteps.length - 1}
+                    step={1}
+                    value={discountSliderIndex}
+                    onChange={(event) => {
+                      const nextIndex = Number(event.target.value);
+                      const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
+                      setDiscountFilterValue(nextValue);
+                      setDiscountFilterEnabled(true);
+                    }}
+                    aria-label="Minimum discount percentage"
+                    className="discount-meter__range"
+                  />
+                  <div className="discount-meter__value">
+                    {discountFilterLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="hidden min-[640px]:flex justify-end">
                 <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
                   isDropModeActive
                     ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
