@@ -70,7 +70,9 @@ create table if not exists public.deals (
   max_claims integer not null default 0,
   current_claims integer not null default 0,
   claim_count integer not null default 0,
-  category text not null
+  category text not null,
+  local_subcategory text,
+  online_subcategory text
 );
 
 alter table public.deals add column if not exists featured boolean not null default false;
@@ -104,6 +106,32 @@ alter table public.deals add column if not exists max_claims integer not null de
 alter table public.deals add column if not exists current_claims integer not null default 0;
 alter table public.deals add column if not exists claim_count integer not null default 0;
 alter table public.deals add column if not exists category text;
+alter table public.deals add column if not exists local_subcategory text;
+alter table public.deals add column if not exists online_subcategory text;
+
+create index if not exists deals_status_created_at_idx
+on public.deals (status, created_at desc);
+
+create index if not exists deals_business_type_created_at_idx
+on public.deals (business_type, created_at desc);
+
+create index if not exists deals_business_type_status_created_at_idx
+on public.deals (business_type, status, created_at desc);
+
+create index if not exists deals_product_url_idx
+on public.deals (product_url)
+where product_url is not null;
+
+create index if not exists deals_affiliate_url_idx
+on public.deals (affiliate_url)
+where affiliate_url is not null;
+
+create index if not exists deals_website_title_idx
+on public.deals (website_url, title)
+where website_url is not null;
+
+create index if not exists deals_business_title_category_idx
+on public.deals (business_type, business_name, title, category);
 
 alter table public.profiles enable row level security;
 alter table public.user_app_state enable row level security;

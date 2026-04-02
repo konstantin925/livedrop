@@ -6945,6 +6945,28 @@ const deleteDealFromBackend = async (
     const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
     const isEditingExistingDeal = Boolean(editingDealId && existingDraft);
     const persistedEditingDealId = editingDealId ? ensureUuid(editingDealId) : null;
+    if ((shouldPublish || isEditingExistingDeal) && supabase && hasSupabaseConfig) {
+      try {
+        const { columns } = await fetchDealsSchemaColumns();
+        const missingColumns: string[] = [];
+        if (dealData.businessType === 'online' && dealData.onlineSubcategory && !columns.includes('online_subcategory')) {
+          missingColumns.push('online_subcategory');
+        }
+        if (dealData.businessType !== 'online' && dealData.localSubcategory && !columns.includes('local_subcategory')) {
+          missingColumns.push('local_subcategory');
+        }
+        if (missingColumns.length > 0) {
+          const message = `Subcategory cannot be saved yet. Missing columns in ${DEALS_SCHEMA}.${DEALS_TABLE}: ${missingColumns.join(', ')}. Apply the latest supabase/schema.sql migration and try again.`;
+          setDealsError(message);
+          setPortalSuccessMessage('');
+          pushToast('Subcategory columns missing in Supabase. Apply schema migration.', 'error');
+          pushAdminLog('error', 'Missing subcategory columns for publish', message);
+          return;
+        }
+      } catch (error) {
+        console.warn('[LiveDrop] Could not verify subcategory columns before publish', error);
+      }
+    }
     const now = Date.now();
     const relaunchedCreatedAt = isEditingExistingDeal ? now : existingDraft?.createdAt ?? now;
     const nextStatus: Deal['status'] = isEditingExistingDeal
