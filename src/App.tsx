@@ -9113,53 +9113,45 @@ const deleteDealFromBackend = async (
 
         {renderDealsErrorBanner()}
 
-        <div className="hidden min-[1024px]:grid min-[1024px]:grid-cols-[1fr_auto_1fr] min-[1024px]:items-center min-[1024px]:gap-3 min-[1024px]:rounded-[1.1rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-2.5 min-[1024px]:shadow-sm">
-          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-            Browse
+        <div className="hidden min-[1024px]:flex min-[1024px]:items-center min-[1024px]:justify-center min-[1024px]:rounded-[1.1rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-2.5 min-[1024px]:shadow-sm">
+          <div className="inline-grid h-11 w-full max-w-[520px] grid-cols-2 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_20px_rgba(148,163,184,0.16)]">
+            <button
+              type="button"
+              onClick={handleGlobalLocalFeedMode}
+              aria-pressed={dropMode === 'local'}
+              className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                dropMode === 'local'
+                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                  : 'text-slate-500 hover:text-indigo-600'
+              }`}
+            >
+              <AppIcon name="pin" size={16} />
+              <span>Local</span>
+              {dropMode === 'local' ? (
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
+                  <AppIcon name="check" size={10} />
+                </span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={handleGlobalOnlineFeedMode}
+              aria-pressed={dropMode === 'online'}
+              className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
+                dropMode === 'online'
+                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                  : 'text-slate-500 hover:text-indigo-600'
+              }`}
+            >
+              <AppIcon name="online" size={16} />
+              <span>Online</span>
+              {dropMode === 'online' ? (
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
+                  <AppIcon name="check" size={10} />
+                </span>
+              ) : null}
+            </button>
           </div>
-          <div className="flex items-center justify-center">
-            <div className="inline-grid h-11 w-full max-w-[520px] grid-cols-2 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_20px_rgba(148,163,184,0.16)]">
-              <button
-                type="button"
-                onClick={handleGlobalLocalFeedMode}
-                aria-pressed={dropMode === 'local'}
-                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
-                  dropMode === 'local'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
-                    : 'text-slate-500 hover:text-indigo-600'
-                }`}
-              >
-                <AppIcon name="pin" size={16} />
-                <span>Local</span>
-                {dropMode === 'local' ? (
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
-                    <AppIcon name="check" size={10} />
-                  </span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                onClick={handleGlobalOnlineFeedMode}
-                aria-pressed={dropMode === 'online'}
-                className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
-                  dropMode === 'online'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
-                    : 'text-slate-500 hover:text-indigo-600'
-                }`}
-              >
-                <AppIcon name="online" size={16} />
-                <span>Online</span>
-                {dropMode === 'online' ? (
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/95 text-indigo-600">
-                    <AppIcon name="check" size={10} />
-                  </span>
-                ) : null}
-              </button>
-            </div>
-          </div>
-          <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-            {normalizedDesktopSearch ? `Searching "${desktopSearchQuery.trim()}"` : 'Popular deals right now'}
-          </span>
         </div>
 
         {/* Developer Debug Section */}
@@ -9342,107 +9334,52 @@ const deleteDealFromBackend = async (
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
-            <div className="relative z-10 flex flex-col gap-2.5 min-[640px]:grid min-[640px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] min-[640px]:items-center min-[640px]:gap-3">
-              <div className="flex items-center justify-between min-[640px]:hidden">
-                <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
-                <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
-                  isDropModeActive
-                    ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-                    : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
-                }`}>
-                  {sortedOnlineDealsByTab.length} Drops
-                </span>
-              </div>
-
-              <div className="min-w-0 pr-1.5">
-                <p className="hidden text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90 min-[640px]:block">Online</p>
-                <h2 className="mt-1 text-[1.12rem] min-[360px]:text-[1.24rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
-                  {onlineHeadline}
-                </h2>
-                <p className="mt-1 max-w-[16rem] min-[360px]:max-w-[18rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
-                  {onlineCategoryDescription}
-                </p>
-              </div>
-
-              <div className="flex min-w-0 flex-col items-stretch gap-2 min-[640px]:hidden">
-                <div
-                  className="discount-meter discount-meter--mobile"
-                  style={{
-                    '--discount-progress': `${discountSliderProgress}%`,
-                    '--discount-thumb-size': `${discountThumbSize}px`,
-                  } as React.CSSProperties}
-                >
+            <div className="relative z-10 flex flex-col gap-2.5 min-[640px]:flex-row min-[640px]:items-center min-[640px]:justify-between">
+              <div className="flex flex-col gap-2.5 min-[640px]:flex-1 min-[640px]:items-center">
+                <div className="discount-meter-wrap">
                   <button
                     type="button"
                     onClick={() => setDiscountFilterEnabled(false)}
-                    className="discount-meter__label"
+                    className={`discount-meter__all-button discount-meter__all-button--primary ${
+                      discountFilterEnabled ? '' : 'discount-meter__all-button--active'
+                    }`}
                   >
-                    DISCOUNTS
+                    All
                   </button>
-                  <div className="discount-meter__track">
-                    <div className="discount-meter__track-fill" />
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={discountSteps.length - 1}
-                    step={1}
-                    value={discountSliderIndex}
-                    onChange={(event) => {
-                      const nextIndex = Number(event.target.value);
-                      const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
-                      setDiscountFilterValue(nextValue);
-                      setDiscountFilterEnabled(true);
-                    }}
-                    aria-label="Minimum discount percentage"
-                    className="discount-meter__range"
-                  />
-                  <div className="discount-meter__value">
-                    {discountFilterLabel}
+                  <div
+                    className="discount-meter"
+                    style={{
+                      '--discount-progress': `${discountSliderProgress}%`,
+                      '--discount-thumb-size': `${discountThumbSize}px`,
+                    } as React.CSSProperties}
+                  >
+                    <span className="discount-meter__label">DISCOUNTS</span>
+                    <div className="discount-meter__track">
+                      <div className="discount-meter__track-fill" />
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={discountSteps.length - 1}
+                      step={1}
+                      value={discountSliderIndex}
+                      onChange={(event) => {
+                        const nextIndex = Number(event.target.value);
+                        const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
+                        setDiscountFilterValue(nextValue);
+                        setDiscountFilterEnabled(true);
+                      }}
+                      aria-label="Minimum discount percentage"
+                      className="discount-meter__range"
+                    />
+                    <div className="discount-meter__value">
+                      {discountFilterLabel}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="hidden min-[640px]:flex min-w-0 flex-col items-center gap-1 px-1">
-                <div
-                  className="discount-meter discount-meter--desktop"
-                  style={{
-                    '--discount-progress': `${discountSliderProgress}%`,
-                    '--discount-thumb-size': `${discountThumbSize}px`,
-                  } as React.CSSProperties}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setDiscountFilterEnabled(false)}
-                    className="discount-meter__label"
-                  >
-                    DISCOUNTS
-                  </button>
-                  <div className="discount-meter__track">
-                    <div className="discount-meter__track-fill" />
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={discountSteps.length - 1}
-                    step={1}
-                    value={discountSliderIndex}
-                    onChange={(event) => {
-                      const nextIndex = Number(event.target.value);
-                      const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
-                      setDiscountFilterValue(nextValue);
-                      setDiscountFilterEnabled(true);
-                    }}
-                    aria-label="Minimum discount percentage"
-                    className="discount-meter__range"
-                  />
-                  <div className="discount-meter__value">
-                    {discountFilterLabel}
-                  </div>
-                </div>
-              </div>
-
-              <div className="hidden min-[640px]:flex justify-end">
+              <div className="flex justify-end min-[640px]:min-w-[96px]">
                 <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
                   isDropModeActive
                     ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
@@ -9598,25 +9535,6 @@ const deleteDealFromBackend = async (
         </div>
 
         <section className="space-y-2.5">
-          <div className="hidden min-[1024px]:block min-[1024px]:rounded-[1.2rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-3 min-[1024px]:shadow-sm">
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">
-              {dropMode === 'online' ? 'Online Storefront' : 'Local Storefront'}
-            </p>
-            <h3 className="mt-1 text-[1.1rem] font-black tracking-[-0.02em] text-slate-900">
-              {selectedFeedFilter === 'trending'
-                ? 'Trending Deals'
-                : selectedFeedFilter === 'ending-soon'
-                  ? 'Ending Soon'
-                  : selectedFeedFilter === 'just-dropped'
-                    ? 'Fresh New Drops'
-                    : selectedCategory === 'All'
-                      ? 'Popular Deals Right Now'
-                      : `${getCategoryLabel(selectedCategory)} Deals`}
-            </h3>
-            <p className="mt-1 text-[12px] font-medium text-slate-500">
-              Curated picks organized for faster browsing on desktop.
-            </p>
-          </div>
           {dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
