@@ -1,5 +1,6 @@
 import { Deal, UserLocation } from '../types';
 import predatorBifrostImage from '../assets/predator-bifrost-arc-a770.png';
+import kaigerrLaptopImage from '../assets/kaigerr-laptop.png';
 
 /**
  * Generates a set of realistic demo deals around a center location.
@@ -165,6 +166,29 @@ export function generateSeededOnlineDeals(): Deal[] {
       currentClaims: 126,
       claimCount: 126,
       category: 'Tech',
+    },
+    {
+      id: 'online-seed-kaigerr-laptop',
+      businessType: 'online',
+      businessName: 'KAIGERR',
+      title: 'KAIGERR Laptop Computer 15.6-inch, WiFi 6, 1TB SSD',
+      description: 'KAIGERR laptop with 15.6-inch display, WiFi 6 support, and 1TB SSD storage. Tech > Laptops drop wired with source + affiliate tracking links.',
+      offerText: 'LAPTOP DEAL',
+      affiliateUrl: 'https://amzn.to/4ckfhag',
+      websiteUrl: 'https://www.amazon.com',
+      productUrl: 'https://www.amazon.com/dp/B0GKP72XSQ',
+      imageUrl: kaigerrLaptopImage,
+      hasTimer: false,
+      distance: 'Online',
+      lat: 0,
+      lng: 0,
+      createdAt: now - 45 * 1000,
+      expiresAt: now + 7 * 24 * 60 * 60 * 1000,
+      maxClaims: 999,
+      currentClaims: 0,
+      claimCount: 0,
+      category: 'Tech',
+      onlineSubcategory: 'Laptops',
     },
     {
       id: 'online-seed-google-pixel',

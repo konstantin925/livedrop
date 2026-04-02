@@ -49,7 +49,7 @@ const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
 const DISABLE_DEAL_EXPIRY = true;
-const SHARED_DEALS_CACHE_TTL_MS = 20_000;
+const SHARED_DEALS_CACHE_TTL_MS = 120_000;
 const CLOUD_STATE_SYNC_DEBOUNCE_MS = 1_200;
 const MAX_PENDING_DELETE_RETRIES = 3;
 const BULK_RELEASE_MAX_DEALS = 10;
@@ -103,6 +103,30 @@ const extractPriceDropPercent = (value: string) => {
   }
 
   return Math.min(100, Math.max(0, Math.round(((beforePrice - afterPrice) / beforePrice) * 100)));
+};
+
+const getDealDiscountPercentValue = (deal: Deal) => {
+  if (typeof deal.discountPercent === 'number' && Number.isFinite(deal.discountPercent)) {
+    return Math.min(100, Math.max(0, Math.round(deal.discountPercent)));
+  }
+
+  const sourceSignal = [deal.offerText, deal.title, deal.description]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+
+  const parsedPriceDropPercent = extractPriceDropPercent(sourceSignal);
+  if (parsedPriceDropPercent !== null) {
+    return parsedPriceDropPercent;
+  }
+
+  const percentMatch = sourceSignal.match(/(\d{1,3})\s*%/);
+  if (percentMatch) {
+    return Math.min(100, Math.max(0, Number(percentMatch[1])));
+  }
+
+  if (sourceSignal.toUpperCase().includes('FREE')) return 100;
+
+  return null;
 };
 
 const getDropModeDiscountScore = (deal: Deal) => {
@@ -2361,6 +2385,44 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
   'owner_id',
 ] as const satisfies ReadonlyArray<keyof DealRow>;
 
+const PUBLIC_DEALS_FEED_FIELDS = [
+  'id',
+  'business_type',
+  'status',
+  'featured',
+  'admin_tag',
+  'business_name',
+  'merchant',
+  'logo_url',
+  'image_url',
+  'title',
+  'description',
+  'offer_text',
+  'like_count',
+  'dislike_count',
+  'share_count',
+  'original_price',
+  'discount_percent',
+  'affiliate_url',
+  'review_count',
+  'stock_status',
+  'website_url',
+  'product_link',
+  'product_url',
+  'has_timer',
+  'distance',
+  'lat',
+  'lng',
+  'created_at',
+  'expires_at',
+  'max_claims',
+  'current_claims',
+  'claim_count',
+  'category',
+  'local_subcategory',
+  'online_subcategory',
+] as const satisfies ReadonlyArray<keyof DealRow>;
+
 const PUBLIC_DEALS_SCHEMA_FIELD_SET = new Set<string>(PUBLIC_DEALS_SCHEMA_FIELDS);
 
 const REQUIRED_PUBLIC_DEALS_SCHEMA_FIELDS = [
@@ -3817,6 +3879,8 @@ export default function App() {
   );
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
+  const [discountFilterValue, setDiscountFilterValue] = useState(30);
+  const [discountFilterEnabled, setDiscountFilterEnabled] = useState(false);
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [liveClockNow, setLiveClockNow] = useState(() => Date.now());
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
@@ -4584,13 +4648,14 @@ export default function App() {
         force,
       });
 
-      let selectedColumns = [...PUBLIC_DEALS_SCHEMA_FIELDS];
+      let selectedColumns = includeAllStatuses ? [...PUBLIC_DEALS_SCHEMA_FIELDS] : [...PUBLIC_DEALS_FEED_FIELDS];
       let useStatusFilter = !includeAllStatuses;
       let useCreatedAtSort = true;
       try {
         const { columns } = await fetchDealsSchemaColumns();
         const availableColumns = new Set(columns);
-        const schemaCompatibleColumns = PUBLIC_DEALS_SCHEMA_FIELDS.filter((column) => availableColumns.has(column));
+        const candidateColumns = includeAllStatuses ? PUBLIC_DEALS_SCHEMA_FIELDS : PUBLIC_DEALS_FEED_FIELDS;
+        const schemaCompatibleColumns = candidateColumns.filter((column) => availableColumns.has(column));
 
         if (schemaCompatibleColumns.length > 0) {
           selectedColumns = schemaCompatibleColumns;
@@ -4607,7 +4672,6 @@ export default function App() {
           'business_name',
           'merchant',
           'image_url',
-          'image',
           'title',
           'description',
           'offer_text',
@@ -7768,6 +7832,12 @@ const deleteDealFromBackend = async (
 
   const refreshSharedDeals = async (options?: { force?: boolean }) => {
     const force = Boolean(options?.force);
+    if (!force) {
+      const cachedEntry = sharedDealsCacheRef.current;
+      if (cachedEntry && Date.now() - cachedEntry.fetchedAt < SHARED_DEALS_CACHE_TTL_MS) {
+        return;
+      }
+    }
     setDealsLoading(true);
     try {
       try {
@@ -8549,6 +8619,13 @@ const deleteDealFromBackend = async (
       return true;
     });
 
+    const matchesDiscountFilter = (deal: Deal) => {
+      if (!discountFilterEnabled) return true;
+      const discountPercentValue = getDealDiscountPercentValue(deal);
+      if (discountPercentValue === null) return false;
+      return discountPercentValue >= discountFilterValue;
+    };
+
     const hasOnlineSubcategory =
       selectedCategory === 'Tech' || selectedCategory === 'Home' || selectedCategory === 'Fashion';
 
@@ -8561,7 +8638,8 @@ const deleteDealFromBackend = async (
           selectedOnlineSubcategory === 'All' ||
           deal.onlineSubcategory === selectedOnlineSubcategory
         ) &&
-        matchesDesktopSearch(deal),
+        matchesDesktopSearch(deal) &&
+        matchesDiscountFilter(deal),
     );
 
     const rankedDropModeDeals = [...activeOnlineDeals]
@@ -8629,6 +8707,7 @@ const deleteDealFromBackend = async (
         ? 'Fresh online deals, newest first.'
         : `Fresh ${getCategoryLabel(selectedCategory).toLowerCase()} deals, newest first.`;
     const onlineHeroIconName = selectedCategory === 'All' ? 'online' : getCategoryIconName(selectedCategory);
+    const discountFilterLabel = discountFilterEnabled ? `${discountFilterValue}%+ Off` : 'All Discounts';
 
     const getOnlineDealHeroLabel = (offerText?: string | null) => {
       const normalizedOffer = (typeof offerText === 'string' ? offerText : '').trim();
@@ -9257,21 +9336,61 @@ const deleteDealFromBackend = async (
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
-            <span className={`absolute right-3 top-3 inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:right-4 min-[360px]:top-3.5 min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
-              isDropModeActive
-                ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-                : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
-            }`}>
-              {sortedOnlineDealsByTab.length} Drops
-            </span>
-            <div className="relative z-10 min-w-0 pr-[4.4rem] min-[360px]:pr-20">
-              <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
-              <h2 className="mt-1 text-[1.12rem] min-[360px]:text-[1.24rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
-                {onlineHeadline}
-              </h2>
-              <p className="mt-1 max-w-[12.2rem] min-[360px]:max-w-[13.75rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
-                {onlineCategoryDescription}
-              </p>
+            <div className="relative z-10 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 min-[360px]:gap-3">
+              <div className="min-w-0 pr-1.5">
+                <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-400/90">Online</p>
+                <h2 className="mt-1 text-[1.12rem] min-[360px]:text-[1.24rem] font-bold leading-[1.02] tracking-[-0.04em] text-slate-800">
+                  {onlineHeadline}
+                </h2>
+                <p className="mt-1 max-w-[14rem] min-[360px]:max-w-[16rem] text-[11px] min-[360px]:text-[11.5px] font-medium leading-[1.4] text-slate-500/95">
+                  {onlineCategoryDescription}
+                </p>
+              </div>
+              <div className="flex min-w-0 flex-col items-center gap-1 px-1">
+                <div className="flex w-[180px] min-[360px]:w-[210px] min-[1024px]:w-[260px] flex-col items-center gap-1.5">
+                  <div className="flex w-full items-center justify-between text-[9px] min-[360px]:text-[10px] font-black uppercase tracking-[0.16em]">
+                    <span className="text-slate-500">Discount</span>
+                    <span className="text-indigo-600">{discountFilterLabel}</span>
+                  </div>
+                  <div className="w-full rounded-full bg-slate-200/70 px-2 py-1 shadow-inner shadow-white/80 ring-1 ring-white/60">
+                    <input
+                      type="range"
+                      min={10}
+                      max={90}
+                      step={10}
+                      value={discountFilterValue}
+                      onChange={(event) => {
+                        const nextValue = Number(event.target.value);
+                        setDiscountFilterValue(nextValue);
+                        setDiscountFilterEnabled(true);
+                      }}
+                      aria-label="Minimum discount percentage"
+                      className="h-1.5 w-full cursor-pointer accent-indigo-600"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDiscountFilterEnabled(false)}
+                    disabled={!discountFilterEnabled}
+                    className={`text-[9px] font-black uppercase tracking-[0.14em] transition-colors ${
+                      discountFilterEnabled
+                        ? 'text-indigo-500 hover:text-indigo-600'
+                        : 'cursor-default text-slate-400'
+                    }`}
+                  >
+                    All Discounts
+                  </button>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
+                  isDropModeActive
+                    ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
+                    : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
+                }`}>
+                  {sortedOnlineDealsByTab.length} Drops
+                </span>
+              </div>
             </div>
           </div>
         ) : (

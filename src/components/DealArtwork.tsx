@@ -27,6 +27,18 @@ export const DealArtwork: React.FC<DealArtworkProps> = ({
     () => (typeof src === 'string' ? src.trim() : ''),
     [src],
   );
+  const optimizedSrc = useMemo(() => {
+    if (!normalizedSrc) return '';
+    const supabasePublicPath = '/storage/v1/object/public/';
+    const supabaseRenderPath = '/storage/v1/render/image/public/';
+    if (normalizedSrc.includes(supabaseRenderPath)) return normalizedSrc;
+    if (normalizedSrc.includes(supabasePublicPath)) {
+      const transformed = normalizedSrc.replace(supabasePublicPath, supabaseRenderPath);
+      const separator = transformed.includes('?') ? '&' : '?';
+      return `${transformed}${separator}width=900&quality=75&resize=contain`;
+    }
+    return normalizedSrc;
+  }, [normalizedSrc]);
   const showImage = Boolean(normalizedSrc) && !imageFailed;
 
   useEffect(() => {
@@ -37,9 +49,10 @@ export const DealArtwork: React.FC<DealArtworkProps> = ({
     <div className={`h-full w-full ${className}`}>
       {showImage ? (
         <img
-          src={normalizedSrc}
+          src={optimizedSrc || normalizedSrc}
           alt={alt}
           loading="lazy"
+          decoding="async"
           onError={() => {
             if (normalizedSrc) {
               failedImageSrcCache.add(normalizedSrc);
