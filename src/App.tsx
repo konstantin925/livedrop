@@ -8926,7 +8926,7 @@ const deleteDealFromBackend = async (
               alt={displayTitle}
               fit="contain"
               iconSize={28}
-              imageClassName="p-3 transition-transform duration-500 hover:scale-[1.02]"
+              imageClassName="p-2.5 transition-transform duration-500 hover:scale-[1.02]"
             />
             {isDropModeActive ? (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
@@ -8941,7 +8941,7 @@ const deleteDealFromBackend = async (
               </span>
             </div>
           </div>
-          <div className="p-3.5">
+          <div className="p-3 max-[359px]:p-2.5">
             <div className="mb-2.5 flex items-start justify-between gap-2.5">
               <div className="min-w-0 flex-1">
                 <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
@@ -8966,7 +8966,7 @@ const deleteDealFromBackend = async (
                 <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
               </div>
             </div>
-            <div className={`mb-2.5 border border-indigo-100 px-3 py-2 ${
+            <div className={`mb-2 border border-indigo-100 px-3 py-2 ${
               isDropModeActive
                 ? 'rounded-[1rem] bg-gradient-to-r from-indigo-50 via-violet-50/85 to-sky-50/80 py-2.5 shadow-inner shadow-white/60'
                 : 'rounded-[0.95rem] bg-indigo-50/80'
@@ -8989,7 +8989,7 @@ const deleteDealFromBackend = async (
                 <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Limited-time price drop</p>
               ) : null}
             </div>
-            <p className={`mb-3 line-clamp-3 break-words text-[12px] text-slate-500 ${isDropModeActive ? 'leading-[1.6]' : 'leading-[1.55]'}`}>{displayDescription}</p>
+            <p className={`mb-2.5 line-clamp-3 break-words text-[12px] text-slate-500 ${isDropModeActive ? 'leading-[1.6]' : 'leading-[1.55]'}`}>{displayDescription}</p>
             <div
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => event.stopPropagation()}
@@ -9040,14 +9040,14 @@ const deleteDealFromBackend = async (
                 Link: {primaryActionUrl ?? 'No link saved'}
               </p>
             ) : null}
-            <div className="mt-3 flex w-full flex-col gap-2 min-[390px]:flex-row">
+            <div className="mt-2.5 flex w-full flex-col gap-2 min-[390px]:flex-row">
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
                   openDealProductDetails(deal);
                 }}
-                className="inline-flex h-10 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
+                className="inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
               >
                 <AppIcon name="search" size={15} />
                 <span>Details</span>
@@ -9059,7 +9059,7 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-10 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985]'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
@@ -9123,7 +9123,7 @@ const deleteDealFromBackend = async (
               </span>
             ) : null}
           </div>
-            <div className="space-y-2.5 p-3">
+            <div className="space-y-2 p-3">
               <div className="space-y-1">
                 <p className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.14em] text-indigo-500">
                   <AppIcon name={getCategoryIconName(deal.category)} size={10} />
@@ -9198,7 +9198,7 @@ const deleteDealFromBackend = async (
                   event.stopPropagation();
                   openDealProductDetails(deal);
                 }}
-                className="inline-flex h-9 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
+                className="inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
               >
                 <AppIcon name="search" size={13} />
                 <span>Details</span>
@@ -9210,7 +9210,7 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-9 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[11px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
@@ -9484,7 +9484,7 @@ const deleteDealFromBackend = async (
         )}
 
         {isOnlineMode ? (
-          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-2.5 max-[359px]:px-3 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
+          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-2.5 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
@@ -9745,9 +9745,9 @@ const deleteDealFromBackend = async (
               pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
-                    <div className="grid grid-cols-1 gap-2.5 min-[360px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+                    <div className="grid grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
                       {visibleCategoryOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
-                      {hasMoreCategoryPages && visibleCategoryOnlineDeals.length % 2 === 1
+                      {hasMoreCategoryPages && visibleCategoryOnlineDeals.length % (viewportWidth >= 520 ? 2 : 1) === 1
                         ? renderOnlineGridFiller(() => {
                             setIsMoreDealsAnimating(true);
                             setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));

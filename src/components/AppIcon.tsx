@@ -49,6 +49,7 @@ type IconName =
   | 'fashion'
   | 'gaming'
   | 'digital'
+  | 'food'
   | 'freebies';
 
 interface AppIconProps {
@@ -390,6 +391,14 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M12 4L14 8L18 10L14 12L12 16L10 12L6 10L10 8L12 4Z" />
       <path d="M17 5L17.8 6.7L19.5 7.5L17.8 8.3L17 10L16.2 8.3L14.5 7.5L16.2 6.7L17 5Z" />
+    </>
+  ),
+  food: (
+    <>
+      <rect x="6.5" y="6.5" width="11" height="10.5" rx="2" />
+      <path d="M8.5 6.5V5.2C8.5 4.3 9.2 3.6 10.1 3.6H13.9C14.8 3.6 15.5 4.3 15.5 5.2V6.5" />
+      <path d="M9.5 10H14.5" />
+      <path d="M9.5 13H14.5" />
     </>
   ),
   freebies: (

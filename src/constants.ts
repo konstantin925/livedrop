@@ -22,5 +22,5 @@ export const ONLINE_CATEGORY_OPTIONS = [
   'Gaming',
   'Digital',
   'Home',
-  'Freebies',
+  'Food',
 ] as const;

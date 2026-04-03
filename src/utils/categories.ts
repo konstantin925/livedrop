@@ -11,6 +11,7 @@ export type CategoryIconName =
   | 'fashion'
   | 'gaming'
   | 'digital'
+  | 'food'
   | 'freebies';
 
 export type BusinessCategoryMode = 'local' | 'online';
@@ -95,7 +96,7 @@ const ONLINE_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
     'Outdoor',
     'Patio',
   ],
-  Freebies: ['Samples', 'Trials', 'Coupon Codes', 'Free Shipping', 'Giveaways'],
+  Food: ['Snacks', 'Meal Kits', 'Groceries', 'Drinks', 'Supplements'],
 };
 
 const CATEGORY_ICONS: Record<string, CategoryIconName> = {
@@ -109,14 +110,14 @@ const CATEGORY_ICONS: Record<string, CategoryIconName> = {
   Fashion: 'fashion',
   Gaming: 'gaming',
   Digital: 'digital',
-  Freebies: 'freebies',
+  Food: 'food',
   Uncategorized: 'deal',
 };
 
 const CATEGORY_ALIASES: Record<string, string> = {
   restaurant: 'Fast Food',
   restaurants: 'Fast Food',
-  food: 'Fast Food',
+  food: 'Food',
   dining: 'Fast Food',
   burgers: 'Fast Food',
   burger: 'Fast Food',
@@ -173,11 +174,8 @@ const CATEGORY_ALIASES: Record<string, string> = {
   template: 'Digital',
   templates: 'Digital',
   download: 'Digital',
-  freebies: 'Freebies',
-  freebie: 'Freebies',
-  coupon: 'Freebies',
-  coupons: 'Freebies',
-  free: 'Freebies',
+  freebies: 'Food',
+  freebie: 'Food',
 };
 
 const ONLINE_CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -186,7 +184,7 @@ const ONLINE_CATEGORY_KEYWORDS: Record<string, string[]> = {
   Gaming: ['gaming', 'xbox', 'playstation', 'steam', 'controller', 'nintendo', 'pc game', 'gaming mouse', 'gpu'],
   Digital: ['template', 'download', 'notion', 'canva', 'prompt', 'software', 'saas', 'digital', 'bundle', 'ebook', 'course'],
   Home: ['table', 'chair', 'lamp', 'kitchen', 'bedding', 'pantry', 'console table', 'nightstand', 'sofa', 'storage'],
-  Freebies: ['free', 'free shipping', 'trial', 'sample', 'gift', 'starter pack'],
+  Food: ['snack', 'snacks', 'grocery', 'groceries', 'meal kit', 'meal kits', 'beverage', 'protein', 'supplement', 'drink'],
 };
 
 const LOCAL_CATEGORY_KEYWORDS: Record<string, string[]> = {

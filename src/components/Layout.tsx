@@ -63,12 +63,12 @@ export const Layout: React.FC<LayoutProps> = ({
   }, []);
 
   const mainContentStyle: React.CSSProperties = {
-    paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px) + 2.5rem)',
+    paddingBottom: 'calc(4.8rem + env(safe-area-inset-bottom, 0px) + 1.4rem)',
   };
 
   const bottomNavStyle: React.CSSProperties = {
     bottom: 'max(env(safe-area-inset-bottom, 0px), 0px)',
-    paddingBottom: 'calc(0.55rem + env(safe-area-inset-bottom, 0px))',
+    paddingBottom: 'calc(0.35rem + env(safe-area-inset-bottom, 0px))',
   };
 
   const getNotificationIcon = (type: AppNotification['type']) => {
@@ -168,22 +168,22 @@ export const Layout: React.FC<LayoutProps> = ({
           </div>
         </header>
       ) : (
-        <header className="sticky top-0 z-50 flex items-center justify-between gap-2.5 border-b border-white/70 bg-white/88 px-3.5 py-3 pt-5 backdrop-blur-xl max-[359px]:gap-2 max-[359px]:px-3 max-[359px]:pt-4">
+        <header className="sticky top-0 z-50 flex items-center justify-between gap-2 border-b border-white/70 bg-white/88 px-3.5 py-2.5 pt-4 backdrop-blur-xl max-[359px]:gap-1.5 max-[359px]:px-3 max-[359px]:pt-3.5">
         <div className="min-w-0 flex flex-1 flex-col items-start justify-center">
           <div className="flex items-center leading-none">
             <div className="min-w-0 flex items-baseline gap-0.5 leading-none">
               <h1 className={`font-black tracking-[-0.055em] text-slate-800 ${isDesktopLayout ? 'text-[1.7rem]' : 'text-[1.34rem] max-[359px]:text-[1.18rem] min-[390px]:text-[1.42rem]'}`}>LIVE</h1>
               <h1 className={`font-black tracking-[-0.055em] text-indigo-600 ${isDesktopLayout ? 'text-[1.7rem]' : 'text-[1.34rem] max-[359px]:text-[1.18rem] min-[390px]:text-[1.42rem]'}`}>DROP</h1>
             </div>
-            <span className={`-ml-0.5 inline-flex shrink-0 items-center justify-center rounded-full bg-[radial-gradient(circle,rgba(99,102,241,0.12),rgba(99,102,241,0)_72%)] ${isDesktopLayout ? 'h-14 w-14' : 'h-11 w-11 max-[359px]:h-10 max-[359px]:w-10 min-[390px]:h-12 min-[390px]:w-12'}`}>
+            <span className={`-ml-0.5 inline-flex shrink-0 items-center justify-center rounded-full bg-[radial-gradient(circle,rgba(99,102,241,0.12),rgba(99,102,241,0)_72%)] ${isDesktopLayout ? 'h-14 w-14' : 'h-10.5 w-10.5 max-[359px]:h-9.5 max-[359px]:w-9.5 min-[390px]:h-11 min-[390px]:w-11'}`}>
               <img
                 src={brandBoltLogo}
                 alt="LiveDrop logo"
-                className={`object-contain ${isDesktopLayout ? 'h-11 w-11' : 'h-9 w-9 max-[359px]:h-8 max-[359px]:w-8 min-[390px]:h-10 min-[390px]:w-10'}`}
+                className={`object-contain ${isDesktopLayout ? 'h-11 w-11' : 'h-8.5 w-8.5 max-[359px]:h-7.5 max-[359px]:w-7.5 min-[390px]:h-9.5 min-[390px]:w-9.5'}`}
               />
             </span>
           </div>
-          <p className={`-mt-0.5 font-semibold leading-none tracking-[0.14em] text-slate-400 ${isDesktopLayout ? 'text-[0.72rem]' : 'text-[0.55rem] max-[359px]:text-[0.5rem] min-[390px]:text-[0.6rem]'}`}>
+          <p className={`-mt-0.5 font-semibold leading-none tracking-[0.14em] text-slate-400 ${isDesktopLayout ? 'text-[0.72rem]' : 'text-[0.52rem] max-[359px]:text-[0.48rem] min-[390px]:text-[0.58rem]'}`}>
             don&apos;t miss the drop
           </p>
         </div>
@@ -210,7 +210,7 @@ export const Layout: React.FC<LayoutProps> = ({
               Sign In
             </button>
           )}
-          <button onClick={onToggleNotifications} className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 transition-colors hover:bg-slate-50 max-[359px]:h-9 max-[359px]:w-9">
+          <button onClick={onToggleNotifications} className="relative flex h-9.5 w-9.5 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 transition-colors hover:bg-slate-50 max-[359px]:h-9 max-[359px]:w-9">
             <AppIcon name="bell" size={18} />
             {unreadNotificationCount > 0 ? (
               <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[9px] font-black text-white shadow-[0_8px_18px_rgba(79,70,229,0.28)]">
@@ -218,15 +218,15 @@ export const Layout: React.FC<LayoutProps> = ({
               </span>
             ) : null}
           </button>
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9">
+          <div className="flex h-9.5 w-9.5 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9">
             <AppIcon name="pin" size={18} />
           </div>
           {isAuthenticated ? (
-            <button onClick={onSignOut} className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9 sm:hidden">
+            <button onClick={onSignOut} className="flex h-9.5 w-9.5 items-center justify-center rounded-full border border-slate-200/80 bg-white/92 text-slate-500 shadow-sm shadow-slate-200/30 max-[359px]:h-9 max-[359px]:w-9 sm:hidden">
               <AppIcon name="logout" size={18} />
             </button>
           ) : (
-            <button onClick={onOpenAuth} className="inline-flex h-10 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.12em] text-white shadow-lg shadow-indigo-100/70 max-[359px]:h-9 max-[359px]:px-2.5 sm:hidden">
+            <button onClick={onOpenAuth} className="inline-flex h-9.5 items-center justify-center rounded-full bg-indigo-600 px-3 text-[9px] font-black uppercase tracking-[0.12em] text-white shadow-lg shadow-indigo-100/70 max-[359px]:h-9 max-[359px]:px-2.5 sm:hidden">
               <span className="hidden min-[380px]:inline">Sign In</span>
               <span className="min-[380px]:hidden">Sign</span>
             </button>
@@ -351,7 +351,7 @@ export const Layout: React.FC<LayoutProps> = ({
 
       {/* Navigation */}
       <nav
-        className={`fixed left-0 right-0 z-50 mx-auto flex w-full items-center justify-between border-t border-white/80 bg-white/94 pt-1.5 shadow-[0_-8px_26px_rgba(15,23,42,0.06)] backdrop-blur-xl ${
+        className={`fixed left-0 right-0 z-50 mx-auto flex w-full items-center justify-between border-t border-white/80 bg-white/94 pt-1 shadow-[0_-8px_26px_rgba(15,23,42,0.06)] backdrop-blur-xl ${
           isDesktopLayout
             ? 'hidden'
             : 'max-w-[430px] px-3 max-[359px]:px-2.5'
@@ -399,7 +399,7 @@ interface NavButtonProps {
 const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, badge }) => (
   <button 
     onClick={onClick}
-    className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[1.1rem] px-1 py-2 transition-all ${active ? 'bg-indigo-50/90 text-indigo-600 shadow-sm shadow-indigo-100/60' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-500'}`}
+    className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[1rem] px-1 py-1.5 transition-all ${active ? 'bg-indigo-50/90 text-indigo-600 shadow-sm shadow-indigo-100/60' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-500'}`}
   >
     {icon}
     {badge ? (
@@ -407,6 +407,6 @@ const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, bad
         {badge}
       </span>
     ) : null}
-    <span className={`max-w-full truncate text-[7.5px] font-black uppercase tracking-[0.12em] max-[359px]:text-[6.5px] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
+    <span className={`max-w-full truncate text-[8px] font-black uppercase tracking-[0.12em] max-[359px]:text-[7px] ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{label}</span>
   </button>
 );

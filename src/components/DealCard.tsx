@@ -74,7 +74,7 @@ export const DealCard: React.FC<DealCardProps> = ({
 
   if (compact) {
     return (
-      <div className={`overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.3rem] p-2.5 max-[359px]:p-2.25 shadow-sm shadow-slate-200/35`}>
+      <div className={`overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.3rem] p-2.25 max-[359px]:p-2 shadow-sm shadow-slate-200/35`}>
         <div className="flex items-start justify-between gap-2.5">
           <div className="flex min-w-0 flex-1 items-start gap-2.5">
             <CompanyLogo businessName={displayBusinessName} logoUrl={deal.logoUrl} category={deal.category} size={32} />
@@ -97,8 +97,8 @@ export const DealCard: React.FC<DealCardProps> = ({
           ) : null}
         </div>
 
-        <div className="mt-2.5 flex flex-col gap-2 min-[390px]:flex-row min-[390px]:items-center min-[390px]:justify-between">
-          <div className="grid min-w-0 grid-cols-2 gap-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-slate-400 min-[390px]:flex min-[390px]:flex-wrap min-[390px]:items-center min-[390px]:gap-x-3 min-[390px]:gap-y-1.5">
+        <div className="mt-2 flex flex-col gap-2 min-[390px]:flex-row min-[390px]:items-center min-[390px]:justify-between">
+          <div className="grid min-w-0 grid-cols-2 gap-1 text-[9px] font-bold uppercase tracking-[0.1em] text-slate-400 min-[390px]:flex min-[390px]:flex-wrap min-[390px]:items-center min-[390px]:gap-x-3 min-[390px]:gap-y-1.5">
             <div className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1">
               <AppIcon name="pin" size={13} className={isExpired ? 'text-slate-200' : 'text-indigo-400'} />
               <span className="truncate">{computedDistance || deal.distance}</span>
@@ -111,7 +111,7 @@ export const DealCard: React.FC<DealCardProps> = ({
           <button
             onClick={() => canClaim && onClaim(deal)}
             disabled={!canClaim}
-            className={`inline-flex h-9.5 w-full shrink-0 items-center justify-center rounded-[1rem] px-3 font-black text-[10px] uppercase tracking-[0.08em] transition-all shadow-sm min-[360px]:w-auto ${
+            className={`inline-flex h-9 w-full shrink-0 items-center justify-center rounded-[0.95rem] px-3 font-black text-[10px] uppercase tracking-[0.08em] transition-all shadow-sm min-[360px]:w-auto ${
               canClaim
                 ? 'bg-indigo-600 text-white shadow-indigo-200/80 hover:bg-indigo-700'
                 : isClaimed
@@ -168,7 +168,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   }
 
   return (
-      <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3.5 max-[359px]:p-3 shadow-[0_12px_28px_rgba(148,163,184,0.16)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] active:scale-[0.985] ${isViewed ? 'opacity-90 border-slate-200 shadow-[0_8px_18px_rgba(148,163,184,0.12)]' : ''}`}>
+    <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3 max-[359px]:p-2.5 shadow-[0_12px_28px_rgba(148,163,184,0.16)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] active:scale-[0.985] ${isViewed ? 'opacity-90 border-slate-200 shadow-[0_8px_18px_rgba(148,163,184,0.12)]' : ''}`}>
       <div className="mb-2.5 flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           <CompanyLogo businessName={displayBusinessName} logoUrl={deal.logoUrl} category={deal.category} size={36} />
@@ -206,17 +206,17 @@ export const DealCard: React.FC<DealCardProps> = ({
         ) : null}
       </div>
 
-      <div className={`mb-2.5 rounded-[1rem] border px-3 py-2.5 transition-colors ${isExpired ? 'border-slate-100 bg-slate-50' : 'border-indigo-100/90 bg-[linear-gradient(135deg,rgba(238,242,255,0.92),rgba(224,231,255,0.72))]'}`}>
+      <div className={`mb-2 rounded-[1rem] border px-3 py-2 transition-colors ${isExpired ? 'border-slate-100 bg-slate-50' : 'border-indigo-100/90 bg-[linear-gradient(135deg,rgba(238,242,255,0.92),rgba(224,231,255,0.72))]'}`}>
         <span className={`line-clamp-2 break-words font-black italic tracking-tighter text-[1.08rem] min-[360px]:text-[1.2rem] ${isExpired ? 'text-slate-300' : 'text-indigo-600'}`}>
           {displayOfferText}
         </span>
       </div>
 
-      <p className={`mb-3 line-clamp-3 break-words text-[12px] leading-[1.55] ${isExpired ? 'text-slate-300' : 'text-slate-500'}`}>
+      <p className={`mb-2.5 line-clamp-3 break-words text-[12px] leading-[1.55] ${isExpired ? 'text-slate-300' : 'text-slate-500'}`}>
         {displayDescription}
       </p>
 
-      <div className="mb-3 grid grid-cols-2 gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
+      <div className="mb-2.5 grid grid-cols-2 gap-1 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
         <div className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1.5">
           <AppIcon name="pin" size={14} className={isExpired ? 'text-slate-200' : 'text-indigo-400'} />
           <span className="truncate">{computedDistance || deal.distance}</span>
