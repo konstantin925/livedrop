@@ -48,6 +48,15 @@ type OfferType = 'percentage' | 'fixed' | 'custom';
 type BusinessMode = 'local' | 'online';
 
 const normalizeTextValue = (value: string | null | undefined) => (typeof value === 'string' ? value : '');
+const normalizePriceInput = (value: string | null | undefined) => {
+  const cleaned = normalizeTextValue(value).replace(/[^0-9.]/g, '').trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const formatPriceInput = (value?: number | null) => (
+  typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : ''
+);
 const normalizeUrlValue = (value: string | null | undefined) => {
   const trimmed = normalizeTextValue(value).trim();
   if (!trimmed) return '';
@@ -142,6 +151,22 @@ const getDiscountValueFromText = (offerText?: string | null) => {
   return '30';
 };
 
+const getDiscountPercentFromPrices = (originalPrice?: number | null, currentPrice?: number | null) => {
+  if (
+    typeof originalPrice !== 'number'
+    || typeof currentPrice !== 'number'
+    || !Number.isFinite(originalPrice)
+    || !Number.isFinite(currentPrice)
+    || originalPrice <= 0
+    || currentPrice < 0
+    || currentPrice > originalPrice
+  ) {
+    return null;
+  }
+
+  return Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
+};
+
 const getDurationFieldsFromDeal = (deal: Deal) => {
   if (deal.hasTimer === false) {
     return {
@@ -197,6 +222,19 @@ const getInitialFormData = (
     const savedSubcategory = businessMode === 'online'
       ? initialData.onlineSubcategory
       : initialData.localSubcategory;
+    const normalizedOriginalPrice = typeof initialData.originalPrice === 'number'
+      ? initialData.originalPrice
+      : null;
+    const normalizedCurrentPrice = typeof initialData.currentPrice === 'number'
+      ? initialData.currentPrice
+      : null;
+    const inferredDiscountPercent = getDiscountPercentFromPrices(
+      normalizedOriginalPrice,
+      normalizedCurrentPrice,
+    );
+    const inferredDiscountValue = inferredDiscountPercent !== null
+      ? String(inferredDiscountPercent)
+      : getDiscountValueFromDeal(initialData);
 
     return {
       businessMode,
@@ -209,7 +247,7 @@ const getInitialFormData = (
       category: normalizedCategory,
       subcategory: normalizeSubcategoryValue(savedSubcategory, businessMode, normalizedCategory),
       offerType: inferredOfferType,
-      discountValue: getDiscountValueFromDeal(initialData),
+      discountValue: inferredDiscountValue,
       customOfferText: inferredOfferType === 'custom' ? normalizeTextValue(initialData.offerText) : '',
       quantity: initialData.maxClaims,
       currentClaims: initialData.claimCount ?? initialData.currentClaims,
@@ -218,6 +256,8 @@ const getInitialFormData = (
       radiusMiles: inferredRadiusMiles,
       boostDeal: false,
       imageUrl: normalizeTextValue(initialData.imageUrl),
+      originalPrice: formatPriceInput(normalizedOriginalPrice),
+      currentPrice: formatPriceInput(normalizedCurrentPrice),
     };
   }
 
@@ -244,6 +284,8 @@ const getInitialFormData = (
     radiusMiles: '1',
     boostDeal: false,
     imageUrl: '',
+    originalPrice: '',
+    currentPrice: '',
   };
 };
 
@@ -361,6 +403,36 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     () => normalizeSubcategoryValue(formData.subcategory, formData.businessMode, normalizedCategory),
     [formData.businessMode, formData.subcategory, normalizedCategory],
   );
+  const normalizedOriginalPrice = useMemo(
+    () => normalizePriceInput(formData.originalPrice),
+    [formData.originalPrice],
+  );
+  const normalizedCurrentPrice = useMemo(
+    () => normalizePriceInput(formData.currentPrice),
+    [formData.currentPrice],
+  );
+  const computedDiscountPercent = useMemo(
+    () => getDiscountPercentFromPrices(normalizedOriginalPrice, normalizedCurrentPrice),
+    [normalizedOriginalPrice, normalizedCurrentPrice],
+  );
+  const normalizedDiscountPercent = useMemo(() => {
+    if (computedDiscountPercent !== null) return computedDiscountPercent;
+    if (formData.offerType !== 'percentage') return null;
+    const parsedValue = normalizePriceInput(formData.discountValue);
+    if (parsedValue === null) return null;
+    return Math.min(100, Math.max(0, Math.round(parsedValue)));
+  }, [computedDiscountPercent, formData.discountValue, formData.offerType]);
+
+  useEffect(() => {
+    if (formData.offerType !== 'percentage' || computedDiscountPercent === null) {
+      return;
+    }
+
+    const nextValue = String(computedDiscountPercent);
+    if (formData.discountValue !== nextValue) {
+      setFormData((prev) => ({ ...prev, discountValue: nextValue }));
+    }
+  }, [computedDiscountPercent, formData.discountValue, formData.offerType]);
 
   const offerText = useMemo(() => {
     if (formData.offerType === 'percentage') return `${formData.discountValue}% OFF`;
@@ -382,8 +454,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: formData.title.trim(),
       description: formData.description.trim(),
       offerText: offerText.trim(),
-      originalPrice: initialData?.originalPrice ?? null,
-      discountPercent: initialData?.discountPercent ?? null,
+      currentPrice: normalizedCurrentPrice,
+      originalPrice: normalizedOriginalPrice,
+      discountPercent: normalizedDiscountPercent,
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
@@ -416,12 +489,13 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.subcategory,
     formData.title,
     initialData?.affiliateUrl,
-    initialData?.discountPercent,
     initialData?.id,
-    initialData?.originalPrice,
     initialData?.reviewCount,
     initialData?.status,
     initialData?.stockStatus,
+    normalizedCurrentPrice,
+    normalizedDiscountPercent,
+    normalizedOriginalPrice,
     normalizedCategory,
     normalizedSubcategory,
     normalizedLinkState.affiliateUrl,
@@ -465,6 +539,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       category: normalizedCategory,
       localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
       onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
+      currentPrice: normalizedCurrentPrice,
+      originalPrice: normalizedOriginalPrice,
+      discountPercent: normalizedDiscountPercent,
     };
   }, [
     durationMinutes,
@@ -479,6 +556,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.subcategory,
     formData.title,
     normalizedCategory,
+    normalizedCurrentPrice,
+    normalizedDiscountPercent,
     normalizedSubcategory,
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
@@ -487,6 +566,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     radiusMiles,
     safeLocalLocation.lat,
     safeLocalLocation.lng,
+    normalizedOriginalPrice,
   ]);
 
   const getDraftFingerprint = () =>
@@ -503,6 +583,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       offerType: formData.offerType,
       discountValue: normalizeTextValue(formData.discountValue).trim(),
       customOfferText: normalizeTextValue(formData.customOfferText).trim(),
+      originalPrice: normalizeTextValue(formData.originalPrice).trim(),
+      currentPrice: normalizeTextValue(formData.currentPrice).trim(),
       quantity: String(formData.quantity ?? ''),
       currentClaims: String(formData.currentClaims ?? ''),
       durationPreset: formData.durationPreset,
@@ -552,6 +634,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title).trim(),
       description: normalizeTextValue(formData.description).trim(),
       offerText,
+      currentPrice: normalizedCurrentPrice,
+      originalPrice: normalizedOriginalPrice,
+      discountPercent: normalizedDiscountPercent,
       imageUrl: normalizeTextValue(formData.imageUrl).trim() || undefined,
       websiteUrl: normalizedLinkState.websiteUrl || undefined,
       productUrl: normalizedLinkState.productUrl || undefined,
@@ -572,6 +657,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   };
 
   const getPublishValidationError = () => {
+    const originalPriceValue = normalizePriceInput(formData.originalPrice);
+    const currentPriceValue = normalizePriceInput(formData.currentPrice);
+
     if (
       !normalizeTextValue(formData.businessName).trim() ||
       !normalizeTextValue(formData.title).trim() ||
@@ -593,6 +681,14 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
     if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
       return 'Discount value must be greater than 0.';
+    }
+
+    if (normalizeTextValue(formData.originalPrice).trim() && originalPriceValue === null) {
+      return 'Enter a valid original price.';
+    }
+
+    if (normalizeTextValue(formData.currentPrice).trim() && currentPriceValue === null) {
+      return 'Enter a valid deal price.';
     }
 
     if (formData.businessMode === 'online') {
@@ -648,6 +744,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.offerType,
     formData.productUrl,
     formData.quantity,
+    formData.originalPrice,
+    formData.currentPrice,
     formData.subcategory,
     formData.title,
     formData.websiteUrl,
@@ -1011,6 +1109,43 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
               onChange={e => setFormData({ ...formData, discountValue: e.target.value })}
             />
           )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Pricing</label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <div className="relative">
+                <AppIcon name="tag" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Original price"
+                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                  value={formData.originalPrice}
+                  onChange={e => setFormData({ ...formData, originalPrice: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <div className="relative">
+                <AppIcon name="deal" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Deal price"
+                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+                  value={formData.currentPrice}
+                  onChange={e => setFormData({ ...formData, currentPrice: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+          <p className="px-1 text-xs leading-5 text-slate-400">
+            Add both prices to auto-calculate the discount percentage for the card badge.
+          </p>
         </div>
 
         <div className="space-y-1.5">

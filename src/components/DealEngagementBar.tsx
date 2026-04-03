@@ -31,7 +31,7 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
   const actions: Array<{
     id: DealEngagementAction;
     label: string;
-    icon: 'like' | 'dislike' | 'share';
+    icon: 'thumbs-up' | 'thumbs-down' | 'share';
     count: number;
     onClick: () => void;
     tone: string;
@@ -39,7 +39,7 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
     {
       id: 'like',
       label: 'Like',
-      icon: 'like',
+      icon: 'thumbs-up',
       count: deal.likeCount ?? 0,
       onClick: () => onLike(deal),
       tone: 'hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600',
@@ -47,7 +47,7 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
     {
       id: 'dislike',
       label: 'Dislike',
-      icon: 'dislike',
+      icon: 'thumbs-down',
       count: deal.dislikeCount ?? 0,
       onClick: () => onDislike(deal),
       tone: 'hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500',
@@ -86,7 +86,6 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
             className={`inline-flex ${buttonHeight} min-w-0 w-full items-center justify-center gap-1 rounded-[1rem] border border-slate-200/90 bg-white/92 ${padding} ${buttonText} font-black uppercase tracking-[0.06em] text-slate-500 shadow-sm shadow-slate-200/25 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${action.tone} ${isPending ? 'border-indigo-200 bg-indigo-50 text-indigo-600 shadow-indigo-100/60' : ''}`}
           >
             <AppIcon name={action.icon} size={11} />
-            {!compact ? <span className="truncate">{action.label}</span> : null}
             <span className={`shrink-0 tabular-nums ${compact ? 'text-slate-400/90' : 'text-slate-400'}`}>{formatCount(action.count)}</span>
           </button>
         );

@@ -646,8 +646,12 @@ const getDealPriceSnapshot = (deal: Deal) => {
 
   const pairedPrices = extractPricePair(sourceSignal);
   const fallbackDiscountPercent = extractPercentValue(sourceSignal);
+  const directCurrentPrice =
+    typeof deal.currentPrice === 'number' && Number.isFinite(deal.currentPrice)
+      ? deal.currentPrice
+      : null;
 
-  let currentPrice: number | null = pairedPrices?.currentPrice ?? null;
+  let currentPrice: number | null = directCurrentPrice ?? pairedPrices?.currentPrice ?? null;
   let originalPrice: number | null =
     typeof deal.originalPrice === 'number' && Number.isFinite(deal.originalPrice)
       ? deal.originalPrice
@@ -661,7 +665,13 @@ const getDealPriceSnapshot = (deal: Deal) => {
     currentPrice = extractStandalonePrice(sourceSignal);
   }
 
-  if (currentPrice === null && /\bFREE\b/i.test(sourceSignal)) {
+  const offerSignal = deal.offerText?.toUpperCase() ?? '';
+  const isExplicitFreeOffer = /\bFREE\b/.test(offerSignal)
+    && !offerSignal.includes('FREE SHIPPING')
+    && !offerSignal.includes('FREE TRIAL')
+    && !offerSignal.includes('FREE RETURNS');
+
+  if (currentPrice === null && isExplicitFreeOffer) {
     currentPrice = 0;
   }
 
@@ -2282,6 +2292,7 @@ type DealRow = {
   like_count: number | null;
   dislike_count: number | null;
   share_count: number | null;
+  current_price: number | null;
   original_price: number | null;
   discount_percent: number | null;
   affiliate_url: string | null;
@@ -2362,6 +2373,7 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
   'like_count',
   'dislike_count',
   'share_count',
+  'current_price',
   'original_price',
   'discount_percent',
   'affiliate_url',
@@ -2401,6 +2413,7 @@ const PUBLIC_DEALS_FEED_FIELDS = [
   'like_count',
   'dislike_count',
   'share_count',
+  'current_price',
   'original_price',
   'discount_percent',
   'affiliate_url',
@@ -2901,6 +2914,7 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     likeCount: row.like_count ?? fallback?.likeCount ?? 0,
     dislikeCount: row.dislike_count ?? fallback?.dislikeCount ?? 0,
     shareCount: row.share_count ?? fallback?.shareCount ?? 0,
+    currentPrice: row.current_price ?? fallback?.currentPrice ?? null,
     originalPrice: row.original_price ?? fallback?.originalPrice ?? null,
     discountPercent: row.discount_percent ?? fallback?.discountPercent ?? null,
     affiliateUrl: row.affiliate_url ?? fallback?.affiliateUrl ?? undefined,
@@ -2957,6 +2971,7 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     like_count: deal.likeCount ?? 0,
     dislike_count: deal.dislikeCount ?? 0,
     share_count: deal.shareCount ?? 0,
+    current_price: deal.currentPrice ?? null,
     original_price: deal.originalPrice ?? null,
     discount_percent: deal.discountPercent ?? null,
     affiliate_url: affiliateUrl,
@@ -3936,6 +3951,9 @@ export default function App() {
   const [bulkImportError, setBulkImportError] = useState('');
   const [bulkImportCandidates, setBulkImportCandidates] = useState<BulkImportDealInput[]>([]);
   const [selectedBulkImportIndex, setSelectedBulkImportIndex] = useState(0);
+  const [priceScanRunning, setPriceScanRunning] = useState(false);
+  const [priceScanMessage, setPriceScanMessage] = useState('');
+  const [priceScanProgress, setPriceScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [aiFinderKeyword, setAiFinderKeyword] = useState('');
   const [aiFinderUrl, setAiFinderUrl] = useState('');
   const [aiFinderAffiliateUrl, setAiFinderAffiliateUrl] = useState('');
@@ -5639,6 +5657,110 @@ const deleteDealFromBackend = async (
     } catch (error) {
       console.error('[LiveDrop] AI Deal Finder portal fill failed', error);
     }
+  };
+
+  const extractPriceFromSourceUrl = async (sourceUrl: string) => {
+    if (!supabaseEdgeClient || !hasSupabaseConfig) {
+      throw new Error(supabaseConfigIssue || 'Supabase is required to scan prices.');
+    }
+
+    const requestPayload = {
+      phase: 'extract',
+      url: sourceUrl,
+    };
+
+    const { data, error } = await supabaseEdgeClient.functions.invoke(AI_DEAL_FINDER_FUNCTION, {
+      body: requestPayload,
+    });
+
+    if (error) {
+      const message = await extractAIDealFinderErrorMessage(error);
+      throw new Error(message);
+    }
+
+    if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') {
+      throw new Error(data.error);
+    }
+
+    const result = data as AIDealFinderResult | null;
+    const normalized = result?.normalizedDeal;
+
+    return {
+      currentPrice: normalized?.currentPrice ?? normalized?.price ?? null,
+      originalPrice: normalized?.originalPrice ?? null,
+      discountPercent: normalized?.discountPercent ?? null,
+    };
+  };
+
+  const handleRefreshAllDealPrices = async () => {
+    if (priceScanRunning) return;
+
+    if (!supabaseEdgeClient || !hasSupabaseConfig) {
+      pushToast(supabaseConfigIssue || 'Supabase is required to scan prices.', 'share');
+      return;
+    }
+
+    const candidates = deals.filter(
+      (deal) => deal.businessType === 'online' && typeof deal.productUrl === 'string' && deal.productUrl.trim().length > 0,
+    );
+    if (candidates.length === 0) {
+      setPriceScanMessage('No online deals with source URLs were found.');
+      return;
+    }
+
+    const shouldProceed = window.confirm(`Scan prices for ${candidates.length} online deals now?`);
+    if (!shouldProceed) return;
+
+    setPriceScanRunning(true);
+    setPriceScanMessage('Scanning prices...');
+    setPriceScanProgress({ done: 0, total: candidates.length });
+
+    let updatedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    let processed = 0;
+
+    for (const deal of candidates) {
+      processed += 1;
+      setPriceScanProgress({ done: processed, total: candidates.length });
+
+      const validation = validateDirectProductUrl(deal.productUrl ?? '');
+      if (!validation.url) {
+        skippedCount += 1;
+        continue;
+      }
+
+      try {
+        const priceResult = await extractPriceFromSourceUrl(validation.url);
+        if (
+          priceResult.currentPrice === null
+          && priceResult.originalPrice === null
+          && priceResult.discountPercent === null
+        ) {
+          failedCount += 1;
+          continue;
+        }
+
+        const nextDeal: Deal = {
+          ...deal,
+          currentPrice: priceResult.currentPrice,
+          originalPrice: priceResult.originalPrice,
+          discountPercent: priceResult.discountPercent ?? deal.discountPercent ?? null,
+        };
+
+        const updatedDeal = await updateDealInBackend(nextDeal);
+        setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+        updatedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        console.warn('[LiveDrop] Price scan failed for deal', deal.id, error);
+      }
+    }
+
+    setPriceScanRunning(false);
+    setPriceScanMessage(
+      `Price scan complete. Updated ${updatedCount}, skipped ${skippedCount}, failed ${failedCount}.`,
+    );
   };
 
   const handleFillTestCoupon = () => {
@@ -8772,6 +8894,10 @@ const deleteDealFromBackend = async (
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const priceSnapshot = getDealPriceSnapshot(deal);
+      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
       const viewed = viewedDealIds.has(deal.id);
 
       return (
@@ -8845,8 +8971,21 @@ const deleteDealFromBackend = async (
                 ? 'rounded-[1rem] bg-gradient-to-r from-indigo-50 via-violet-50/85 to-sky-50/80 py-2.5 shadow-inner shadow-white/60'
                 : 'rounded-[0.95rem] bg-indigo-50/80'
             }`}>
-              <p className="line-clamp-2 break-words text-[1rem] font-black text-indigo-600">{displayOfferText}</p>
-              {isDropModeActive ? (
+              {hasPriceRow ? (
+                <div className="flex items-center gap-2">
+                  {originalPriceLabel ? (
+                    <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400 line-through">
+                      {originalPriceLabel}
+                    </span>
+                  ) : null}
+                  {currentPriceLabel ? (
+                    <span className="text-[14px] font-black text-slate-900">{currentPriceLabel}</span>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="line-clamp-2 break-words text-[1rem] font-black text-indigo-600">{displayOfferText}</p>
+              )}
+              {isDropModeActive && hasPriceRow ? (
                 <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Limited-time price drop</p>
               ) : null}
             </div>
@@ -8901,17 +9040,17 @@ const deleteDealFromBackend = async (
                 Link: {primaryActionUrl ?? 'No link saved'}
               </p>
             ) : null}
-            <div className="mt-3 grid grid-cols-1 gap-2 min-[390px]:grid-cols-2">
+            <div className="mt-3 flex w-full flex-col gap-2 min-[390px]:flex-row">
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
                   openDealProductDetails(deal);
                 }}
-                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
+                className="inline-flex h-10 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
               >
-                <AppIcon name="deal" size={15} />
-                <span>Product Details</span>
+                <AppIcon name="search" size={15} />
+                <span>Details</span>
               </button>
               <button
                 type="button"
@@ -8920,14 +9059,14 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-10 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985]'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
                 }`}
               >
-                <AppIcon name="deal" size={15} />
-                <span>Get Deal</span>
+                <AppIcon name="check" size={15} />
+                <span>Deal</span>
               </button>
             </div>
           </div>
@@ -8941,6 +9080,10 @@ const deleteDealFromBackend = async (
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const priceSnapshot = getDealPriceSnapshot(deal);
+      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
       const viewed = viewedDealIds.has(deal.id);
 
       return (
@@ -8980,16 +9123,28 @@ const deleteDealFromBackend = async (
               </span>
             ) : null}
           </div>
-          <div className="space-y-2.5 p-3">
-            <div className="space-y-1">
-              <p className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.14em] text-indigo-500">
-                <AppIcon name={getCategoryIconName(deal.category)} size={10} />
-                {getCategoryLabel(deal.category)}
-              </p>
-              <h3 className="line-clamp-2 break-words text-[0.92rem] font-extrabold leading-[1.2] text-slate-900">{displayTitle}</h3>
-              <p className="truncate text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
-            </div>
-            <p className="line-clamp-2 break-words text-[11px] leading-[1.5] text-slate-500">{displayDescription}</p>
+            <div className="space-y-2.5 p-3">
+              <div className="space-y-1">
+                <p className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.14em] text-indigo-500">
+                  <AppIcon name={getCategoryIconName(deal.category)} size={10} />
+                  {getCategoryLabel(deal.category)}
+                </p>
+                <h3 className="line-clamp-2 break-words text-[0.92rem] font-extrabold leading-[1.2] text-slate-900">{displayTitle}</h3>
+                <p className="truncate text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{displayBusinessName}</p>
+              </div>
+              {hasPriceRow ? (
+                <div className="flex items-center gap-2 rounded-[0.85rem] border border-slate-100 bg-slate-50/80 px-2.5 py-2">
+                  {originalPriceLabel ? (
+                    <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400 line-through">
+                      {originalPriceLabel}
+                    </span>
+                  ) : null}
+                  {currentPriceLabel ? (
+                    <span className="text-[12px] font-black text-slate-900">{currentPriceLabel}</span>
+                  ) : null}
+                </div>
+              ) : null}
+              <p className="line-clamp-2 break-words text-[11px] leading-[1.5] text-slate-500">{displayDescription}</p>
             <div
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => event.stopPropagation()}
@@ -9036,17 +9191,17 @@ const deleteDealFromBackend = async (
                 </button>
               </div>
             ) : null}
-            <div className="grid grid-cols-1 gap-2">
+            <div className="flex w-full flex-col gap-2 min-[360px]:flex-row">
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
                   openDealProductDetails(deal);
                 }}
-                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
+                className="inline-flex h-9 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
               >
-                <AppIcon name="deal" size={13} />
-                <span>Product Details</span>
+                <AppIcon name="search" size={13} />
+                <span>Details</span>
               </button>
               <button
                 type="button"
@@ -9055,14 +9210,14 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-9 w-full items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[11px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-9 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[11px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
                 }`}
               >
-                <AppIcon name="deal" size={13} />
-                <span>Get Deal</span>
+                <AppIcon name="check" size={13} />
+                <span>Deal</span>
               </button>
             </div>
           </div>
@@ -13028,6 +13183,17 @@ const deleteDealFromBackend = async (
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
+                  onClick={() => void handleRefreshAllDealPrices()}
+                  disabled={priceScanRunning}
+                  className={`inline-flex h-10 items-center justify-center rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ${
+                    priceScanRunning
+                      ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-300'
+                      : 'border border-indigo-200 bg-indigo-50 text-indigo-600 hover:border-indigo-300 hover:bg-indigo-100'
+                  }`}
+                >
+                  {priceScanRunning ? 'Scanning Prices…' : 'Refresh Prices'}
+                </button>
+                <button
                   onClick={() => void refreshSharedDeals({ force: true })}
                   className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
                 >
@@ -13063,6 +13229,14 @@ const deleteDealFromBackend = async (
                 </button>
               </div>
             </div>
+            {priceScanProgress ? (
+              <p className="mt-3 text-xs font-semibold text-slate-500">
+                Scanned {priceScanProgress.done} of {priceScanProgress.total} online deals.
+              </p>
+            ) : null}
+            {priceScanMessage ? (
+              <p className="mt-2 text-xs font-semibold text-indigo-600">{priceScanMessage}</p>
+            ) : null}
           </div>
 
           <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">

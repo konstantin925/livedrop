@@ -53,6 +53,7 @@ create table if not exists public.deals (
   like_count integer not null default 0,
   dislike_count integer not null default 0,
   share_count integer not null default 0,
+  current_price double precision,
   original_price double precision,
   discount_percent double precision,
   affiliate_url text,
@@ -93,6 +94,7 @@ alter table public.deals add column if not exists offer_text text;
 alter table public.deals add column if not exists like_count integer not null default 0;
 alter table public.deals add column if not exists dislike_count integer not null default 0;
 alter table public.deals add column if not exists share_count integer not null default 0;
+alter table public.deals add column if not exists current_price double precision;
 alter table public.deals add column if not exists website_url text;
 alter table public.deals add column if not exists product_link text;
 alter table public.deals add column if not exists product_url text;
