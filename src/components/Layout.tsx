@@ -256,7 +256,7 @@ export const Layout: React.FC<LayoutProps> = ({
                 aria-pressed={currentView === 'live-deals' || currentView === 'deal-detail'}
                 className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                   currentView === 'live-deals' || currentView === 'deal-detail'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                     : 'text-slate-500 hover:text-indigo-600'
                 }`}
               >
@@ -269,7 +269,7 @@ export const Layout: React.FC<LayoutProps> = ({
                 aria-pressed={currentView === 'catalog'}
                 className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                   currentView === 'catalog'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                     : 'text-slate-500 hover:text-indigo-600'
                 }`}
               >
@@ -282,7 +282,7 @@ export const Layout: React.FC<LayoutProps> = ({
                 aria-pressed={currentView === 'my-claims'}
                 className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                   currentView === 'my-claims'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                     : 'text-slate-500 hover:text-indigo-600'
                 }`}
               >
@@ -295,7 +295,7 @@ export const Layout: React.FC<LayoutProps> = ({
                 aria-pressed={currentView === 'business-portal'}
                 className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                   currentView === 'business-portal'
-                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                     : 'text-slate-500 hover:text-indigo-600'
                 }`}
               >

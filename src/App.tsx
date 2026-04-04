@@ -9299,8 +9299,8 @@ const deleteDealFromBackend = async (
         {renderDealsErrorBanner()}
 
         {viewportWidth >= 768 ? (
-          <div className="rounded-[1.35rem] border border-slate-100 bg-white/85 px-4 py-3.5 shadow-sm shadow-slate-200/30">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="rounded-[1.35rem] border border-slate-100 bg-white/85 px-4 py-2.5 shadow-sm shadow-slate-200/30">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="relative flex flex-wrap items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 <span className="text-slate-500">What is LiveDrop</span>
                 <button
@@ -9311,6 +9311,9 @@ const deleteDealFromBackend = async (
                   Details
                   <AppIcon name="external" size={11} />
                 </button>
+                <span className="text-[11px] font-semibold normal-case tracking-normal text-slate-500">
+                  LiveDrop curates time-sensitive local and online deals so you can shop faster and smarter.
+                </span>
                 {showWhatIsLiveDrop && viewportWidth >= 768 ? (
                   <div className="absolute left-0 top-8 z-20 w-[320px] rounded-[1rem] border border-slate-200 bg-white p-3 text-left text-[11px] font-semibold normal-case tracking-normal text-slate-600 shadow-[0_18px_32px_rgba(15,23,42,0.18)]">
                     <p>
@@ -9440,9 +9443,6 @@ const deleteDealFromBackend = async (
                 </div>
               </div>
             </div>
-            <p className="mt-2 text-[11px] font-semibold leading-5 text-slate-500">
-              LiveDrop curates time-sensitive local and online deals so you can shop faster and smarter.
-            </p>
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
@@ -9585,7 +9585,7 @@ const deleteDealFromBackend = async (
               aria-pressed={dropMode === 'local'}
               className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                 dropMode === 'local'
-                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                   : 'text-slate-500 hover:text-indigo-600'
               }`}
             >
@@ -9603,7 +9603,7 @@ const deleteDealFromBackend = async (
               aria-pressed={dropMode === 'online'}
               className={`inline-flex h-full items-center justify-center gap-2 rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] transition-all ${
                 dropMode === 'online'
-                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)]'
+                  ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                   : 'text-slate-500 hover:text-indigo-600'
               }`}
             >
@@ -9866,19 +9866,19 @@ const deleteDealFromBackend = async (
                 </div>
               </div>
 
-              <div className="hidden min-[1024px]:flex flex-1 items-center justify-center px-1">
-                <div className="flex items-center gap-3 flex-nowrap">
-                  <div className="top-panel-category-bar flex items-center gap-1.5 rounded-[1.1rem] border border-white/50 bg-white/35 px-2.5 py-2">
+              <div className="hidden min-[1024px]:flex flex-1 items-center justify-center px-2">
+                <div className="flex items-center gap-3 flex-nowrap justify-center w-full">
+                  <div className="top-panel-category-bar flex items-center justify-center gap-2.5 rounded-[1.1rem] border border-white/50 bg-white/35 px-3.5 py-2.5">
                     {['All', 'Tech', 'Fashion', 'Gaming', 'Digital', 'Home', 'Food'].map((category) => (
-                      <button
-                        key={category}
-                        type="button"
-                        aria-pressed={selectedCategory === category}
-                        onClick={() => handleSelectActiveCategory(category)}
-                        className={`top-panel-category-chip inline-flex h-8 items-center gap-2 rounded-[0.85rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
-                          selectedCategory === category
-                            ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_8px_14px_rgba(99,102,241,0.18)] ring-2 ring-indigo-100/70'
-                            : 'border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-700'
+                    <button
+                      key={category}
+                      type="button"
+                      aria-pressed={selectedCategory === category}
+                      onClick={() => handleSelectActiveCategory(category)}
+                      className={`top-panel-category-chip inline-flex h-8 items-center gap-2 rounded-[0.85rem] border px-3 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
+                        selectedCategory === category
+                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_8px_14px_rgba(99,102,241,0.18)] ring-2 ring-indigo-100/70'
+                          : 'border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-700'
                         }`}
                       >
                         {category === 'All' ? (
@@ -9893,7 +9893,7 @@ const deleteDealFromBackend = async (
                 </div>
               </div>
 
-              <div className="hidden min-[1024px]:flex items-center justify-end gap-3 min-[1024px]:min-w-[200px]">
+              <div className="hidden min-[1024px]:flex items-center justify-end gap-4 min-[1024px]:min-w-[200px]">
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">
                     Drop Mode
@@ -9988,7 +9988,7 @@ const deleteDealFromBackend = async (
               }`}
             >
               <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
-                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
+                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
                   <button
                     type="button"
                     aria-pressed={selectedLocalSubcategory === 'All'}
@@ -10029,7 +10029,7 @@ const deleteDealFromBackend = async (
               }`}
             >
               <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
-                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
+                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
                   <button
                     type="button"
                     aria-pressed={selectedOnlineSubcategory === 'All'}
@@ -10063,7 +10063,7 @@ const deleteDealFromBackend = async (
           ) : null}
 
           <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
-            <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
+            <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
               {[
                 { id: 'all', label: 'All' },
                 { id: 'trending', label: 'Trending' },
