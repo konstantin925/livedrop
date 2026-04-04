@@ -71,6 +71,61 @@
   --discount-thumb-size: 22px;
 }
 
+@media (min-width: 640px) {
+  .discount-meter--embedded {
+    background: linear-gradient(140deg, rgba(255, 255, 255, 0.65), rgba(233, 237, 255, 0.6));
+    border: 1px solid rgba(196, 207, 229, 0.45);
+    box-shadow: inset 0 1px 2px rgba(148, 163, 184, 0.18);
+  }
+
+  .discount-meter--embedded .discount-meter__track {
+    background: linear-gradient(to right, rgba(79, 70, 229, 0.25), rgba(59, 130, 246, 0.1));
+    box-shadow: inset 0 0 6px rgba(30, 41, 59, 0.16);
+  }
+
+  .discount-meter--embedded .discount-meter__track-fill {
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.35);
+  }
+
+  .discount-meter--embedded .discount-meter__value {
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.22), rgba(147, 51, 234, 0.2), rgba(56, 189, 248, 0.18));
+    color: rgba(99, 102, 241, 0.8);
+    border: 1px solid rgba(99, 102, 241, 0.28);
+    box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.85), inset 0 -2px 4px rgba(79, 70, 229, 0.18);
+    position: relative;
+    overflow: hidden;
+    transform: translateY(-3px);
+  }
+
+  .discount-meter--embedded .discount-meter__value::after {
+    content: "";
+    position: absolute;
+    inset: 1px 2px auto 2px;
+    height: 40%;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0));
+    opacity: 0.65;
+    pointer-events: none;
+  }
+
+  .discount-meter--embedded .discount-meter__label {
+    align-self: center;
+    padding-top: 2px;
+  }
+
+  .discount-meter--embedded .discount-meter__track {
+    margin-top: -2px;
+  }
+
+  .discount-meter--embedded .discount-meter__range {
+    transform: translateY(-6px);
+  }
+
+  .discount-meter--embedded .discount-meter__track {
+    transform: translateY(-6px);
+  }
+}
+
 .discount-meter--desktop {
   max-width: 420px;
 }
@@ -151,6 +206,48 @@
 
 .discount-meter__all-button--active {
   box-shadow: 0 14px 30px rgba(79, 70, 229, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+@media (min-width: 1024px) {
+  .top-panel-category-bar {
+    box-shadow: inset 0 2px 6px rgba(148, 163, 184, 0.18), inset 0 -3px 8px rgba(148, 163, 184, 0.14);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.35), rgba(224, 230, 250, 0.42));
+  }
+
+  .top-panel-category-chip {
+    box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.92), inset 0 -3px 6px rgba(148, 163, 184, 0.2);
+  }
+
+  .top-panel-category-chip:hover {
+    box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.96), 0 4px 10px rgba(99, 102, 241, 0.08);
+  }
+}
+
+.discount-meter__all-inline {
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(235, 238, 255, 0.8));
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(99, 102, 241, 0.9);
+  cursor: pointer;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.9);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.discount-meter__all-inline:hover {
+  border-color: rgba(129, 140, 248, 0.7);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.95), 0 6px 14px rgba(99, 102, 241, 0.18);
+  transform: translateY(-1px);
+}
+
+.discount-meter__all-inline--active {
+  border-color: rgba(99, 102, 241, 0.5);
+  color: rgba(79, 70, 229, 0.98);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.95), inset 0 -1px 2px rgba(79, 70, 229, 0.12);
 }
 
 .discount-meter__track {

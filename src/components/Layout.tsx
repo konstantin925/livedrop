@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AppNotification, UserRole, View } from '../types';
 import { AppIcon } from './AppIcon';
 import brandBoltLogo from '../assets/logo-bolt.svg';
+import { PublicFooter } from './PublicFooter';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,6 +25,8 @@ interface LayoutProps {
   desktopSearchQuery?: string;
   onDesktopSearchQueryChange?: (value: string) => void;
   desktopSearchPlaceholder?: string;
+  onNavigate?: (path: string) => void;
+  showFooter?: boolean;
 }
 
 export const Layout: React.FC<LayoutProps> = ({
@@ -47,6 +50,8 @@ export const Layout: React.FC<LayoutProps> = ({
   desktopSearchQuery = '',
   onDesktopSearchQueryChange,
   desktopSearchPlaceholder = 'Search deals, stores, and categories',
+  onNavigate,
+  showFooter = true,
 }) => {
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -348,6 +353,8 @@ export const Layout: React.FC<LayoutProps> = ({
       <main className={`flex-1 overflow-y-auto py-3 ${isDesktopLayout ? 'px-8 py-6' : 'px-3.5 max-[359px]:px-2.5'}`} style={mainContentStyle}>
         {children}
       </main>
+
+      {showFooter ? <PublicFooter onNavigate={onNavigate} /> : null}
 
       {/* Navigation */}
       <nav

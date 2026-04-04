@@ -1254,6 +1254,11 @@ const applyDealEngagement = (deal: Deal, action: DealEngagementAction): Deal => 
 const normalizeRoutePath = (path: string) => {
   if (path === '/admin') return '/admin';
   if (path === '/dashboard') return '/dashboard';
+  if (path === '/about') return '/about';
+  if (path === '/contact') return '/contact';
+  if (path === '/privacy') return '/privacy';
+  if (path === '/terms') return '/terms';
+  if (path === '/affiliate-disclosure') return '/affiliate-disclosure';
   return '/';
 };
 
@@ -2260,16 +2265,32 @@ type AppShellRouteProps = {
   routePath: string;
   renderAdminPage: () => React.ReactNode;
   renderPublicShell: () => React.ReactNode;
+  renderPublicPage: (path: string) => React.ReactNode;
   fallback: React.ReactNode;
 };
 
-function AppShellRoute({ routePath, renderAdminPage, renderPublicShell, fallback }: AppShellRouteProps) {
+function AppShellRoute({
+  routePath,
+  renderAdminPage,
+  renderPublicShell,
+  renderPublicPage,
+  fallback,
+}: AppShellRouteProps) {
   if (routePath === '/admin') {
     return <>{renderAdminPage()}</>;
   }
 
   if (routePath === '/' || routePath === '/dashboard') {
     return <>{renderPublicShell()}</>;
+  }
+
+  if (routePath.startsWith('/about')
+    || routePath.startsWith('/contact')
+    || routePath.startsWith('/privacy')
+    || routePath.startsWith('/terms')
+    || routePath.startsWith('/affiliate-disclosure')
+  ) {
+    return <>{renderPublicPage(routePath)}</>;
   }
 
   return <>{fallback}</>;
@@ -3782,6 +3803,9 @@ export default function App() {
   const [routePath, setRoutePath] = useState(() =>
     typeof window !== 'undefined' ? normalizeRoutePath(window.location.pathname) : '/',
   );
+  const [showAffiliateDisclosure, setShowAffiliateDisclosure] = useState(false);
+  const [showWhatIsLiveDrop, setShowWhatIsLiveDrop] = useState(false);
+  const [showPartners, setShowPartners] = useState(false);
   const [role, setRole] = useState<UserRole>('customer');
   const [deals, setRawDeals] = useState<Deal[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -8888,6 +8912,12 @@ const deleteDealFromBackend = async (
 
       pushToast('Drop Mode is off. Back to the full online feed.', 'share');
     };
+
+    const partnerEntries = [
+      { name: 'zChocolat', logoUrl: '/partners/zchocolat.webp' },
+      { name: 'ABC Wigs', logoUrl: '/partners/abc-wigs.png' },
+      { name: 'Amazon', logoUrl: '/partners/amazon.png' },
+    ];
     const renderOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
@@ -9268,6 +9298,285 @@ const deleteDealFromBackend = async (
 
         {renderDealsErrorBanner()}
 
+        {viewportWidth >= 768 ? (
+          <div className="rounded-[1.35rem] border border-slate-100 bg-white/85 px-4 py-3.5 shadow-sm shadow-slate-200/30">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="relative flex flex-wrap items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                <span className="text-slate-500">What is LiveDrop</span>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatIsLiveDrop(true)}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                >
+                  Details
+                  <AppIcon name="external" size={11} />
+                </button>
+                {showWhatIsLiveDrop && viewportWidth >= 768 ? (
+                  <div className="absolute left-0 top-8 z-20 w-[320px] rounded-[1rem] border border-slate-200 bg-white p-3 text-left text-[11px] font-semibold normal-case tracking-normal text-slate-600 shadow-[0_18px_32px_rgba(15,23,42,0.18)]">
+                    <p>
+                      LiveDrop is a curated deals platform for local and online offers, organized so you can scan fast, compare prices, and shop with confidence.
+                    </p>
+                    <div className="mt-3 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setShowWhatIsLiveDrop(false)}
+                        className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400 hover:text-slate-600"
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowWhatIsLiveDrop(false);
+                          navigateToPath('/about');
+                        }}
+                        className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                      >
+                        About
+                        <AppIcon name="external" size={11} />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="relative flex flex-wrap items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                <div className="relative flex items-center gap-2">
+                  <span className="text-slate-500">Partners</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowPartners(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    View Partners
+                    <AppIcon name="external" size={11} />
+                  </button>
+                  {showPartners && viewportWidth >= 768 ? (
+                  <div className="absolute right-0 top-8 z-20 w-[360px] rounded-[1rem] border border-slate-200 bg-white p-3 text-left shadow-[0_18px_32px_rgba(15,23,42,0.18)]">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Our Partners</p>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-600 normal-case">
+                      Brands and merchants currently featured through LiveDrop partnerships and affiliate relationships.
+                    </p>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {partnerEntries.map((partner) => (
+                        <div
+                          key={partner.name}
+                          className="flex h-12 items-center justify-center rounded-[0.85rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40"
+                        >
+                          {partner.logoUrl ? (
+                            <img
+                              src={partner.logoUrl}
+                              alt={`${partner.name} logo`}
+                              className="max-h-8 max-w-[88%] object-contain"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                              {partner.name}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                      <div className="mt-3 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setShowPartners(false)}
+                          className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400 hover:text-slate-600"
+                        >
+                          Close
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPartners(false);
+                            navigateToPath('/contact');
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                        >
+                          Partner with Us
+                          <AppIcon name="external" size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="relative flex items-center gap-2">
+                  <span className="text-slate-500">Affiliate Disclosure</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAffiliateDisclosure(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    Details
+                    <AppIcon name="external" size={11} />
+                  </button>
+                  {showAffiliateDisclosure && viewportWidth >= 768 ? (
+                    <div className="absolute right-0 top-8 z-20 w-[320px] rounded-[1rem] border border-slate-200 bg-white p-3 text-left text-[11px] font-semibold normal-case tracking-normal text-slate-600 shadow-[0_18px_32px_rgba(15,23,42,0.18)]">
+                      <p>
+                        Some links on LiveDrop may be affiliate links. If you buy through them, LiveDrop may earn a commission at no extra cost to you.
+                      </p>
+                      <div className="mt-3 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setShowAffiliateDisclosure(false)}
+                          className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400 hover:text-slate-600"
+                        >
+                          Close
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAffiliateDisclosure(false);
+                            navigateToPath('/affiliate-disclosure');
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                        >
+                          Full Page
+                          <AppIcon name="external" size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] font-semibold leading-5 text-slate-500">
+              LiveDrop curates time-sensitive local and online deals so you can shop faster and smarter.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { label: 'About', onClick: () => setShowWhatIsLiveDrop(true) },
+              { label: 'Partners', onClick: () => setShowPartners(true) },
+              { label: 'Disclosure', onClick: () => setShowAffiliateDisclosure(true) },
+            ].map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={item.onClick}
+                className="inline-flex h-8 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-sm shadow-slate-200/30"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {showWhatIsLiveDrop && viewportWidth < 768 ? (
+          <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-900/40 px-4 pb-6">
+            <div className="w-full max-w-[420px] rounded-[1.3rem] border border-slate-100 bg-white p-4 shadow-[0_22px_48px_rgba(15,23,42,0.2)]">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-indigo-500">What is LiveDrop</p>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatIsLiveDrop(false)}
+                  className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400"
+                >
+                  Close
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                LiveDrop is a curated deals platform for local and online offers, organized so you can scan fast, compare prices, and shop with confidence.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowWhatIsLiveDrop(false);
+                  navigateToPath('/about');
+                }}
+                className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              >
+                Read About LiveDrop
+                <AppIcon name="external" size={12} />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+                {showPartners && viewportWidth < 768 ? (
+          <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-900/40 px-4 pb-6">
+            <div className="w-full max-w-[420px] rounded-[1.3rem] border border-slate-100 bg-white p-4 shadow-[0_22px_48px_rgba(15,23,42,0.2)]">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-indigo-500">Our Partners</p>
+                <button
+                  type="button"
+                  onClick={() => setShowPartners(false)}
+                  className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400"
+                >
+                  Close
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Brands and merchants currently featured through LiveDrop partnerships and affiliate relationships.
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-2 min-[380px]:grid-cols-3">
+                {partnerEntries.map((partner) => (
+                  <div
+                    key={partner.name}
+                    className="flex h-12 items-center justify-center rounded-[0.85rem] border border-slate-100 bg-white shadow-sm shadow-slate-200/40"
+                  >
+                    {partner.logoUrl ? (
+                      <img
+                        src={partner.logoUrl}
+                        alt={`${partner.name} logo`}
+                        className="max-h-8 max-w-[88%] object-contain"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                        {partner.name}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPartners(false);
+                  navigateToPath('/contact');
+                }}
+                className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              >
+                Partner with Us
+                <AppIcon name="external" size={12} />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {showAffiliateDisclosure && viewportWidth < 768 ? (
+          <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-900/40 px-4 pb-6">
+            <div className="w-full max-w-[420px] rounded-[1.3rem] border border-slate-100 bg-white p-4 shadow-[0_22px_48px_rgba(15,23,42,0.2)]">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-indigo-500">Affiliate Disclosure</p>
+                <button
+                  type="button"
+                  onClick={() => setShowAffiliateDisclosure(false)}
+                  className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400"
+                >
+                  Close
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Some links on LiveDrop may be affiliate links. If you buy through them, LiveDrop may earn a commission at no extra cost to you.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAffiliateDisclosure(false);
+                  navigateToPath('/affiliate-disclosure');
+                }}
+                className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              >
+                Read Full Disclosure
+                <AppIcon name="external" size={12} />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="hidden min-[1024px]:flex min-[1024px]:items-center min-[1024px]:justify-center min-[1024px]:rounded-[1.1rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-2.5 min-[1024px]:shadow-sm">
           <div className="inline-grid h-11 w-full max-w-[520px] grid-cols-2 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_20px_rgba(148,163,184,0.16)]">
             <button
@@ -9356,7 +9665,7 @@ const deleteDealFromBackend = async (
           </div>
         )}
 
-          <div className="grid grid-cols-2 gap-1.5 rounded-[1.35rem] bg-slate-100/90 p-1 min-[1024px]:hidden">
+          <div className="grid w-full grid-cols-2 gap-2 rounded-[1.1rem] bg-slate-100/80 p-1 min-[1024px]:hidden">
           {[
             { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleGlobalLocalFeedMode },
             { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleGlobalOnlineFeedMode },
@@ -9364,12 +9673,12 @@ const deleteDealFromBackend = async (
             <button
               key={option.id}
               onClick={option.onClick}
-              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[1rem] ${controlPaddingClass} text-[9px] min-[360px]:text-[10px] font-black transition-all ${
+              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[0.95rem] ${controlPaddingClass} text-[9px] min-[360px]:text-[10px] font-black transition-all border ${
                 dropMode === option.id
-                    ? 'bg-white text-indigo-600 shadow-sm shadow-slate-200/50'
-                    : 'bg-transparent text-slate-500'
+                    ? 'border-indigo-200 bg-white text-indigo-600 shadow-sm shadow-slate-200/40'
+                    : 'border-transparent bg-transparent text-slate-500 hover:text-slate-700'
                 }`}
-              >
+            >
                 <AppIcon name={option.icon} size={16} />
                 {option.label}
             </button>
@@ -9425,9 +9734,9 @@ const deleteDealFromBackend = async (
             </div>
           </div>
         ) : (
-          <div className="mb-3 rounded-[1.45rem] border border-slate-100 bg-white px-3 py-2 shadow-sm shadow-slate-200/35">
-            <div className="flex items-center gap-2 min-[360px]:gap-3">
-              <div className="flex h-10 w-10 min-[360px]:h-11 min-[360px]:w-11 items-center justify-center rounded-[0.95rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
+          <div className="mb-3 rounded-[1.2rem] border border-slate-100 bg-white px-3 py-2 shadow-sm shadow-slate-200/25 min-[1024px]:hidden">
+            <div className="flex items-center gap-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-[0.85rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
                 <AppIcon name="online" size={17} />
               </div>
               <div className="min-w-0 flex-1">
@@ -9437,10 +9746,10 @@ const deleteDealFromBackend = async (
                     {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
                   </span>
                 </div>
-                <p className="mt-0.5 text-[12px] min-[360px]:text-[13px] font-semibold leading-[1.3] text-slate-700 line-clamp-2">
+                <p className="mt-0.5 text-[12px] font-semibold leading-[1.3] text-slate-700 line-clamp-2">
                   {isDropModeActive
-                    ? 'Curated for speed: bigger savings, shorter windows.'
-                    : 'Turn on Drop Mode for the fastest, best-value online drops.'}
+                    ? (viewportWidth < 480 ? 'Curated for speed.' : 'Curated for speed: bigger savings, shorter windows.')
+                    : (viewportWidth < 480 ? 'Enable Drop Mode for faster drops.' : 'Turn on Drop Mode for the fastest, best-value online drops.')}
                 </p>
               </div>
               <button
@@ -9448,7 +9757,7 @@ const deleteDealFromBackend = async (
                 onClick={handleDropModeToggle}
                 aria-pressed={isDropModeActive}
                 aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                className={`group relative inline-flex h-16 w-16 min-[360px]:h-[74px] min-[360px]:w-[74px] items-center justify-center overflow-hidden rounded-[1.05rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
+                className={`group relative inline-flex h-12 w-12 items-center justify-center overflow-hidden rounded-[0.95rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
                   isDropModeActive
                     ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.26)_0%,rgba(255,255,255,0.18)_58%,rgba(120,125,255,0.22)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_9px_20px_rgba(102,102,255,0.28)]'
                     : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.95)_55%,rgba(236,241,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_8px_18px_rgba(129,140,248,0.16)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_22px_rgba(99,102,241,0.22)]'
@@ -9457,12 +9766,12 @@ const deleteDealFromBackend = async (
                 <div className="relative h-full w-full flex items-center justify-center">
                   <span
                     aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-1 top-1 h-[38%] rounded-[0.85rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.4)_64%,rgba(255,255,255,0)_100%)]"
+                    className="pointer-events-none absolute inset-x-1 top-1 h-[40%] rounded-[0.75rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.35)_64%,rgba(255,255,255,0)_100%)]"
                   />
                   <img
                     src={brandBoltLogo3d}
                     alt=""
-                    className={`absolute h-28 w-28 min-[360px]:h-[128px] min-[360px]:w-[128px] object-contain transition-all duration-200 ${
+                    className={`absolute h-[88px] w-[88px] object-contain transition-all duration-200 ${
                       isDropModeActive
                         ? 'opacity-0 scale-90'
                         : 'opacity-100 scale-100 group-hover:brightness-110'
@@ -9471,7 +9780,7 @@ const deleteDealFromBackend = async (
                   <img
                     src={brandBoltLogo3dActive}
                     alt=""
-                    className={`absolute h-28 w-28 min-[360px]:h-[128px] min-[360px]:w-[128px] object-contain transition-all duration-200 ${
+                    className={`absolute h-[88px] w-[88px] object-contain transition-all duration-200 ${
                       isDropModeActive
                         ? 'opacity-100 scale-112 drop-shadow-[0_0_34px_rgba(111,114,255,0.9)]'
                         : 'opacity-0 scale-90'
@@ -9484,31 +9793,45 @@ const deleteDealFromBackend = async (
         )}
 
         {isOnlineMode ? (
-          <div className="relative mb-3 overflow-hidden rounded-[1.8rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3.5 py-2.5 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_14px_30px_rgba(148,163,184,0.12)]">
+          <div className="relative mb-3 overflow-hidden rounded-[1.5rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3 py-2 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_10px_22px_rgba(148,163,184,0.12)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
-            <div className="relative z-10 flex flex-col gap-2.5 min-[640px]:flex-row min-[640px]:items-center min-[640px]:justify-between">
-              <div className="flex flex-col gap-2.5 min-[640px]:flex-1 min-[640px]:items-center">
-                <div className="discount-meter-wrap">
-                  <button
-                    type="button"
-                    onClick={() => setDiscountFilterEnabled(false)}
-                    className={`discount-meter__all-button discount-meter__all-button--primary ${
-                      discountFilterEnabled ? '' : 'discount-meter__all-button--active'
-                    }`}
-                  >
-                    All
-                  </button>
+            <div className="relative z-10 flex flex-col gap-2 min-[1024px]:flex-row min-[1024px]:items-center min-[1024px]:justify-between">
+              <div className="flex flex-col gap-2 min-[1024px]:w-[340px] min-[1024px]:items-start min-[1024px]:justify-start">
+                <div className="flex items-center justify-between min-[640px]:hidden">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDiscountFilterEnabled(false)}
+                      className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
+                        discountFilterEnabled
+                          ? 'border-slate-200 bg-white text-slate-600'
+                          : 'border-indigo-200 bg-white text-indigo-600 shadow-sm shadow-indigo-100/70'
+                      }`}
+                    >
+                      All
+                    </button>
+                    <span className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">Discounts</span>
+                  </div>
+                  <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
+                    isDropModeActive
+                      ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
+                      : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
+                  }`}>
+                    {sortedOnlineDealsByTab.length} Drops
+                  </span>
+                </div>
+                <div className="discount-meter-wrap min-[640px]:items-center min-[640px]:justify-start min-[640px]:gap-3">
                   <div
-                    className="discount-meter"
+                    className="discount-meter discount-meter--embedded min-[640px]:rounded-[1.05rem] min-[640px]:h-[58px] min-[640px]:px-3 min-[640px]:py-2 min-[640px]:pt-1 min-[640px]:pb-1.5"
                     style={{
                       '--discount-progress': `${discountSliderProgress}%`,
                       '--discount-thumb-size': `${discountThumbSize}px`,
                     } as React.CSSProperties}
                   >
-                    <span className="discount-meter__label">DISCOUNTS</span>
+                    <span className="discount-meter__label hidden min-[640px]:block min-[640px]:text-[10px] min-[640px]:tracking-[0.18em]">DISCOUNTS</span>
                     <div className="discount-meter__track">
                       <div className="discount-meter__track-fill" />
                     </div>
@@ -9531,10 +9854,87 @@ const deleteDealFromBackend = async (
                       {discountFilterLabel}
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setDiscountFilterEnabled(false)}
+                    className={`discount-meter__all-inline hidden min-[640px]:inline-flex ${
+                      discountFilterEnabled ? '' : 'discount-meter__all-inline--active'
+                    }`}
+                  >
+                    All
+                  </button>
                 </div>
               </div>
 
-              <div className="flex justify-end min-[640px]:min-w-[96px]">
+              <div className="hidden min-[1024px]:flex flex-1 items-center justify-center px-1">
+                <div className="flex items-center gap-3 flex-nowrap">
+                  <div className="top-panel-category-bar flex items-center gap-1.5 rounded-[1.1rem] border border-white/50 bg-white/35 px-2.5 py-2">
+                    {['All', 'Tech', 'Fashion', 'Gaming', 'Digital', 'Home', 'Food'].map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        aria-pressed={selectedCategory === category}
+                        onClick={() => handleSelectActiveCategory(category)}
+                        className={`top-panel-category-chip inline-flex h-8 items-center gap-2 rounded-[0.85rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
+                          selectedCategory === category
+                            ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_8px_14px_rgba(99,102,241,0.18)] ring-2 ring-indigo-100/70'
+                            : 'border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-700'
+                        }`}
+                      >
+                        {category === 'All' ? (
+                          <AppIcon name="deal" size={12} />
+                        ) : (
+                          <AppIcon name={getCategoryIconName(category)} size={12} />
+                        )}
+                        {category}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="hidden min-[1024px]:flex items-center justify-end gap-3 min-[1024px]:min-w-[200px]">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">
+                    Drop Mode
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDropModeToggle}
+                    aria-pressed={isDropModeActive}
+                    aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
+                    className={`group relative inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-[0.9rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
+                      isDropModeActive
+                        ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.26)_0%,rgba(255,255,255,0.18)_58%,rgba(120,125,255,0.22)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_9px_18px_rgba(102,102,255,0.24)]'
+                        : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.95)_55%,rgba(236,241,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_8px_16px_rgba(129,140,248,0.14)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_18px_rgba(99,102,241,0.2)]'
+                    }`}
+                  >
+                    <div className="relative h-full w-full flex items-center justify-center">
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-1 top-1 h-[42%] rounded-[0.7rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.35)_64%,rgba(255,255,255,0)_100%)]"
+                      />
+                      <img
+                        src={brandBoltLogo3d}
+                        alt=""
+                        className={`absolute h-[74px] w-[74px] object-contain transition-all duration-200 ${
+                          isDropModeActive
+                            ? 'opacity-0 scale-90'
+                            : 'opacity-100 scale-100 group-hover:brightness-110'
+                        }`}
+                      />
+                      <img
+                        src={brandBoltLogo3dActive}
+                        alt=""
+                        className={`absolute h-[74px] w-[74px] object-contain transition-all duration-200 ${
+                          isDropModeActive
+                            ? 'opacity-100 scale-112 drop-shadow-[0_0_26px_rgba(111,114,255,0.85)]'
+                            : 'opacity-0 scale-90'
+                        }`}
+                      />
+                    </div>
+                  </button>
+                </div>
                 <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
                   isDropModeActive
                     ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
@@ -9557,9 +9957,9 @@ const deleteDealFromBackend = async (
         )}
 
         <div className="space-y-1.5 min-[1024px]:rounded-[1.2rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:p-3 min-[1024px]:shadow-sm min-[1024px]:shadow-slate-200/35">
-          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
+          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:hidden">
             <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
-              {activeCategoryOptions.map(category => (
+              {activeCategoryOptions.filter(category => category !== 'All').map(category => (
                 <button
                   key={category}
                   type="button"
@@ -13728,6 +14128,211 @@ const deleteDealFromBackend = async (
     );
   };
 
+  const publicInfoPages = {
+    '/about': {
+      title: 'About LiveDrop',
+      subtitle: 'Curated deals that feel personal, fast, and trustworthy.',
+      sections: [
+        {
+          heading: 'Our Mission',
+          body:
+            'LiveDrop is built to make deal discovery feel effortless. We curate limited-time offers from trusted online brands and local partners so you can save without digging through noisy feeds.',
+        },
+        {
+          heading: 'How We Curate',
+          body:
+            'We focus on quality over volume. Deals are organized by category, location, and urgency so you can scan quickly, compare options, and make confident decisions.',
+        },
+      ],
+    },
+    '/contact': {
+      title: 'Contact',
+      subtitle: 'We’re here to help with support, partnerships, and feedback.',
+      sections: [
+        {
+          heading: 'Customer Support',
+          body: 'Email us anytime at support@livedrop.sale and we’ll respond as quickly as possible.',
+        },
+        {
+          heading: 'Partnerships',
+          body: 'Brands and local businesses can reach us at partners@livedrop.sale.',
+        },
+      ],
+    },
+    '/privacy': {
+      title: 'Privacy Policy',
+      subtitle: 'Effective Date: [Month Day, Year]',
+      sections: [
+        {
+          heading: 'Information We Collect',
+          body:
+            'We may collect information you provide directly (name, email, messages or inquiries, and information submitted through contact forms, sign-in features, or support requests). We may also collect information automatically such as IP address, browser and device type, operating system, referring website, pages viewed, time spent on pages, general location based on IP address, and click activity on deals or links.',
+        },
+        {
+          heading: 'How We Use Information',
+          body:
+            'We use information to operate and improve LiveDrop, display and organize deals, respond to questions or partnership inquiries, monitor performance, prevent fraud or abuse, analyze clicks and engagement, and comply with legal obligations.',
+        },
+        {
+          heading: 'Affiliate Links and Third-Party Websites',
+          body:
+            'LiveDrop may contain affiliate links and links to third-party websites. If you click a third-party link, you will leave LiveDrop. We are not responsible for the privacy practices or content of those third-party websites.',
+        },
+        {
+          heading: 'Cookies and Analytics',
+          body:
+            'LiveDrop may use cookies, pixels, and analytics tools to remember preferences, understand user behavior, measure traffic, improve the user experience, and track deal clicks and affiliate activity. You can control cookies through browser settings, but disabling cookies may affect functionality.',
+        },
+        {
+          heading: 'Sharing of Information',
+          body:
+            'We do not sell personal information. We may share limited information with service providers, analytics partners, and affiliate/advertising partners where needed for tracking or reporting, and with legal authorities if required by law.',
+        },
+        {
+          heading: 'Data Retention',
+          body:
+            'We retain information only as long as reasonably necessary for business, operational, legal, or security purposes.',
+        },
+        {
+          heading: 'Data Security',
+          body:
+            'We use reasonable administrative, technical, and organizational measures to help protect information. No method of transmission or storage is completely secure, and we cannot guarantee absolute security.',
+        },
+        {
+          heading: 'Children’s Privacy',
+          body:
+            'LiveDrop is not intended for children under 13. We do not knowingly collect personal information from children under 13. If we learn we have collected such information, we will take reasonable steps to delete it.',
+        },
+        {
+          heading: 'Your Choices',
+          body:
+            'You may contact us to request updates or deletion of information you provided directly, control cookies through your browser settings, and choose not to submit personal information. Depending on your location, you may have additional privacy rights under applicable law.',
+        },
+        {
+          heading: 'Changes to This Privacy Policy',
+          body:
+            'We may update this Privacy Policy from time to time. When we do, we will post the updated version on this page and update the Effective Date above.',
+        },
+        {
+          heading: 'Contact Us',
+          body:
+            'If you have questions about this Privacy Policy, contact us at support@livedrop.sale or partners@livedrop.sale.',
+        },
+      ],
+    },
+    '/terms': {
+      title: 'Terms of Service',
+      subtitle: 'Using LiveDrop means agreeing to these basic terms.',
+      sections: [
+        {
+          heading: 'Service Availability',
+          body:
+            'Deals and pricing can change quickly. We do our best to keep information accurate but cannot guarantee availability or pricing at all times.',
+        },
+        {
+          heading: 'User Responsibilities',
+          body:
+            'Use LiveDrop for lawful purposes only and respect any partner or merchant terms when redeeming offers.',
+        },
+        {
+          heading: 'Limitation of Liability',
+          body:
+            'LiveDrop is provided "as is." We are not responsible for third-party products, services, or fulfillment issues.',
+        },
+      ],
+    },
+    '/affiliate-disclosure': {
+      title: 'Affiliate Disclosure',
+      subtitle: 'Transparency about how LiveDrop is funded.',
+      sections: [
+        {
+          heading: 'Affiliate Relationships',
+          body:
+            'Some links on LiveDrop are affiliate links. If you make a purchase, we may earn a commission at no extra cost to you.',
+        },
+        {
+          heading: 'Editorial Independence',
+          body:
+            'We prioritize deals based on value and relevance, not solely on commission potential.',
+        },
+      ],
+    },
+  } as const;
+
+  const renderPublicInfoPage = (path: string) => {
+    const page = publicInfoPages[path as keyof typeof publicInfoPages];
+    if (!page) {
+      return renderPublicShell();
+    }
+
+    return (
+      <Layout
+        currentView={currentView}
+        onViewChange={(view) => {
+          setNotificationsOpen(false);
+          if (view === currentView) return;
+          setSelectedDetailDealId(null);
+          if (view === 'catalog') {
+            handleOpenCatalog();
+            return;
+          }
+          if (view === 'business-portal') {
+            handleOpenBusinessPortal();
+            return;
+          }
+          setCurrentView(view);
+        }}
+        activeCatalogCount={catalogCoupons.filter(coupon => coupon.status === 'active').length}
+        notifications={notifications}
+        notificationsOpen={notificationsOpen}
+        unreadNotificationCount={notifications.filter((item) => !item.read).length}
+        onToggleNotifications={toggleNotifications}
+        role={role}
+        isAuthenticated={Boolean(session)}
+        userEmail={authUser?.email}
+        userAvatarUrl={authUser?.user_metadata?.avatar_url ?? null}
+        isAdminSession={hasAdminAccess}
+        adminLabel={adminStatusLabel}
+        desktopSearchQuery={desktopSearchQuery}
+        onDesktopSearchQueryChange={setDesktopSearchQuery}
+        desktopSearchPlaceholder={dropMode === 'online' ? 'Search online deals, brands, categories' : 'Search local deals, stores, categories'}
+        onOpenAuth={() => {
+          setAuthError('');
+          setAuthInfo('');
+          setAuthModalOpen(true);
+        }}
+        onSignOut={handleSignOut}
+        onNavigate={navigateToPath}
+      >
+        <div className="mx-auto w-full max-w-[840px] space-y-5">
+          <div className="rounded-[1.6rem] border border-slate-100 bg-white p-5 shadow-sm shadow-slate-200/40">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">LiveDrop</p>
+            <h1 className="mt-2 text-2xl font-black text-slate-900">{page.title}</h1>
+            <p className="mt-2 text-sm text-slate-500">{page.subtitle}</p>
+          </div>
+          <div className="space-y-3">
+            {page.sections.map((section) => (
+              <div key={section.heading} className="rounded-[1.4rem] border border-slate-100 bg-white p-5 shadow-sm shadow-slate-200/40">
+                <h2 className="text-[13px] font-black uppercase tracking-[0.14em] text-slate-700">{section.heading}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">{section.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <button
+              type="button"
+              onClick={() => navigateToPath('/')}
+              className="inline-flex h-11 items-center justify-center rounded-[0.95rem] border border-slate-200 bg-white px-4 text-[11px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              Back to Home
+            </button>
+            <p className="text-xs text-slate-400">Questions? Reach us anytime at support@livedrop.sale.</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  };
+
   const renderPublicShell = () => (
     <Layout
       currentView={currentView}
@@ -13773,6 +14378,7 @@ const deleteDealFromBackend = async (
         setAuthModalOpen(true);
       }}
       onSignOut={handleSignOut}
+      onNavigate={navigateToPath}
     >
       {currentView === 'live-deals' && renderLiveDeals()}
       {currentView === 'deal-detail' && renderDealDetail()}
@@ -13789,7 +14395,15 @@ const deleteDealFromBackend = async (
     </Layout>
   );
 
-  const hasKnownRoute = routePath === '/admin' || routePath === '/' || routePath === '/dashboard';
+  const hasKnownRoute =
+    routePath === '/admin' ||
+    routePath === '/' ||
+    routePath === '/dashboard' ||
+    routePath === '/about' ||
+    routePath === '/contact' ||
+    routePath === '/privacy' ||
+    routePath === '/terms' ||
+    routePath === '/affiliate-disclosure';
   const routeFallback = (
     <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
       <div className="mx-auto max-w-[430px] rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
@@ -13813,6 +14427,7 @@ const deleteDealFromBackend = async (
         routePath={hasKnownRoute ? routePath : '__fallback__'}
         renderAdminPage={renderAdminPage}
         renderPublicShell={renderPublicShell}
+        renderPublicPage={renderPublicInfoPage}
         fallback={routeFallback}
       />
       <AuthModal
