@@ -3912,7 +3912,7 @@ export default function App() {
     () => deals.find((deal) => deal.id === previewDealId) ?? null,
     [deals, previewDealId],
   );
-  const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
+  const [dropMode, setDropMode] = useState<'local' | 'online'>('online');
   const [dropModeEnabled, setDropModeEnabled] = useState(false);
   const [dropModeShuffleSeed, setDropModeShuffleSeed] = useState<number>(() => Date.now());
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -4227,17 +4227,24 @@ export default function App() {
     };
 
     const handleScroll = () => {
+      if (viewportWidth < 640) return;
       setPreviewDealId(null);
       setPreviewAnchorRect(null);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('scroll', handleScroll, true);
+    if (viewportWidth < 640) {
+      document.body.style.overflow = 'hidden';
+    }
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('scroll', handleScroll, true);
+      if (viewportWidth < 640) {
+        document.body.style.overflow = '';
+      }
     };
-  }, [previewDealId]);
+  }, [previewDealId, viewportWidth]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8753,10 +8760,10 @@ const deleteDealFromBackend = async (
                 setPreviewDealId(null);
                 setPreviewAnchorRect(null);
               }}
-              className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm ring-1 ring-white/70 transition-colors hover:bg-white"
+              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-300/80 bg-[linear-gradient(160deg,rgba(255,238,238,1)_0%,rgba(248,113,113,0.9)_48%,rgba(239,68,68,0.95)_100%)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(239,68,68,0.35)] transition-all hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/70"
               aria-label="Close preview"
             >
-              <span className="text-base font-bold leading-none">×</span>
+              <span className="text-base font-black leading-none">×</span>
             </button>
             <div className="pointer-events-none absolute left-3 top-3">
               <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
@@ -8833,33 +8840,33 @@ const deleteDealFromBackend = async (
       </div>
     ) : (
       <div
-        className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 px-4 py-6 backdrop-blur-sm"
+        className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-900/40 px-4 pb-4 backdrop-blur-sm"
         role="presentation"
-        onClick={() => setPreviewDealId(null)}
       >
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="deal-preview-title"
-          className="w-full max-w-[520px] overflow-hidden rounded-[1.6rem] bg-white shadow-[0_30px_70px_rgba(15,23,42,0.24)]"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
-            <DealArtwork
-              src={previewDeal.imageUrl}
-              alt={displayTitle}
-              fit="contain"
-              iconSize={44}
-              imageClassName="p-2.5"
-            />
-            <button
-              type="button"
-              onClick={() => setPreviewDealId(null)}
-              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm ring-1 ring-white/70 transition-colors hover:bg-white"
-              aria-label="Close preview"
-            >
-              <span className="text-lg font-bold leading-none">×</span>
-            </button>
+        <div className="relative w-full max-w-[520px]">
+          <button
+            type="button"
+            onClick={() => setPreviewDealId(null)}
+            className="absolute -right-3 -top-12 inline-flex h-10 min-w-[74px] items-center justify-center rounded-full border border-rose-300/90 bg-[linear-gradient(160deg,rgba(255,210,210,1)_0%,rgba(248,113,113,0.98)_52%,rgba(220,38,38,1)_100%)] px-3 text-[12px] font-black uppercase tracking-[0.18em] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_16px_28px_rgba(220,38,38,0.5)] transition-all hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/80"
+            aria-label="Close preview"
+          >
+            Close
+          </button>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deal-preview-title"
+            className="w-full overflow-hidden rounded-t-[1.5rem] bg-white shadow-[0_30px_70px_rgba(15,23,42,0.24)] max-h-[78vh] overflow-y-auto"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+              <DealArtwork
+                src={previewDeal.imageUrl}
+                alt={displayTitle}
+                fit="contain"
+                iconSize={44}
+                imageClassName="p-2.5"
+              />
             <div className="pointer-events-none absolute left-3 top-3">
               <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
                 {discountLabel}
@@ -8921,7 +8928,7 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(previewDeal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-10 flex-1 items-center justify-center rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-12 w-full items-center justify-center rounded-[1rem] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
@@ -8932,6 +8939,7 @@ const deleteDealFromBackend = async (
             </div>
           </div>
         </div>
+      </div>
       </div>
     );
   };
@@ -9395,7 +9403,7 @@ const deleteDealFromBackend = async (
                   event.stopPropagation();
                   openDealProductDetails(deal, event);
                 }}
-                className="inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
+                className="inline-flex h-9.5 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[1rem] border border-slate-200 bg-white px-2.5 text-[10px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985] whitespace-nowrap"
               >
                 <AppIcon name="search" size={15} />
                 <span>Details</span>
@@ -9407,7 +9415,7 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-9.5 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[1rem] px-2.5 text-[10px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 whitespace-nowrap ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
@@ -9422,7 +9430,7 @@ const deleteDealFromBackend = async (
       );
     };
 
-    const renderCompactCategoryOnlineDealCard = (deal: Deal) => {
+  const renderCompactCategoryOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
@@ -9547,7 +9555,7 @@ const deleteDealFromBackend = async (
                   event.stopPropagation();
                   openDealProductDetails(deal, event);
                 }}
-                className="inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
+                className="inline-flex h-8.5 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[0.95rem] border border-slate-200 bg-white px-2.5 text-[9px] min-[360px]:px-3 min-[360px]:text-[10px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50 whitespace-nowrap"
               >
                 <AppIcon name="search" size={13} />
                 <span>Details</span>
@@ -9559,7 +9567,7 @@ const deleteDealFromBackend = async (
                   openExternalDealLink(deal);
                 }}
                 disabled={!primaryActionUrl}
-                className={`inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                className={`inline-flex h-8.5 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[0.95rem] px-2.5 text-[9px] min-[360px]:px-3 min-[360px]:text-[10px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 whitespace-nowrap ${
                   primaryActionUrl
                     ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600 livedrop-deal-gloss'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
@@ -9567,6 +9575,96 @@ const deleteDealFromBackend = async (
               >
                 <AppIcon name="check" size={13} />
                 <span>Deal</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const renderMobileListDealRow = (deal: Deal) => {
+      const primaryActionUrl = getDealPrimaryActionUrl(deal);
+      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
+      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
+      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
+      const priceSnapshot = getDealPriceSnapshot(deal);
+      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
+      const offerText = deal.offerText?.trim() || 'Live Deal';
+
+      return (
+        <div
+          key={`mobile-list-${deal.id}`}
+          className="flex gap-3 rounded-[1.2rem] border border-slate-100 bg-white p-3 shadow-sm shadow-slate-200/30"
+        >
+          <div className="relative h-24 w-24 flex-shrink-0 overflow-hidden rounded-[1rem] bg-slate-100">
+            <DealArtwork src={deal.imageUrl} alt={displayTitle} fit="contain" iconSize={20} imageClassName="p-2" />
+            <div className="pointer-events-none absolute left-2 top-2">
+              <span className="deal-ribbon-badge inline-flex min-h-[22px] items-center rounded-[0.85rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white shadow-[0_8px_16px_rgba(99,102,241,0.18)]">
+                {getOnlineDealHeroLabel(offerText)}
+              </span>
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">{displayBusinessName}</p>
+            <h3 className="mt-1 line-clamp-2 text-[13px] font-extrabold leading-[1.25] text-slate-900">
+              {displayTitle}
+            </h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {hasPriceRow ? (
+                <>
+                  {originalPriceLabel ? (
+                    <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400 line-through">
+                      {originalPriceLabel}
+                    </span>
+                  ) : null}
+                  {currentPriceLabel ? (
+                    <span className="text-[12px] font-black text-slate-900">{currentPriceLabel}</span>
+                  ) : null}
+                </>
+              ) : (
+                <span className="text-[11px] font-semibold text-indigo-600">{offerText}</span>
+              )}
+            </div>
+            <p className="mt-1 line-clamp-2 text-[11px] text-slate-500">{displayDescription}</p>
+            <div className="mt-2">
+              <DealEngagementBar
+                deal={deal}
+                compact
+                pendingAction={dealEngagementPending[deal.id] ?? null}
+                onLike={handleLikeDeal}
+                onDislike={handleDislikeDeal}
+                onShare={handleShareDeal}
+              />
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openDealProductDetails(deal, event);
+                }}
+                className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-[0.85rem] border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              >
+                <AppIcon name="search" size={12} />
+                Details
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openExternalDealLink(deal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-[0.85rem] px-2.5 text-[9px] font-black uppercase tracking-[0.12em] text-white transition-all ${
+                  primaryActionUrl
+                    ? 'bg-emerald-500 shadow-emerald-100/80 livedrop-deal-gloss'
+                    : 'cursor-not-allowed bg-slate-300'
+                }`}
+              >
+                <AppIcon name="check" size={12} />
+                Deal
               </button>
             </div>
           </div>
@@ -9774,7 +9872,7 @@ const deleteDealFromBackend = async (
                 key={item.label}
                 type="button"
                 onClick={item.onClick}
-                className="inline-flex h-8 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-sm shadow-slate-200/30"
+                className="inline-flex h-7 items-center gap-1 rounded-full border border-slate-200 bg-white/90 px-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-600 shadow-sm shadow-slate-200/30 backdrop-blur"
               >
                 {item.label}
               </button>
@@ -9896,7 +9994,7 @@ const deleteDealFromBackend = async (
           </div>
         ) : null}
 
-        <div className="hidden min-[1024px]:flex min-[1024px]:items-center min-[1024px]:justify-center min-[1024px]:rounded-[1.1rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:px-4 min-[1024px]:py-2.5 min-[1024px]:shadow-sm">
+        <div className="flex items-center justify-center rounded-[1.1rem] border border-slate-100 bg-white px-4 py-2.5 shadow-sm min-[1024px]:justify-center">
           <div className="inline-grid h-11 w-full max-w-[520px] grid-cols-2 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_20px_rgba(148,163,184,0.16)]">
             <button
               type="button"
@@ -9984,25 +10082,7 @@ const deleteDealFromBackend = async (
           </div>
         )}
 
-          <div className="grid w-full grid-cols-2 gap-2 rounded-[1.1rem] bg-slate-100/80 p-1 min-[1024px]:hidden">
-          {[
-            { id: 'local', label: 'Local', icon: 'pin' as const, onClick: handleGlobalLocalFeedMode },
-            { id: 'online', label: 'Online', icon: 'online' as const, onClick: handleGlobalOnlineFeedMode },
-          ].map(option => (
-            <button
-              key={option.id}
-              onClick={option.onClick}
-              className={`inline-flex ${controlHeightClass} items-center justify-center gap-1.5 rounded-[0.95rem] ${controlPaddingClass} text-[9px] min-[360px]:text-[10px] font-black transition-all border ${
-                dropMode === option.id
-                    ? 'border-indigo-200 bg-white text-indigo-600 shadow-sm shadow-slate-200/40'
-                    : 'border-transparent bg-transparent text-slate-500 hover:text-slate-700'
-                }`}
-            >
-                <AppIcon name={option.icon} size={16} />
-                {option.label}
-            </button>
-          ))}
-        </div>
+        
 
         {/* Location & Radius Header */}
         {dropMode === 'local' ? (
@@ -10052,99 +10132,80 @@ const deleteDealFromBackend = async (
               </div>
             </div>
           </div>
-        ) : (
-          <div className="mb-3 rounded-[1.2rem] border border-slate-100 bg-white px-3 py-2 shadow-sm shadow-slate-200/25 min-[1024px]:hidden">
-            <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-[0.85rem] bg-indigo-50 text-indigo-600 shadow-inner shadow-white/70 shrink-0">
-                <AppIcon name="online" size={17} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Online</p>
-                  <span className={`text-[10px] min-[360px]:text-[11px] font-black uppercase tracking-[0.14em] ${isDropModeActive ? 'text-indigo-600' : 'text-slate-500'}`}>
-                    {isDropModeActive ? 'Drop Mode On' : 'Drop Mode'}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[12px] font-semibold leading-[1.3] text-slate-700 line-clamp-2">
-                  {isDropModeActive
-                    ? (viewportWidth < 480 ? 'Curated for speed.' : 'Curated for speed: bigger savings, shorter windows.')
-                    : (viewportWidth < 480 ? 'Enable Drop Mode for faster drops.' : 'Turn on Drop Mode for the fastest, best-value online drops.')}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleDropModeToggle}
-                aria-pressed={isDropModeActive}
-                aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                className={`group relative inline-flex h-12 w-12 items-center justify-center overflow-hidden rounded-[0.95rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
-                  isDropModeActive
-                    ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.26)_0%,rgba(255,255,255,0.18)_58%,rgba(120,125,255,0.22)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_9px_20px_rgba(102,102,255,0.28)]'
-                    : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.95)_55%,rgba(236,241,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_8px_18px_rgba(129,140,248,0.16)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_22px_rgba(99,102,241,0.22)]'
-                }`}
-              >
-                <div className="relative h-full w-full flex items-center justify-center">
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-1 top-1 h-[40%] rounded-[0.75rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.35)_64%,rgba(255,255,255,0)_100%)]"
-                  />
-                  <img
-                    src={brandBoltLogo3d}
-                    alt=""
-                    className={`absolute h-[88px] w-[88px] object-contain transition-all duration-200 ${
-                      isDropModeActive
-                        ? 'opacity-0 scale-90'
-                        : 'opacity-100 scale-100 group-hover:brightness-110'
-                    }`}
-                  />
-                  <img
-                    src={brandBoltLogo3dActive}
-                    alt=""
-                    className={`absolute h-[88px] w-[88px] object-contain transition-all duration-200 ${
-                      isDropModeActive
-                        ? 'opacity-100 scale-112 drop-shadow-[0_0_34px_rgba(111,114,255,0.9)]'
-                        : 'opacity-0 scale-90'
-                    }`}
-                  />
-                </div>
-              </button>
-            </div>
-          </div>
-        )}
+        ) : null}
 
         {isOnlineMode ? (
-          <div className="relative mb-3 overflow-hidden rounded-[1.5rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3 py-2 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_10px_22px_rgba(148,163,184,0.12)]">
+          <div className="relative mb-3 overflow-hidden rounded-[1.5rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3 py-2 max-[639px]:py-2 max-[639px]:px-3 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_10px_22px_rgba(148,163,184,0.12)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
               <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
             </div>
             <div className="relative z-10 flex flex-col gap-2 min-[1024px]:flex-row min-[1024px]:items-center min-[1024px]:justify-between">
               <div className="flex flex-col gap-2 min-[1024px]:w-[340px] min-[1024px]:items-start min-[1024px]:justify-start">
-                <div className="flex items-center justify-between min-[640px]:hidden">
-                  <div className="flex items-center gap-2">
+                <div className="min-[640px]:hidden space-y-1.5">
+                  <div className="flex items-center justify-between">
                     <button
                       type="button"
                       onClick={() => setDiscountFilterEnabled(false)}
                       className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
                         discountFilterEnabled
                           ? 'border-slate-200 bg-white text-slate-600'
-                          : 'border-indigo-200 bg-white text-indigo-600 shadow-sm shadow-indigo-100/70'
+                          : 'border-indigo-200 bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
                       }`}
                     >
                       All
                     </button>
-                    <span className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">Discounts</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDropModeToggle}
+                        aria-pressed={isDropModeActive}
+                        aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
+                        className={`group relative inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-[1rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 ${
+                          isDropModeActive
+                            ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.4)_0%,rgba(255,255,255,0.22)_58%,rgba(120,125,255,0.32)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_12px_22px_rgba(102,102,255,0.32)]'
+                            : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,1)_0%,rgba(245,247,255,0.96)_55%,rgba(236,241,255,0.92)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_20px_rgba(129,140,248,0.18)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,1),0_12px_22px_rgba(99,102,241,0.24)]'
+                        }`}
+                      >
+                        <div className="relative h-full w-full flex items-center justify-center">
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute inset-x-1.5 top-1.5 h-[40%] rounded-[0.85rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.45)_64%,rgba(255,255,255,0)_100%)]"
+                          />
+                          <img
+                            src={brandBoltLogo3d}
+                            alt=""
+                            className={`absolute h-[68px] w-[68px] object-contain transition-all duration-200 ${
+                              isDropModeActive
+                                ? 'opacity-0 scale-90'
+                                : 'opacity-100 scale-100 group-hover:brightness-110'
+                            }`}
+                          />
+                          <img
+                            src={brandBoltLogo3dActive}
+                            alt=""
+                            className={`absolute h-[68px] w-[68px] object-contain transition-all duration-200 ${
+                              isDropModeActive
+                                ? 'opacity-100 scale-112 drop-shadow-[0_0_28px_rgba(111,114,255,0.95)]'
+                                : 'opacity-0 scale-90'
+                            }`}
+                          />
+                        </div>
+                      </button>
+                      <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
+                        isDropModeActive
+                          ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
+                          : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
+                      }`}>
+                        {sortedOnlineDealsByTab.length} Drops
+                      </span>
+                    </div>
                   </div>
-                  <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
-                    isDropModeActive
-                      ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-                      : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
-                  }`}>
-                    {sortedOnlineDealsByTab.length} Drops
-                  </span>
+                  <div className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">Discounts</div>
                 </div>
                 <div className="discount-meter-wrap min-[640px]:items-center min-[640px]:justify-start min-[640px]:gap-3">
                   <div
-                    className="discount-meter discount-meter--embedded min-[640px]:rounded-[1.05rem] min-[640px]:h-[58px] min-[640px]:px-3 min-[640px]:py-2 min-[640px]:pt-1 min-[640px]:pb-1.5"
+                    className="discount-meter discount-meter--embedded h-[44px] px-2.5 py-1 min-[640px]:rounded-[1.05rem] min-[640px]:h-[58px] min-[640px]:px-3 min-[640px]:py-2 min-[640px]:pt-1 min-[640px]:pb-1.5"
                     style={{
                       '--discount-progress': `${discountSliderProgress}%`,
                       '--discount-thumb-size': `${discountThumbSize}px`,
@@ -10284,10 +10345,10 @@ const deleteDealFromBackend = async (
                   type="button"
                   aria-pressed={selectedCategory === category}
                   onClick={() => handleSelectActiveCategory(category)}
-                  className={`inline-flex shrink-0 ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all duration-200 ${
+                  className={`inline-flex shrink-0 h-10 items-center rounded-[1rem] border px-3.5 text-[9px] font-black uppercase tracking-[0.12em] whitespace-nowrap transition-all duration-200 ${
                     selectedCategory === category
-                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/40 ring-2 ring-indigo-100/70'
-                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_10px_18px_rgba(99,102,241,0.2)] ring-2 ring-indigo-100/70'
+                      : 'border-white/60 bg-white/70 text-slate-500 shadow-[inset_0_1px_1px_rgba(255,255,255,0.75)] hover:bg-white hover:text-slate-700'
                   }`}
                 >
                   <span className="inline-flex items-center gap-1.5">
@@ -10381,7 +10442,7 @@ const deleteDealFromBackend = async (
             </div>
           ) : null}
 
-          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
+                <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
             <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
               {[
                 { id: 'all', label: 'All' },
@@ -10392,7 +10453,7 @@ const deleteDealFromBackend = async (
                 <button
                   key={filter.id}
                   onClick={() => setSelectedFeedFilter(filter.id as typeof selectedFeedFilter)}
-                  className={`inline-flex ${controlHeightClass} items-center ${controlPaddingClass} ${controlRadiusClass} border ${controlTextClass} whitespace-nowrap transition-all ${
+                  className={`inline-flex h-9 min-[640px]:${controlHeightClass} items-center px-3 min-[640px]:${controlPaddingClass} rounded-[0.95rem] min-[640px]:${controlRadiusClass} border text-[9px] min-[640px]:${controlTextClass} whitespace-nowrap transition-all ${
                     selectedFeedFilter === filter.id
                       ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
                       : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
@@ -10409,7 +10470,64 @@ const deleteDealFromBackend = async (
         </div>
 
         <section className="space-y-2.5">
-          {dropMode === 'local' ? (
+          {(() => {
+            const isMobileViewport = viewportWidth < 640;
+            const isSubcategoryActive = dropMode === 'local'
+              ? selectedLocalSubcategory !== 'All'
+              : selectedOnlineSubcategory !== 'All';
+
+            if (dropMode === 'local' && isMobileViewport && filteredActiveLocalDeals.length > 0) {
+              return isSubcategoryActive ? (
+                <div className="space-y-2.5">
+                  {filteredActiveLocalDeals.map((deal) => renderMobileListDealRow(deal))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {visibleLocalDeals.map((deal) => (
+                    <DealCard
+                      key={deal.id}
+                      compact
+                      deal={deal}
+                      onClaim={handleClaimDeal}
+                      isClaimed={claims.some(c => c.dealId === deal.id)}
+                      isViewed={viewedDealIds.has(deal.id)}
+                      computedDistance={deal.computedDistanceLabel}
+                      onSaveToCatalog={handleSaveToCatalog}
+                      canSaveToCatalog={canSaveDealToCatalog(deal)}
+                      isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
+                      saveFeedback={catalogSaveFeedback[deal.id]}
+                      badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
+                      pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
+                      onLike={handleLikeDeal}
+                      onDislike={handleDislikeDeal}
+                      onShare={handleShareDeal}
+                      showAdminActions={hasAdminAccess}
+                      onEditDeal={handleEditDeal}
+                      onDeleteDeal={handleAdminDeleteDeal}
+                      isDeleting={deletingDealIds.has(deal.id)}
+                    />
+                  ))}
+                </div>
+              );
+            }
+
+            if (dropMode === 'online' && isMobileViewport) {
+              const mobileOnlineDeals = isOnlineCategoryView ? visibleCategoryOnlineDeals : visibleOnlineDealsByTab;
+              if (mobileOnlineDeals.length === 0) return null;
+              return isSubcategoryActive ? (
+                <div className="space-y-2.5">
+                  {mobileOnlineDeals.map((deal) => renderMobileListDealRow(deal))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {mobileOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+          {viewportWidth < 640 ? null : dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 {visibleLocalDeals.map(deal => (
