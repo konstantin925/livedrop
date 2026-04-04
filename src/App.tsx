@@ -3812,6 +3812,8 @@ export default function App() {
   const [catalogCoupons, setCatalogCoupons] = useState<CatalogCoupon[]>([]);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [selectedDetailDealId, setSelectedDetailDealId] = useState<string | null>(null);
+  const [previewDealId, setPreviewDealId] = useState<string | null>(null);
+  const [previewAnchorRect, setPreviewAnchorRect] = useState<DOMRect | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [dealDraft, setDealDraft] = useState<Deal | null>(null);
   const [portalFieldSnapshot, setPortalFieldSnapshot] = useState<Deal | null>(null);
@@ -3905,6 +3907,10 @@ export default function App() {
   const selectedDetailDeal = useMemo(
     () => deals.find((deal) => deal.id === selectedDetailDealId) ?? null,
     [deals, selectedDetailDealId],
+  );
+  const previewDeal = useMemo(
+    () => deals.find((deal) => deal.id === previewDealId) ?? null,
+    [deals, previewDealId],
   );
   const [dropMode, setDropMode] = useState<'local' | 'online'>('local');
   const [dropModeEnabled, setDropModeEnabled] = useState(false);
@@ -4201,6 +4207,37 @@ export default function App() {
       setSelectedDetailDealId(null);
     }
   }, [currentView, selectedDetailDeal, selectedDetailDealId]);
+
+  useEffect(() => {
+    if (previewDealId && !previewDeal) {
+      setPreviewDealId(null);
+      setPreviewAnchorRect(null);
+    }
+  }, [previewDealId, previewDeal]);
+
+  useEffect(() => {
+    if (!previewDealId) return;
+    if (typeof window === 'undefined') return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPreviewDealId(null);
+        setPreviewAnchorRect(null);
+      }
+    };
+
+    const handleScroll = () => {
+      setPreviewDealId(null);
+      setPreviewAnchorRect(null);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [previewDealId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8582,16 +8619,36 @@ const deleteDealFromBackend = async (
     });
   };
 
-  const openDealProductDetails = (deal: Deal) => {
-    console.info('[LiveDrop] Opening internal product details view', {
+  const openDealProductDetails = (deal: Deal, event?: React.MouseEvent<HTMLElement>) => {
+    console.info('[LiveDrop] Opening deal preview modal', {
       dealId: deal.id,
       title: deal.title,
       affiliateUrl: deal.affiliateUrl ?? null,
       websiteUrl: deal.websiteUrl ?? null,
       productUrl: deal.productUrl ?? null,
     });
-
-    handleOpenDealDetail(deal);
+    if (previewDealId === deal.id) {
+      setPreviewDealId(null);
+      setPreviewAnchorRect(null);
+      return;
+    }
+    setViewedDealIds((prev) => {
+      const next = new Set(prev);
+      next.add(deal.id);
+      if (typeof window !== 'undefined') {
+        safeSetLocalStorageItem('livedrop_viewed_deals', JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+    if (event) {
+      const trigger = event.currentTarget as HTMLElement | null;
+      const card = trigger?.closest('[data-deal-card]') as HTMLElement | null;
+      const rect = (card ?? trigger)?.getBoundingClientRect() ?? null;
+      if (rect) {
+        setPreviewAnchorRect(rect);
+      }
+    }
+    setPreviewDealId(deal.id);
   };
 
   const handleOpenDealDetail = (deal: Deal) => {
@@ -8603,20 +8660,280 @@ const deleteDealFromBackend = async (
       }
       return next;
     });
-    if (currentView === 'deal-detail' && selectedDetailDealId === deal.id) {
+    if (selectedDetailDealId === deal.id) {
       return;
     }
 
     setNotificationsOpen(false);
+    setPreviewDealId(null);
+    setPreviewAnchorRect(null);
     setDropMode(deal.businessType === 'online' ? 'online' : 'local');
     setSelectedDetailDealId(deal.id);
-    setCurrentView('deal-detail');
   };
 
   const handleCloseDealDetail = () => {
     setNotificationsOpen(false);
-    setCurrentView('live-deals');
     setSelectedDetailDealId(null);
+    setPreviewDealId(null);
+    setPreviewAnchorRect(null);
+  };
+
+  const renderDealPreviewModal = () => {
+    if (!previewDeal) return null;
+
+    const displayBusinessName = previewDeal.businessName?.trim() || 'LiveDrop Partner';
+    const displayTitle = previewDeal.title?.trim() || 'Limited-Time Deal';
+    const displayDescription = previewDeal.description?.trim() || 'Fresh deal details available now.';
+    const priceSnapshot = getDealPriceSnapshot(previewDeal);
+    const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+    const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+    const discountPercent = getDealDiscountPercentValue(previewDeal);
+    const previewOfferText = previewDeal.offerText?.trim() || 'Live Deal';
+    const discountLabel = discountPercent ? `${discountPercent}% off` : previewOfferText;
+    const primaryActionUrl = getDealPrimaryActionUrl(previewDeal);
+    const subcategoryLabel =
+      previewDeal.businessType === 'online' ? previewDeal.onlineSubcategory : previewDeal.localSubcategory;
+    const priceDetail =
+      currentPriceLabel && originalPriceLabel
+        ? `${originalPriceLabel} → ${currentPriceLabel}`
+        : currentPriceLabel ?? originalPriceLabel ?? null;
+    const detailItems = [
+      previewDeal.merchant ? { label: 'Merchant', value: previewDeal.merchant } : null,
+      priceDetail ? { label: 'Price', value: priceDetail } : null,
+    ].filter(Boolean) as { label: string; value: string }[];
+    const isDesktop = viewportWidth >= 1024;
+    const anchor = previewAnchorRect;
+    const popoverWidth = 360;
+    const viewportPadding = 16;
+    const gap = 16;
+    const canPlaceRight =
+      anchor && anchor.right + gap + popoverWidth <= window.innerWidth - viewportPadding;
+    const canPlaceLeft =
+      anchor && anchor.left - gap - popoverWidth >= viewportPadding;
+    const resolvedPlacement = canPlaceRight ? 'right' : canPlaceLeft ? 'left' : 'right';
+    const resolvedLeft = anchor
+      ? resolvedPlacement === 'right'
+        ? anchor.right + gap
+        : anchor.left - gap - popoverWidth
+      : viewportPadding;
+    const preferredTop = anchor ? anchor.top : viewportPadding;
+    const maxTop = window.innerHeight - 420;
+    const resolvedTop = Math.max(
+      viewportPadding,
+      Math.min(preferredTop, Math.max(viewportPadding, maxTop)),
+    );
+
+    return isDesktop ? (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/35 px-4 py-6 backdrop-blur-[1px]"
+        role="presentation"
+        onClick={() => {
+          setPreviewDealId(null);
+          setPreviewAnchorRect(null);
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="deal-preview-title"
+          className="pointer-events-auto w-full max-w-[420px] overflow-hidden rounded-[1.5rem] border border-slate-100 bg-white shadow-[0_24px_60px_rgba(15,23,42,0.24)]"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+            <DealArtwork
+              src={previewDeal.imageUrl}
+              alt={displayTitle}
+              fit="contain"
+              iconSize={40}
+              imageClassName="p-2.5"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setPreviewDealId(null);
+                setPreviewAnchorRect(null);
+              }}
+              className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm ring-1 ring-white/70 transition-colors hover:bg-white"
+              aria-label="Close preview"
+            >
+              <span className="text-base font-bold leading-none">×</span>
+            </button>
+            <div className="pointer-events-none absolute left-3 top-3">
+              <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
+                {discountLabel}
+              </span>
+            </div>
+          </div>
+          <div className="p-4">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">{displayBusinessName}</p>
+            <h3 id="deal-preview-title" className="mt-1 text-[1rem] font-extrabold text-slate-900">
+              {displayTitle}
+            </h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {originalPriceLabel ? (
+                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 line-through">
+                  {originalPriceLabel}
+                </span>
+              ) : null}
+              {currentPriceLabel ? (
+                <span className="text-[1.05rem] font-black text-slate-900">{currentPriceLabel}</span>
+              ) : null}
+              {!currentPriceLabel && !originalPriceLabel ? (
+                <span className="text-sm font-semibold text-indigo-600">{previewOfferText}</span>
+              ) : null}
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[11px] font-semibold text-slate-500">
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                {discountLabel}
+              </span>
+            </div>
+            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{displayDescription}</p>
+            {detailItems.length > 0 ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {detailItems.map((item) => (
+                  <div key={item.label} className="rounded-[0.8rem] border border-slate-100 bg-slate-50 px-2.5 py-2">
+                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-700">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="mt-4 flex flex-col gap-2">
+              <div
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <DealEngagementBar
+                  deal={previewDeal}
+                  pendingAction={dealEngagementPending[previewDeal.id] ?? null}
+                  onLike={handleLikeDeal}
+                  onDislike={handleDislikeDeal}
+                  onShare={handleShareDeal}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewDealId(null);
+                  setPreviewAnchorRect(null);
+                  openExternalDealLink(previewDeal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-9 items-center justify-center rounded-[0.9rem] px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                  primaryActionUrl
+                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
+                    : 'cursor-not-allowed bg-slate-300 shadow-none'
+                }`}
+              >
+                Get Deal
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    ) : (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 px-4 py-6 backdrop-blur-sm"
+        role="presentation"
+        onClick={() => setPreviewDealId(null)}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="deal-preview-title"
+          className="w-full max-w-[520px] overflow-hidden rounded-[1.6rem] bg-white shadow-[0_30px_70px_rgba(15,23,42,0.24)]"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+            <DealArtwork
+              src={previewDeal.imageUrl}
+              alt={displayTitle}
+              fit="contain"
+              iconSize={44}
+              imageClassName="p-2.5"
+            />
+            <button
+              type="button"
+              onClick={() => setPreviewDealId(null)}
+              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm ring-1 ring-white/70 transition-colors hover:bg-white"
+              aria-label="Close preview"
+            >
+              <span className="text-lg font-bold leading-none">×</span>
+            </button>
+            <div className="pointer-events-none absolute left-3 top-3">
+              <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
+                {discountLabel}
+              </span>
+            </div>
+          </div>
+          <div className="p-4 sm:p-5">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">{displayBusinessName}</p>
+            <h3 id="deal-preview-title" className="mt-1 text-[1.05rem] font-extrabold text-slate-900">
+              {displayTitle}
+            </h3>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {originalPriceLabel ? (
+                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 line-through">
+                  {originalPriceLabel}
+                </span>
+              ) : null}
+              {currentPriceLabel ? (
+                <span className="text-[1.1rem] font-black text-slate-900">{currentPriceLabel}</span>
+              ) : null}
+              {!currentPriceLabel && !originalPriceLabel ? (
+                <span className="text-sm font-semibold text-indigo-600">{previewOfferText}</span>
+              ) : null}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                {discountLabel}
+              </span>
+            </div>
+            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{displayDescription}</p>
+            {detailItems.length > 0 ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {detailItems.map((item) => (
+                  <div key={item.label} className="rounded-[0.85rem] border border-slate-100 bg-slate-50 px-3 py-2">
+                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-700">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <div
+                className="w-full sm:flex-1"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <DealEngagementBar
+                  deal={previewDeal}
+                  pendingAction={dealEngagementPending[previewDeal.id] ?? null}
+                  onLike={handleLikeDeal}
+                  onDislike={handleDislikeDeal}
+                  onShare={handleShareDeal}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewDealId(null);
+                  openExternalDealLink(previewDeal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-10 flex-1 items-center justify-center rounded-[0.95rem] px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                  primaryActionUrl
+                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
+                    : 'cursor-not-allowed bg-slate-300 shadow-none'
+                }`}
+              >
+                Get Deal
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const handleSaveToCatalog = (deal: Deal) => {
@@ -8936,6 +9253,7 @@ const deleteDealFromBackend = async (
           role="button"
           tabIndex={0}
           aria-label={`Open details for ${deal.title}`}
+          data-deal-card="online"
           onClick={() => handleOpenDealDetail(deal)}
           onKeyDown={(event) => {
             if (event.target !== event.currentTarget) return;
@@ -9075,7 +9393,7 @@ const deleteDealFromBackend = async (
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  openDealProductDetails(deal);
+                  openDealProductDetails(deal, event);
                 }}
                 className="inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] border border-slate-200 bg-white px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/45 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 active:translate-y-0 active:scale-[0.985]"
               >
@@ -9122,6 +9440,7 @@ const deleteDealFromBackend = async (
           role="button"
           tabIndex={0}
           aria-label={`Open details for ${deal.title}`}
+          data-deal-card="online-compact"
           onClick={() => handleOpenDealDetail(deal)}
           onKeyDown={(event) => {
             if (event.target !== event.currentTarget) return;
@@ -9226,7 +9545,7 @@ const deleteDealFromBackend = async (
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  openDealProductDetails(deal);
+                  openDealProductDetails(deal, event);
                 }}
                 className="inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm shadow-slate-200/35 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
               >
@@ -14268,14 +14587,15 @@ const deleteDealFromBackend = async (
     return (
       <Layout
         currentView={currentView}
-        onViewChange={(view) => {
-          setNotificationsOpen(false);
-          if (view === currentView) return;
-          setSelectedDetailDealId(null);
-          if (view === 'catalog') {
-            handleOpenCatalog();
-            return;
-          }
+      onViewChange={(view) => {
+        setNotificationsOpen(false);
+        if (view === currentView) return;
+        setSelectedDetailDealId(null);
+        setPreviewDealId(null);
+        if (view === 'catalog') {
+          handleOpenCatalog();
+          return;
+        }
           if (view === 'business-portal') {
             handleOpenBusinessPortal();
             return;
@@ -14344,6 +14664,7 @@ const deleteDealFromBackend = async (
         }
 
         setSelectedDetailDealId(null);
+        setPreviewDealId(null);
 
         if (view === 'catalog') {
           handleOpenCatalog();
@@ -14385,6 +14706,7 @@ const deleteDealFromBackend = async (
       {currentView === 'catalog' && renderCatalog()}
       {currentView === 'my-claims' && renderMyClaims()}
       {currentView === 'business-portal' && renderBusinessPortal()}
+      {renderDealPreviewModal()}
 
       <ClaimModal 
         deal={selectedDeal} 
