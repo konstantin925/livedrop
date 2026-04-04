@@ -8962,7 +8962,7 @@ const deleteDealFromBackend = async (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
             ) : null}
             <div className="pointer-events-none absolute left-3 top-3">
-              <span className={`inline-flex max-w-[74%] items-center px-3 py-1.5 text-center text-[13px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white ${
+              <span className={`deal-ribbon-badge inline-flex max-w-[74%] items-center px-3 py-1.5 text-center text-[13px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white ${
                 isDropModeActive
                   ? 'min-h-[42px] rounded-[1.05rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-4 py-2 text-[16px] shadow-[0_16px_30px_rgba(99,102,241,0.34)] ring-1 ring-white/30 backdrop-blur-sm'
                   : 'min-h-[34px] rounded-[0.95rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 shadow-[0_10px_24px_rgba(99,102,241,0.28)]'
@@ -9091,7 +9091,7 @@ const deleteDealFromBackend = async (
                 disabled={!primaryActionUrl}
                 className={`inline-flex h-9.5 w-full flex-1 items-center justify-center gap-2 rounded-[1rem] px-3 text-[11px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
-                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985]'
+                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
                 }`}
               >
@@ -9143,7 +9143,7 @@ const deleteDealFromBackend = async (
               imageClassName={`p-2 ${viewed ? 'opacity-85' : ''}`}
             />
             <div className="pointer-events-none absolute left-2 top-2">
-              <span className="inline-flex min-h-[28px] max-w-[76%] items-center rounded-[0.9rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-center text-[10px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white shadow-[0_10px_20px_rgba(99,102,241,0.22)]">
+              <span className="deal-ribbon-badge inline-flex min-h-[28px] max-w-[76%] items-center rounded-[0.9rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-center text-[10px] font-black uppercase leading-[1.05] tracking-[0.08em] text-white shadow-[0_10px_20px_rgba(99,102,241,0.22)]">
                 {getOnlineDealHeroLabel(displayOfferText)}
               </span>
             </div>
@@ -9242,7 +9242,7 @@ const deleteDealFromBackend = async (
                 disabled={!primaryActionUrl}
                 className={`inline-flex h-8.5 w-full flex-1 items-center justify-center gap-2 rounded-[0.95rem] px-3 text-[10.5px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
                   primaryActionUrl
-                    ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600'
+                    ? 'bg-emerald-500 shadow-emerald-100/70 hover:bg-emerald-600 livedrop-deal-gloss'
                     : 'cursor-not-allowed bg-slate-300 shadow-none'
                 }`}
               >

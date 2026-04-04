@@ -71,6 +71,54 @@
   pointer-events: none;
 }
 
+.livedrop-deal-gloss {
+  position: relative;
+  overflow: hidden;
+}
+
+.livedrop-deal-gloss::after {
+  content: "";
+  position: absolute;
+  inset: 2px 6px auto 6px;
+  height: 45%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.05));
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.deal-ribbon-badge {
+  position: relative;
+  transform: rotate(-6deg) scaleX(1.05);
+  transform-origin: left center;
+  border-radius: 0.6rem;
+  clip-path: polygon(0 0, 94% 0, 100% 50%, 94% 100%, 0 100%, 5% 50%);
+  box-shadow: 0 9px 16px rgba(79, 70, 229, 0.18);
+}
+
+.deal-ribbon-badge::before {
+  content: "";
+  position: absolute;
+  left: 0.65rem;
+  bottom: -0.3rem;
+  width: 1rem;
+  height: 0.5rem;
+  background: linear-gradient(135deg, rgba(55, 48, 163, 0.95), rgba(99, 102, 241, 0.85));
+  border-radius: 0 0 0.35rem 0.1rem;
+  transform: skewX(-20deg);
+  box-shadow: 0 6px 10px rgba(67, 56, 202, 0.2);
+}
+
+.deal-ribbon-badge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0.6rem;
+  background: rgba(0, 0, 0, 0.08);
+  opacity: 0.15;
+  pointer-events: none;
+}
+
 .discount-meter {
   position: relative;
   display: grid;
