@@ -8,7 +8,6 @@ import type { Session, User } from '@supabase/supabase-js';
 import { Layout } from './components/Layout';
 import { DealCard } from './components/DealCard';
 import { ClaimModal } from './components/ClaimModal';
-import { DealCardSkeleton } from './components/DealCardSkeleton';
 import { Deal, Claim, View, UserLocation, CatalogCoupon, AppNotification, UserRole, SubscriptionStatus } from './types';
 import { CATEGORY_OPTIONS, DEFAULT_LOCATION, ONLINE_CATEGORY_OPTIONS } from './constants';
 import { Timer } from './components/Timer';
@@ -32,6 +31,7 @@ import { BusinessPaywall } from './components/BusinessPaywall';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { DealEngagementAction, DealEngagementBar } from './components/DealEngagementBar';
 import { DealArtwork } from './components/DealArtwork';
+import { DealEmptyState } from './components/DealEmptyState';
 import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupabaseUrl, supabase, supabaseConfigIssue, supabaseEdgeClient } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { AppIcon } from './components/AppIcon';
@@ -54,7 +54,7 @@ const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
 const DISABLE_DEAL_EXPIRY = true;
 const SHARED_DEALS_CACHE_TTL_MS = 120_000;
-const PUBLIC_DEALS_FETCH_LIMIT = 160;
+const PUBLIC_DEALS_FETCH_LIMIT = 200;
 const CLOUD_STATE_SYNC_DEBOUNCE_MS = 1_200;
 const MAX_PENDING_DELETE_RETRIES = 3;
 const BULK_RELEASE_MAX_DEALS = 10;
@@ -4371,6 +4371,9 @@ export default function App() {
   const [lastSharedPublishFailure, setLastSharedPublishFailure] = useState<SharedPublishFailure | null>(null);
   const [retryingSharedPublish, setRetryingSharedPublish] = useState(false);
   const [renderAllDeals, setRenderAllDeals] = useState(false);
+  const [onlineDealPage, setOnlineDealPage] = useState(0);
+  const [loadingMoreOnlineDeals, setLoadingMoreOnlineDeals] = useState(false);
+  const onlineDealsSectionRef = useRef<HTMLDivElement | null>(null);
   const [bulkImportJson, setBulkImportJson] = useState('');
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkImportMessage, setBulkImportMessage] = useState('');
@@ -6983,6 +6986,12 @@ const deleteDealFromBackend = async (
       setCurrentView('live-deals');
     }
   }, [isDashboardRoute]);
+
+  useEffect(() => {
+    setOnlineDealPage(0);
+    setLoadingMoreOnlineDeals(false);
+  }, [dropMode, selectedCategory, selectedFeedFilter, selectedOnlineSubcategory, discountFilterEnabled, discountFilterValue]);
+
 
   // Load shared deals from the backend with bundled fallback data
   useEffect(() => {
@@ -9900,7 +9909,7 @@ const deleteDealFromBackend = async (
       return true;
     });
     const isDesktopDealGrid = viewportWidth >= 1024;
-    const initialDealRenderCount = isDesktopDealGrid ? 12 : viewportWidth >= 520 ? 8 : 6;
+    const initialDealRenderCount = 40;
     const cardImageWidth = isDesktopDealGrid ? 640 : viewportWidth >= 520 ? 520 : 420;
     const cardImageSizes = isDesktopDealGrid
       ? '(min-width: 1024px) 320px'
@@ -9912,9 +9921,14 @@ const deleteDealFromBackend = async (
     const sortedOnlineDealsByTab = isDropModeActive
       ? filteredOnlineDealsByTab
       : [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const visibleOnlineDealsByTab = renderAllDeals
-      ? sortedOnlineDealsByTab
-      : sortedOnlineDealsByTab.slice(0, initialDealRenderCount);
+    const onlinePageSize = 40;
+    const realDealsPerPage = onlinePageSize - 1;
+    const onlineDealPages = chunkItems(sortedOnlineDealsByTab, realDealsPerPage);
+    const safeOnlineDealPage = Math.min(onlineDealPage, Math.max(0, onlineDealPages.length - 1));
+    const pageDeals = onlineDealPages[safeOnlineDealPage] ?? [];
+    const visibleOnlineDealsByTab = pageDeals;
+    const onlineGridColumns = viewportWidth >= 1536 ? 5 : viewportWidth >= 1280 ? 4 : viewportWidth >= 1024 ? 3 : 1;
+    const shouldShowLoadMoreCard = sortedOnlineDealsByTab.length > 0;
     const pagedCategoryOnlineDeals = [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
     const categoryOnlinePageSize = isDesktopDealGrid ? Math.max(1, pagedCategoryOnlineDeals.length) : 7;
     const categoryOnlineDealPages = chunkItems(pagedCategoryOnlineDeals, categoryOnlinePageSize);
@@ -10440,13 +10454,20 @@ const deleteDealFromBackend = async (
       );
     };
 
-    const renderOnlineGridFiller = (onClick: () => void) => (
+    const renderOnlineGridFiller = (
+      onClick: () => void,
+      label = 'Load 40 More',
+      state: 'ready' | 'loading' = 'ready',
+    ) => (
       <button
         type="button"
         onClick={onClick}
         aria-label="Load more deals"
-        className={`hidden min-[360px]:block w-full h-full overflow-hidden rounded-[1.3rem] border border-slate-200/70 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(99,102,241,0.14)] ${
-          isMoreDealsAnimating ? 'scale-95 shadow-[0_14px_32px_rgba(99,102,241,0.18)]' : ''
+        disabled={state !== 'ready'}
+        className={`hidden min-[360px]:block w-full h-full overflow-hidden rounded-[1.3rem] border border-slate-200/70 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 ${
+          state === 'ready'
+            ? 'hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(99,102,241,0.14)]'
+            : 'cursor-not-allowed opacity-80'
         }`}
       >
         <div className="flex h-full flex-col">
@@ -10457,37 +10478,31 @@ const deleteDealFromBackend = async (
                   src={brandBoltLogo3d}
                   alt="More deals"
                   className={`h-30 w-30 object-contain transition-all duration-150 opacity-80 ${
-                    isMoreDealsAnimating
-                      ? 'scale-110 brightness-115 drop-shadow-[0_6px_18px_rgba(99,102,241,0.35)]'
-                      : 'active:brightness-115 active:scale-105'
+                    state === 'loading'
+                      ? 'animate-pulse'
+                      : isMoreDealsAnimating
+                        ? 'scale-110 brightness-115 drop-shadow-[0_6px_18px_rgba(99,102,241,0.35)]'
+                        : 'active:brightness-115 active:scale-105'
                   }`}
                 />
             </div>
           </div>
           {/* Content area */}
           <div className="flex flex-1 flex-col items-center justify-center px-3 pb-3 pt-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">More Deals</span>
-            <span className="mt-1 text-[11px] font-medium text-slate-400">Tap to load more</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              {label}
+            </span>
+            <span className="mt-1 text-[11px] font-medium text-slate-400">
+              {state === 'loading' ? 'Loading…' : 'See more drops'}
+            </span>
           </div>
         </div>
       </button>
     );
 
-    const renderDealSkeletons = () => {
-      const skeletonCount = isDesktopDealGrid ? 8 : 6;
-      return (
-        <div className={`grid gap-3 ${isDesktopDealGrid ? 'grid-cols-3' : 'grid-cols-2'} max-[520px]:grid-cols-1`}>
-          {Array.from({ length: skeletonCount }).map((_, index) => (
-            <DealCardSkeleton key={`deal-skeleton-${index}`} />
-          ))}
-        </div>
-      );
-    };
-
     return (
       <div className="space-y-4">
-        {dealsLoading ? renderDealSkeletons() : null}
-
+        {dealsLoading ? null : null}
         {renderDealsErrorBanner()}
 
         {viewportWidth >= 768 ? (
@@ -11244,7 +11259,7 @@ const deleteDealFromBackend = async (
           </div>
         </div>
 
-        <section className="space-y-2.5">
+        <section ref={onlineDealsSectionRef} className="space-y-2.5">
           {(() => {
             const isMobileViewport = viewportWidth < 640;
             const isSubcategoryActive = dropMode === 'local'
@@ -11354,7 +11369,13 @@ const deleteDealFromBackend = async (
             )
           ) : (
             isOnlineCategoryView ? (
-              pagedCategoryOnlineDeals.length > 0 ? (
+              dealsLoading ? (
+                <DealEmptyState
+                  variant="loading"
+                  title="Scanning for new drops…"
+                  subtitle="Checking this category and pulling fresh LiveDrop deals."
+                />
+              ) : pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
                     <div className="grid grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
@@ -11415,35 +11436,52 @@ const deleteDealFromBackend = async (
                   ) : null}
                 </div>
               ) : (
-                <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
-                    <AppIcon name="alert" size={28} />
-                  </div>
-                  <p className="text-slate-500 font-semibold">
-                    {selectedFeedFilter === 'all'
-                      ? 'No online deals in this category right now.'
-                      : `No ${selectedFeedFilter.replace('-', ' ')} online deals right now.`}
-                  </p>
-                  <p className="text-slate-300 text-xs mt-1.5">Try another category or check back in a bit.</p>
-                </div>
+                <DealEmptyState
+                  variant="empty"
+                  title="No drops here yet"
+                  subtitle={
+                    selectedFeedFilter === 'all'
+                      ? 'Try another category or check back soon for fresh LiveDrop deals.'
+                      : `No ${selectedFeedFilter.replace('-', ' ')} drops yet. Try another filter.`
+                  }
+                />
               )
             ) : (
-              sortedOnlineDealsByTab.length > 0 ? (
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                  {visibleOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
+              dealsLoading ? (
+                <DealEmptyState
+                  variant="loading"
+                  title="Pulling live deals…"
+                  subtitle="We’re scanning for the latest LiveDrop drops right now."
+                />
+              ) : sortedOnlineDealsByTab.length > 0 ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    {visibleOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
+                    {shouldShowLoadMoreCard ? renderOnlineGridFiller(
+                      () => {
+                        if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;
+                        setLoadingMoreOnlineDeals(true);
+                        setOnlineDealPage((prev) => (prev + 1) % onlineDealPages.length);
+                        window.setTimeout(() => {
+                          setLoadingMoreOnlineDeals(false);
+                          onlineDealsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }, 250);
+                      },
+                      'Load 40 More',
+                      loadingMoreOnlineDeals ? 'loading' : 'ready',
+                    ) : null}
+                  </div>
                 </div>
               ) : (
-                <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.75rem] bg-slate-50 text-slate-300">
-                    <AppIcon name="alert" size={28} />
-                  </div>
-                  <p className="text-slate-500 font-semibold">
-                    {selectedFeedFilter === 'all'
-                      ? (isDropModeActive ? 'No Drop Mode picks in this category right now.' : 'No online deals in this category right now.')
-                      : `No ${selectedFeedFilter.replace('-', ' ')} ${isDropModeActive ? 'Drop Mode picks' : 'online deals'} right now.`}
-                  </p>
-                  <p className="text-slate-300 text-xs mt-1.5">Try another category or check back in a bit.</p>
-                </div>
+                <DealEmptyState
+                  variant="empty"
+                  title={isDropModeActive ? 'Drop Mode is quiet' : 'No drops here yet'}
+                  subtitle={
+                    selectedFeedFilter === 'all'
+                      ? (isDropModeActive ? 'Drop Mode picks are cooling down. Try another category.' : 'Try another category or check back soon.')
+                      : `No ${selectedFeedFilter.replace('-', ' ')} drops yet. Try another filter.`
+                  }
+                />
               )
             )
           )}
