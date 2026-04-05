@@ -5552,7 +5552,7 @@ export default function App() {
           ? [...PUBLIC_DEALS_FAST_FEED_FIELDS]
           : [...PUBLIC_DEALS_FEED_FIELDS];
       let useStatusFilter = !includeAllStatuses;
-      let useCreatedAtSort = includeAllStatuses;
+      let useCreatedAtSort = true;
       let queryLimit = requestedLimit;
 
       if (!fastFirstPaint) {
@@ -5621,7 +5621,7 @@ export default function App() {
       let attempt = 0;
       let data: unknown[] | null = null;
       let error: unknown = null;
-      const maxAttempts = fastFirstPaint ? 2 : 4;
+      const maxAttempts = fastFirstPaint ? 2 : (includeAllStatuses ? 12 : 6);
 
       while (attempt < maxAttempts) {
         const result = await runSharedDealsQuery({
@@ -7363,37 +7363,41 @@ const deleteDealFromBackend = async (
         applyRemoteDeals(firstPaintDeals, 'first-paint');
         setDealsLoading(false);
 
-        if (firstPaintDeals.length >= PUBLIC_DEALS_FIRST_PAINT_LIMIT) {
-          void (async () => {
+        void (async () => {
+          if (import.meta.env.DEV) {
+            console.info('[LiveDrop] Deals hydrate fetch start', {
+              phase: 'background-full',
+              limit: PUBLIC_DEALS_FETCH_LIMIT,
+            });
+          }
+          const backgroundStart = import.meta.env.DEV ? performance.now() : 0;
+          try {
+            const fullRemoteDeals = await fetchSharedDeals({ force: true, limit: PUBLIC_DEALS_FETCH_LIMIT });
+            if (cancelled) return;
+            const hasMeaningfulDifference =
+              fullRemoteDeals.length !== firstPaintDeals.length
+              || fullRemoteDeals.some((deal, index) => {
+                const firstDeal = firstPaintDeals[index];
+                return !firstDeal || firstDeal.id !== deal.id || firstDeal.createdAt !== deal.createdAt;
+              });
+            if (!hasMeaningfulDifference) return;
+
             if (import.meta.env.DEV) {
-              console.info('[LiveDrop] Deals hydrate fetch start', {
+              console.info('[LiveDrop] Deals hydrate fetch end', {
                 phase: 'background-full',
-                limit: PUBLIC_DEALS_FETCH_LIMIT,
+                rows: fullRemoteDeals.length,
+                fetchMs: Math.round(performance.now() - backgroundStart),
               });
             }
-            const backgroundStart = import.meta.env.DEV ? performance.now() : 0;
-            try {
-              const fullRemoteDeals = await fetchSharedDeals({ force: true, limit: PUBLIC_DEALS_FETCH_LIMIT });
-              if (cancelled) return;
-              if (fullRemoteDeals.length <= firstPaintDeals.length) return;
 
-              if (import.meta.env.DEV) {
-                console.info('[LiveDrop] Deals hydrate fetch end', {
-                  phase: 'background-full',
-                  rows: fullRemoteDeals.length,
-                  fetchMs: Math.round(performance.now() - backgroundStart),
-                });
-              }
-
-              applyRemoteDeals(fullRemoteDeals, 'background-full');
-            } catch (backgroundError) {
-              if (import.meta.env.DEV) {
-                const context = getSupabaseErrorContext(backgroundError);
-                console.warn('[LiveDrop] Background full shared deals hydrate failed', context);
-              }
+            applyRemoteDeals(fullRemoteDeals, 'background-full');
+          } catch (backgroundError) {
+            if (import.meta.env.DEV) {
+              const context = getSupabaseErrorContext(backgroundError);
+              console.warn('[LiveDrop] Background full shared deals hydrate failed', context);
             }
-          })();
-        }
+          }
+        })();
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to load shared deals:', error);
@@ -7402,7 +7406,7 @@ const deleteDealFromBackend = async (
           console.error('[LiveDrop] Shared deals hydrate error context', context);
         }
         applyDealsState(fallbackDeals);
-        setDealsError('Could not load shared deals. Showing fallback drops.');
+        setDealsError(fallbackDeals.length > 0 ? '' : 'Could not load shared deals. Showing fallback drops.');
       } finally {
         if (!cancelled) {
           setDealsLoading(false);
@@ -7971,6 +7975,31 @@ const deleteDealFromBackend = async (
     if (!isAdminRoute || !hasAdminAccess) return;
     void refreshSharedDeals();
   }, [hasAdminAccess, isAdminRoute]);
+
+  useEffect(() => {
+    if (isAdminRoute) return;
+    if (dropMode !== 'online') return;
+    if (!supabase || !hasSupabaseConfig) return;
+
+    let cancelled = false;
+    const runSilentRefresh = async () => {
+      if (cancelled || dealsLoading) return;
+      await refreshSharedDeals({ force: true, silent: true });
+    };
+
+    const warmupId = window.setTimeout(() => {
+      void runSilentRefresh();
+    }, 15_000);
+    const intervalId = window.setInterval(() => {
+      void runSilentRefresh();
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(warmupId);
+      window.clearInterval(intervalId);
+    };
+  }, [dealsLoading, dropMode, hasSupabaseConfig, isAdminRoute]);
 
   useEffect(() => {
     const normalizedEmail = authUser?.email?.toLowerCase();
@@ -9130,8 +9159,9 @@ const deleteDealFromBackend = async (
     }
   };
 
-  const refreshSharedDeals = async (options?: { force?: boolean }) => {
+  const refreshSharedDeals = async (options?: { force?: boolean; silent?: boolean }) => {
     const force = Boolean(options?.force);
+    const silent = Boolean(options?.silent);
     if (!force) {
       const cachedEntry = sharedDealsCacheRef.current;
       if (
@@ -9142,7 +9172,9 @@ const deleteDealFromBackend = async (
         return;
       }
     }
-    setDealsLoading(true);
+    if (!silent) {
+      setDealsLoading(true);
+    }
     try {
       try {
         await syncPendingDeletesWithBackend();
@@ -9161,14 +9193,25 @@ const deleteDealFromBackend = async (
         { includeManagedOnlinePipeline: false },
       );
       applyDealsState(nextDeals);
-      setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty.');
-      pushAdminLog('info', force ? 'Force refreshed shared deals' : 'Refreshed shared deals');
+      if (!silent) {
+        setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty.');
+      } else if (sharedDeals.length > 0) {
+        setDealsError('');
+      }
+      if (!silent) {
+        pushAdminLog('info', force ? 'Force refreshed shared deals' : 'Refreshed shared deals');
+      }
     } catch (error) {
       console.error('[LiveDrop] Shared refresh failed', error);
-      setDealsError('Could not load shared deals. Keeping the last synced view.');
-      pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
+      if (!silent) {
+        const hasExistingDeals = latestDealsRef.current.length > 0;
+        setDealsError(hasExistingDeals ? '' : 'Could not load shared deals. Keeping the last synced view.');
+        pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
+      }
     } finally {
-      setDealsLoading(false);
+      if (!silent) {
+        setDealsLoading(false);
+      }
     }
   };
 
