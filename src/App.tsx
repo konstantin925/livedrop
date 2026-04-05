@@ -4371,6 +4371,7 @@ export default function App() {
   const [lastSharedPublishFailure, setLastSharedPublishFailure] = useState<SharedPublishFailure | null>(null);
   const [retryingSharedPublish, setRetryingSharedPublish] = useState(false);
   const [renderAllDeals, setRenderAllDeals] = useState(false);
+  const hasBootstrappedOnlineFilters = useRef(false);
   const [onlineDealPage, setOnlineDealPage] = useState(0);
   const [loadingMoreOnlineDeals, setLoadingMoreOnlineDeals] = useState(false);
   const onlineDealsSectionRef = useRef<HTMLDivElement | null>(null);
@@ -7103,6 +7104,18 @@ const deleteDealFromBackend = async (
       cancel?.();
     };
   }, [dealsLoading]);
+
+  useEffect(() => {
+    if (dropMode !== 'online') {
+      hasBootstrappedOnlineFilters.current = false;
+      return;
+    }
+    if (dealsLoading || hasBootstrappedOnlineFilters.current) return;
+    setSelectedCategory('All');
+    setSelectedFeedFilter('all');
+    setSelectedOnlineSubcategory('All');
+    hasBootstrappedOnlineFilters.current = true;
+  }, [dropMode, dealsLoading]);
 
   useEffect(() => {
     if (!supabase || !hasSupabaseConfig) return;
