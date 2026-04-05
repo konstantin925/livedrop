@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue, Suspense } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { Layout } from './components/Layout';
 import { DealCard } from './components/DealCard';
 import { ClaimModal } from './components/ClaimModal';
-import { CreateDealForm } from './components/CreateDealForm';
+import { DealCardSkeleton } from './components/DealCardSkeleton';
 import { Deal, Claim, View, UserLocation, CatalogCoupon, AppNotification, UserRole, SubscriptionStatus } from './types';
 import { CATEGORY_OPTIONS, DEFAULT_LOCATION, ONLINE_CATEGORY_OPTIONS } from './constants';
 import { Timer } from './components/Timer';
@@ -39,6 +39,10 @@ import brandBoltLogo from './assets/logo-bolt.svg';
 import brandBoltLogo3d from './assets/bolt-3d.png';
 import brandBoltLogo3dActive from './assets/bolt-3d-active.png';
 
+const CreateDealForm = React.lazy(() =>
+  import('./components/CreateDealForm').then((module) => ({ default: module.CreateDealForm })),
+);
+
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const DEALS_STORAGE_BACKUP_KEY = 'livedrop_deals_backup';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
@@ -50,6 +54,7 @@ const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
 const DISABLE_DEAL_EXPIRY = true;
 const SHARED_DEALS_CACHE_TTL_MS = 120_000;
+const PUBLIC_DEALS_FETCH_LIMIT = 160;
 const CLOUD_STATE_SYNC_DEBOUNCE_MS = 1_200;
 const MAX_PENDING_DELETE_RETRIES = 3;
 const BULK_RELEASE_MAX_DEALS = 10;
@@ -1158,11 +1163,19 @@ const mergeRemoteDealsWithLocalFallback = (
     allowLocalFallbackWhenRemoteEmpty?: boolean;
   },
 ) => {
-  if (remoteDeals.length > 0 || !options?.allowLocalFallbackWhenRemoteEmpty) {
-    return sanitizeDealsCollection(remoteDeals);
+  const sanitizedRemote = sanitizeDealsCollection(remoteDeals);
+  const sanitizedLocal = sanitizeDealsCollection(localDeals);
+
+  if (sanitizedRemote.length === 0 && options?.allowLocalFallbackWhenRemoteEmpty !== false) {
+    return sanitizedLocal;
   }
 
-  return sanitizeDealsCollection(localDeals);
+  const remoteIds = new Set(sanitizedRemote.map((deal) => deal.id));
+  const localDrafts = sanitizedLocal.filter(
+    (deal) => (deal.status ?? 'active') === 'draft' && !remoteIds.has(deal.id),
+  );
+
+  return sanitizeDealsCollection([...sanitizedRemote, ...localDrafts]);
 };
 
 const deriveWebsiteOrigin = (value?: string | null) => {
@@ -1514,6 +1527,8 @@ type PortalAutofillPayload = {
   description: string;
   category: string;
   offerText: string;
+  originalPrice?: string;
+  currentPrice?: string;
 };
 
 type PortalAutofillStatus = {
@@ -1526,6 +1541,48 @@ type PortalAutofillStatus = {
 type PortalAutofillRequest = {
   id: number;
   payload: PortalAutofillPayload;
+};
+
+type AdminPageScanPayload = {
+  title?: string;
+  merchant?: string;
+  currentPrice?: number | null;
+  currentPriceText?: string;
+  originalPrice?: number | null;
+  originalPriceText?: string;
+  discountPercent?: number | null;
+  badgeText?: string;
+  savingsText?: string;
+  imageUrl?: string;
+  productUrl?: string;
+  category?: string;
+  description?: string;
+  source?: string;
+};
+
+type AdminPageScanDebug = {
+  matches: Record<string, string>;
+  missing: string[];
+  warnings: string[];
+};
+
+type AdminScreenshotScanDebug = AdminPageScanDebug & {
+  rawText?: string;
+  priceCandidates?: string[];
+  percentCandidates?: string[];
+};
+
+type ScreenshotStrictJson = {
+  title: string;
+  price: string;
+  originalPrice: string;
+  discountText: string;
+  store: string;
+  category: string;
+  imageUrl: string;
+  dealUrl: string;
+  description: string;
+  useCroppedProductImage?: boolean;
 };
 
 type AdminLogEntry = {
@@ -1701,6 +1758,8 @@ const buildPortalAutofillPayload = (
         summary?: string;
         category?: string;
         offerText?: string;
+        originalPrice?: number | string | null;
+        currentPrice?: number | string | null;
       }
     | null
     | undefined,
@@ -1730,11 +1789,324 @@ const buildPortalAutofillPayload = (
       source?.brand,
     ]),
     offerText: normalizePortalFieldValue(source?.offerText),
+    originalPrice: normalizePortalFieldValue(source?.originalPrice ?? ''),
+    currentPrice: normalizePortalFieldValue(source?.currentPrice ?? ''),
   };
 };
 
 const mapNormalizedDealToPortalFormFields = (normalizedDeal: BulkImportDealInput): PortalAutofillPayload =>
   buildPortalAutofillPayload(normalizedDeal);
+
+const formatAdminScanPrice = (value?: number | null) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  return `$${value.toFixed(2)}`;
+};
+
+const buildOfferTextFromAdminScan = (scan: AdminPageScanPayload) => {
+  if (typeof scan.discountPercent === 'number' && Number.isFinite(scan.discountPercent)) {
+    return `${Math.round(scan.discountPercent)}% OFF`;
+  }
+
+  const originalText = formatAdminScanPrice(scan.originalPrice);
+  const currentText = formatAdminScanPrice(scan.currentPrice);
+  if (originalText && currentText) {
+    return `${originalText} -> ${currentText}`;
+  }
+
+  if (trimDealTextValue(scan.savingsText)) {
+    return trimDealTextValue(scan.savingsText);
+  }
+
+  if (trimDealTextValue(scan.badgeText)) {
+    return trimDealTextValue(scan.badgeText);
+  }
+
+  return '';
+};
+
+const mapAdminPageScanToPortalPayload = (
+  scan: AdminPageScanPayload,
+  affiliateOverride?: string,
+): PortalAutofillPayload => {
+  const normalizedProductUrl = getFirstSafeExternalUrl(scan.productUrl) ?? '';
+  const normalizedAffiliateUrl = normalizeSafeExternalUrl(affiliateOverride) ?? '';
+  const websiteUrl = deriveWebsiteOrigin(normalizedProductUrl) ?? deriveWebsiteOrigin(affiliateOverride) ?? '';
+  const merchantName = trimDealTextValue(scan.merchant)
+    || trimDealTextValue(scan.source)
+    || deriveMerchantFromSourceUrl(normalizedProductUrl)
+    || '';
+  const title = trimDealTextValue(scan.title);
+  const description = trimDealTextValue(scan.description);
+  const category = normalizeCategoryValue(scan.category, 'online', [
+    title,
+    description,
+    merchantName,
+    scan.badgeText,
+    scan.savingsText,
+    scan.source,
+  ]);
+  const offerText = buildOfferTextFromAdminScan(scan);
+  const rawImageUrl = trimDealTextValue(scan.imageUrl);
+  const imageUrl = rawImageUrl.startsWith('data:')
+    ? rawImageUrl
+    : normalizeSafeExternalUrl(rawImageUrl) ?? '';
+
+  return {
+    storeName: normalizePortalFieldValue(merchantName),
+    websiteUrl: normalizePortalFieldValue(websiteUrl),
+    productUrl: normalizePortalFieldValue(normalizedProductUrl),
+    affiliateUrl: normalizePortalFieldValue(normalizedAffiliateUrl),
+    imageUrl: normalizePortalFieldValue(imageUrl),
+    dealTitle: normalizePortalFieldValue(title),
+    description: normalizePortalFieldValue(description),
+    category: normalizeCategoryValue(category, 'online', [title, description, merchantName]),
+    offerText: normalizePortalFieldValue(offerText),
+    originalPrice: normalizePortalFieldValue(formatAdminScanPrice(scan.originalPrice)),
+    currentPrice: normalizePortalFieldValue(formatAdminScanPrice(scan.currentPrice)),
+  };
+};
+
+const SCREENSHOT_PRICE_REGEX = /(?:\$|USD)\s?(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)/gi;
+const SCREENSHOT_PERCENT_REGEX = /(\d{1,2})\s?%/g;
+const SCREENSHOT_URL_REGEX = /https?:\/\/[^\s]+/gi;
+
+const parsePriceFromText = (value: string) => {
+  const normalized = value.replace(/[^\d.,]/g, '');
+  if (!normalized) return null;
+  const cleaned = normalized.replace(/,/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildScreenshotStrictJson = (payload: AdminPageScanPayload): ScreenshotStrictJson => {
+  const discountText = payload.discountPercent
+    ? `${Math.round(payload.discountPercent)}% OFF`
+    : trimDealTextValue(payload.badgeText)
+      || trimDealTextValue(payload.savingsText)
+      || '';
+  const currentPriceText =
+    trimDealTextValue(payload.currentPriceText)
+    || (typeof payload.currentPrice === 'number' && Number.isFinite(payload.currentPrice)
+      ? `$${payload.currentPrice.toFixed(2)}`
+      : '');
+  const originalPriceText =
+    trimDealTextValue(payload.originalPriceText)
+    || (typeof payload.originalPrice === 'number' && Number.isFinite(payload.originalPrice)
+      ? `$${payload.originalPrice.toFixed(2)}`
+      : '');
+
+  return {
+    title: trimDealTextValue(payload.title),
+    price: currentPriceText,
+    originalPrice: originalPriceText,
+    discountText,
+    store:
+      trimDealTextValue(payload.merchant)
+      || trimDealTextValue(payload.source)
+      || deriveMerchantFromSourceUrl(payload.productUrl)
+      || '',
+    category: trimDealTextValue(payload.category),
+    imageUrl: trimDealTextValue(payload.imageUrl),
+    dealUrl: trimDealTextValue(payload.productUrl),
+    description: trimDealTextValue(payload.description),
+    useCroppedProductImage: false,
+  };
+};
+
+const mapScreenshotToBulkImport = (
+  payload: AdminPageScanPayload,
+  strictJson: ScreenshotStrictJson,
+  affiliateUrl?: string,
+): BulkImportDealInput => {
+  const normalizedAffiliate = normalizeSafeExternalUrl(affiliateUrl) ?? '';
+  const normalizedProductUrl = getFirstSafeExternalUrl(strictJson.dealUrl, payload.productUrl) ?? '';
+  const websiteUrl = deriveWebsiteOrigin(normalizedProductUrl) ?? deriveWebsiteOrigin(affiliateUrl) ?? '';
+  const merchantName =
+    strictJson.store
+    || trimDealTextValue(payload.merchant)
+    || trimDealTextValue(payload.source)
+    || deriveMerchantFromSourceUrl(normalizedProductUrl)
+    || DEAL_BUSINESS_FALLBACK;
+  const title = strictJson.title || DEAL_TITLE_FALLBACK;
+  const description = strictJson.description || payload.description || DEAL_DESCRIPTION_FALLBACK;
+  const category = normalizeCategoryValue(strictJson.category, 'online', [title, description, merchantName]);
+  const offerText = strictJson.discountText || buildOfferTextFromAdminScan(payload) || DEAL_OFFER_FALLBACK;
+  const currentPrice = parsePriceFromText(strictJson.price) ?? payload.currentPrice ?? null;
+  const originalPrice = parsePriceFromText(strictJson.originalPrice) ?? payload.originalPrice ?? null;
+
+  return {
+    businessName: merchantName,
+    title,
+    description,
+    category,
+    offerText,
+    originalPrice: originalPrice ?? undefined,
+    currentPrice: currentPrice ?? undefined,
+    discountPercent: payload.discountPercent ?? undefined,
+    affiliateUrl: normalizedAffiliate || undefined,
+    productUrl: normalizedProductUrl || undefined,
+    websiteUrl: websiteUrl || undefined,
+    sourceProductUrl: normalizedProductUrl || undefined,
+    sourceType: normalizedProductUrl ? 'url' : undefined,
+    imageUrl: strictJson.imageUrl || payload.imageUrl,
+    merchant: merchantName,
+    importedAt: new Date().toISOString(),
+    isOnline: true,
+  };
+};
+
+const extractScreenshotDealData = (
+  rawText: string,
+  screenshotUrl: string,
+  productUrlInput?: string,
+): { payload: AdminPageScanPayload; debug: AdminScreenshotScanDebug } => {
+  const normalizedText = rawText.replace(/\r/g, '\n').trim();
+  const lines = normalizedText
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const matches: Record<string, string> = {};
+  const warnings: string[] = [];
+
+  const candidateUrl = normalizeSafeExternalUrl(productUrlInput)
+    ?? normalizeSafeExternalUrl(normalizedText.match(SCREENSHOT_URL_REGEX)?.[0] ?? '');
+  if (candidateUrl) {
+    matches.productUrl = candidateUrl;
+  }
+
+  const priceCandidates: Array<{ value: number; text: string; line: string; originalHint: boolean; index: number }> = [];
+  lines.forEach((line, lineIndex) => {
+    const linePriceRegex = new RegExp(SCREENSHOT_PRICE_REGEX.source, SCREENSHOT_PRICE_REGEX.flags);
+    const priceMatches = Array.from(line.matchAll(linePriceRegex));
+    const originalHint = /(list|was|reg(?:ular)?|original|msrp|retail|compare)/i.test(line);
+    priceMatches.forEach((match) => {
+      const value = Number(match[1].replace(/[,\s]/g, ''));
+      if (Number.isFinite(value)) {
+        priceCandidates.push({
+          value,
+          text: match[0],
+          line,
+          originalHint,
+          index: lineIndex,
+        });
+      }
+    });
+  });
+
+  const percentRegex = new RegExp(SCREENSHOT_PERCENT_REGEX.source, SCREENSHOT_PERCENT_REGEX.flags);
+  const percentCandidates = Array.from(normalizedText.matchAll(percentRegex))
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0 && value <= 95);
+
+  const currentPriceCandidates = priceCandidates.filter((candidate) => !candidate.originalHint).map((candidate) => candidate.value);
+  const originalPriceCandidates = priceCandidates.filter((candidate) => candidate.originalHint).map((candidate) => candidate.value);
+
+  const currentPrice =
+    currentPriceCandidates.length > 0
+      ? Math.min(...currentPriceCandidates)
+      : priceCandidates.length > 0
+        ? Math.min(...priceCandidates.map((candidate) => candidate.value))
+        : null;
+  const originalPrice =
+    originalPriceCandidates.length > 0
+      ? Math.max(...originalPriceCandidates)
+      : priceCandidates.length > 1
+        ? Math.max(...priceCandidates.map((candidate) => candidate.value))
+        : null;
+
+  const resolvedCurrentPrice =
+    originalPrice !== null && currentPrice !== null && originalPrice < currentPrice ? originalPrice : currentPrice;
+  const resolvedOriginalPrice =
+    originalPrice !== null && currentPrice !== null && originalPrice < currentPrice ? currentPrice : originalPrice;
+
+  if (resolvedCurrentPrice !== null) {
+    matches.currentPrice = `$${resolvedCurrentPrice.toFixed(2)}`;
+  }
+  if (resolvedOriginalPrice !== null) {
+    matches.originalPrice = `$${resolvedOriginalPrice.toFixed(2)}`;
+  }
+
+  const discountPercent = percentCandidates.length ? Math.max(...percentCandidates) : null;
+  if (discountPercent !== null) {
+    matches.discountPercent = `${discountPercent}%`;
+  }
+
+  const badgeLine = lines.find((line) => /(deal|sale|flash|limited|clearance|offer)/i.test(line));
+  if (badgeLine) {
+    matches.badgeText = badgeLine;
+  }
+
+  const savingsLine = lines.find((line) => /(coupon|save|off|promo)/i.test(line));
+  if (savingsLine) {
+    matches.savingsText = savingsLine;
+  }
+
+  const priceLineIndex = priceCandidates.length ? Math.min(...priceCandidates.map((candidate) => candidate.index)) : -1;
+  const titleWindow = priceLineIndex > 0 ? lines.slice(Math.max(0, priceLineIndex - 3), priceLineIndex + 1) : lines;
+  const titleLine =
+    titleWindow.find((line) => line.length > 10 && line.length < 120 && !/(\$|%|coupon|save|off)/i.test(line))
+    ?? lines.find((line) => line.length > 10 && line.length < 160);
+  if (titleLine) {
+    matches.title = titleLine;
+  }
+
+  const descriptionLine = titleLine
+    ? lines[lines.indexOf(titleLine) + 1]
+    : lines.find((line) => line.length > 30 && !/(\$|%)/.test(line));
+  if (descriptionLine) {
+    matches.description = descriptionLine;
+  }
+
+  const merchantLine = lines.find((line) => /(sold by|merchant|store|brand|seller|by\s)/i.test(line));
+  const merchantValue = merchantLine?.replace(/^(sold by|merchant|store|brand|seller|by)\s*[:\-]?\s*/i, '').trim();
+  if (merchantValue) {
+    matches.merchant = merchantValue;
+  }
+
+  const categoryLine = lines.find((line) => /category|department|in\s>/.test(line) || line.includes('>'));
+  if (categoryLine) {
+    matches.category = categoryLine.replace(/.*?(category|department)\s*[:\-]?\s*/i, '').trim();
+  }
+
+  const payload: AdminPageScanPayload = {
+    title: matches.title,
+    merchant: matches.merchant,
+    currentPrice: resolvedCurrentPrice,
+    currentPriceText: resolvedCurrentPrice !== null ? `$${resolvedCurrentPrice.toFixed(2)}` : undefined,
+    originalPrice: resolvedOriginalPrice,
+    originalPriceText: resolvedOriginalPrice !== null ? `$${resolvedOriginalPrice.toFixed(2)}` : undefined,
+    discountPercent,
+    badgeText: matches.badgeText,
+    savingsText: matches.savingsText,
+    imageUrl: screenshotUrl,
+    productUrl: candidateUrl ?? undefined,
+    category: matches.category,
+    description: matches.description,
+    source: matches.merchant ?? (candidateUrl ? deriveMerchantFromSourceUrl(candidateUrl) : undefined),
+  };
+
+  const debug: AdminScreenshotScanDebug = {
+    matches,
+    missing: [],
+    warnings,
+    rawText: normalizedText,
+    priceCandidates: priceCandidates.map((candidate) => `${candidate.text} (${candidate.value})`),
+    percentCandidates: percentCandidates.map((value) => `${value}%`),
+  };
+
+  const requiredKeys: Array<keyof AdminPageScanPayload> = ['title', 'merchant', 'currentPrice', 'imageUrl', 'productUrl'];
+  requiredKeys.forEach((key) => {
+    if (!payload[key]) {
+      debug.missing.push(key);
+    }
+  });
+
+  if (!payload.title) warnings.push('No obvious product title detected from OCR.');
+  if (!payload.currentPrice && !payload.originalPrice) warnings.push('No prices detected from OCR.');
+
+  return { payload, debug };
+};
 
 const titleCaseFromSlug = (value: string) =>
   value
@@ -3823,6 +4195,29 @@ export default function App() {
     mappedPayload: PortalAutofillPayload;
   } | null>(null);
   const [portalAutofillRequest, setPortalAutofillRequest] = useState<PortalAutofillRequest | null>(null);
+  const [pageScanNonce, setPageScanNonce] = useState('');
+  const [pageScanListening, setPageScanListening] = useState(false);
+  const [pageScanStatus, setPageScanStatus] = useState<'idle' | 'listening' | 'received' | 'error'>('idle');
+  const [pageScanMessage, setPageScanMessage] = useState('');
+  const [pageScanError, setPageScanError] = useState('');
+  const [pageScanProductUrl, setPageScanProductUrl] = useState('');
+  const [pageScanAffiliateUrl, setPageScanAffiliateUrl] = useState('');
+  const [pageScanResult, setPageScanResult] = useState<AdminPageScanPayload | null>(null);
+  const [pageScanDebug, setPageScanDebug] = useState<AdminPageScanDebug | null>(null);
+  const [showPageScanDebug, setShowPageScanDebug] = useState(false);
+  const [screenshotScanImage, setScreenshotScanImage] = useState('');
+  const [screenshotScanFile, setScreenshotScanFile] = useState<File | null>(null);
+  const [screenshotScanProductUrl, setScreenshotScanProductUrl] = useState('');
+  const [screenshotScanAffiliateUrl, setScreenshotScanAffiliateUrl] = useState('');
+  const [screenshotTargetIndex, setScreenshotTargetIndex] = useState(0);
+  const [screenshotScanStatus, setScreenshotScanStatus] = useState<'idle' | 'loading' | 'scanning' | 'received' | 'error'>('idle');
+  const [screenshotScanProgress, setScreenshotScanProgress] = useState(0);
+  const [screenshotScanMessage, setScreenshotScanMessage] = useState('');
+  const [screenshotScanError, setScreenshotScanError] = useState('');
+  const [screenshotScanResult, setScreenshotScanResult] = useState<AdminPageScanPayload | null>(null);
+  const [screenshotStrictJson, setScreenshotStrictJson] = useState<ScreenshotStrictJson | null>(null);
+  const [screenshotScanDebug, setScreenshotScanDebug] = useState<AdminScreenshotScanDebug | null>(null);
+  const [showScreenshotScanDebug, setShowScreenshotScanDebug] = useState(false);
   const [portalAutofillStatus, setPortalAutofillStatus] = useState<PortalAutofillStatus>({
     state: 'idle',
     attempted: false,
@@ -3975,6 +4370,7 @@ export default function App() {
   const [dealsError, setDealsError] = useState('');
   const [lastSharedPublishFailure, setLastSharedPublishFailure] = useState<SharedPublishFailure | null>(null);
   const [retryingSharedPublish, setRetryingSharedPublish] = useState(false);
+  const [renderAllDeals, setRenderAllDeals] = useState(false);
   const [bulkImportJson, setBulkImportJson] = useState('');
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkImportMessage, setBulkImportMessage] = useState('');
@@ -4344,6 +4740,227 @@ export default function App() {
         ...prev,
       ].slice(0, 20);
     });
+  };
+
+  const createPageScanNonce = () => {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  };
+
+  const buildPageScanBookmarklet = (nonce: string) => {
+    if (typeof window === 'undefined') return '';
+    const scriptUrl = `${window.location.origin}/admin-extractor.js#${encodeURIComponent(nonce)}`;
+    return `javascript:(function(){var s=document.createElement('script');s.src='${scriptUrl}';document.documentElement.appendChild(s);})();`;
+  };
+
+  const handleCopyPageScanBookmarklet = async () => {
+    setPageScanError('');
+    const nonce = createPageScanNonce();
+    setPageScanNonce(nonce);
+    setPageScanListening(true);
+    setPageScanStatus('listening');
+    const bookmarklet = buildPageScanBookmarklet(nonce);
+    const copyResult = await copyTextToClipboard(bookmarklet);
+    if (!copyResult.success) {
+      setPageScanStatus('error');
+      setPageScanError(copyResult.message || 'Unable to copy the LiveDrop scanner bookmarklet.');
+      return;
+    }
+    setPageScanMessage('Scanner bookmarklet copied. Run it on the product page to send results back.');
+  };
+
+  const handleOpenPageScanUrl = () => {
+    setPageScanError('');
+    const normalizedUrl = normalizeSafeExternalUrl(pageScanProductUrl);
+    if (!normalizedUrl) {
+      setPageScanStatus('error');
+      setPageScanError('Paste a valid product page URL before opening a scan window.');
+      return;
+    }
+    window.open(normalizedUrl, 'livedrop_product_scan');
+    setPageScanMessage('Product page opened. Run the LiveDrop scanner bookmarklet on that page.');
+  };
+
+  const IMAGE_EXTRACTOR_ENDPOINT =
+    import.meta.env.VITE_IMAGE_EXTRACTOR_URL ?? '/api/admin/image-extract';
+
+  const normalizeScreenshotJson = (data: Partial<ScreenshotStrictJson> | null): ScreenshotStrictJson => ({
+    title: trimDealTextValue(data?.title),
+    price: trimDealTextValue(data?.price),
+    originalPrice: trimDealTextValue(data?.originalPrice),
+    discountText: trimDealTextValue(data?.discountText),
+    store: trimDealTextValue(data?.store),
+    category: trimDealTextValue(data?.category),
+    imageUrl: trimDealTextValue(data?.imageUrl),
+    dealUrl: trimDealTextValue(data?.dealUrl),
+    description: trimDealTextValue(data?.description),
+    useCroppedProductImage: Boolean(data?.useCroppedProductImage),
+  });
+
+  const mapScreenshotJsonToPayload = (
+    json: ScreenshotStrictJson,
+    previewImage: string,
+    productUrlOverride?: string,
+  ): AdminPageScanPayload => {
+    const currentPriceValue = parsePriceFromText(json.price);
+    const originalPriceValue = parsePriceFromText(json.originalPrice);
+    const discountPercent = (() => {
+      const match = json.discountText.match(/(\d{1,2})\s?%/);
+      if (match) {
+        const value = Number(match[1]);
+        return Number.isFinite(value) ? value : null;
+      }
+      return null;
+    })();
+    const normalizedDealUrl = getFirstSafeExternalUrl(json.dealUrl, productUrlOverride) ?? '';
+
+    return {
+      title: json.title || undefined,
+      merchant: json.store || undefined,
+      currentPrice: currentPriceValue,
+      currentPriceText: json.price || undefined,
+      originalPrice: originalPriceValue,
+      originalPriceText: json.originalPrice || undefined,
+      discountPercent,
+      badgeText: json.discountText || undefined,
+      savingsText: json.discountText || undefined,
+      imageUrl: json.imageUrl || previewImage || undefined,
+      productUrl: normalizedDealUrl || undefined,
+      category: json.category || undefined,
+      description: json.description || undefined,
+      source: json.store || deriveMerchantFromSourceUrl(normalizedDealUrl),
+    };
+  };
+
+  const handleScreenshotUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setScreenshotScanImage('');
+      setScreenshotScanFile(null);
+      return;
+    }
+
+    setScreenshotScanFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      setScreenshotScanImage(result);
+    };
+    reader.readAsDataURL(file);
+
+    setScreenshotScanError('');
+    setScreenshotScanMessage('');
+    setScreenshotScanStatus('idle');
+    setScreenshotScanProgress(0);
+    setScreenshotScanResult(null);
+    setScreenshotStrictJson(null);
+    setScreenshotScanDebug(null);
+  };
+
+  const handleScreenshotExtract = async () => {
+    setScreenshotScanError('');
+    setScreenshotScanMessage('');
+
+    if (!screenshotScanFile) {
+      setScreenshotScanStatus('error');
+      setScreenshotScanError('Upload a screenshot before running the extractor.');
+      return;
+    }
+
+    setScreenshotScanStatus('loading');
+    try {
+      setScreenshotScanStatus('scanning');
+      setScreenshotScanProgress(15);
+
+      const formData = new FormData();
+      formData.append('image', screenshotScanFile);
+      if (screenshotScanProductUrl) {
+        formData.append('productUrl', screenshotScanProductUrl);
+      }
+      if (screenshotScanAffiliateUrl) {
+        formData.append('affiliateUrl', screenshotScanAffiliateUrl);
+      }
+
+      const response = await fetch(IMAGE_EXTRACTOR_ENDPOINT, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Image extractor failed to respond. Check the admin OCR server.');
+      }
+
+      const jsonResponse = await response.json();
+      const normalizedJson = normalizeScreenshotJson(jsonResponse as Partial<ScreenshotStrictJson>);
+      const payload = mapScreenshotJsonToPayload(normalizedJson, screenshotScanImage, screenshotScanProductUrl);
+
+      setScreenshotScanResult(payload);
+      setScreenshotStrictJson(normalizedJson);
+      setScreenshotScanDebug({
+        matches: normalizedJson,
+        missing: Object.entries(normalizedJson)
+          .filter(([key, value]) => key !== 'useCroppedProductImage' && !value)
+          .map(([key]) => key),
+        warnings: [],
+      });
+      setScreenshotScanStatus('received');
+      setScreenshotScanProgress(100);
+      setScreenshotScanMessage('Screenshot extracted. Preview the JSON and apply it to a deal maker.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Screenshot extraction failed.';
+      setScreenshotScanStatus('error');
+      setScreenshotScanError(message);
+    }
+  };
+
+  const handleApplyScreenshotToBulk = () => {
+    if (!screenshotScanResult || !screenshotStrictJson) {
+      setScreenshotScanError('Run extraction before applying data to a deal maker.');
+      return;
+    }
+
+    const bulkInput = mapScreenshotToBulkImport(
+      screenshotScanResult,
+      screenshotStrictJson,
+      screenshotScanAffiliateUrl,
+    );
+    const nextDraft = createDraftFromBulkImport(bulkInput, screenshotTargetIndex);
+
+    setBulkReleaseInitialData((prev) => {
+      const next = [...prev];
+      next[screenshotTargetIndex] = nextDraft;
+      return next;
+    });
+    setBulkReleaseDrafts((prev) => {
+      const next = [...prev];
+      next[screenshotTargetIndex] = nextDraft;
+      return next;
+    });
+    setBulkReleaseValidation((prev) => {
+      const next = [...prev];
+      next[screenshotTargetIndex] = '';
+      return next;
+    });
+    setBulkReleaseMessage(`Applied screenshot data to Deal ${screenshotTargetIndex + 1}.`);
+    setBulkReleaseError('');
+    bumpBulkFormKey(screenshotTargetIndex);
+    setBulkReleaseOpenSections((prev) => {
+      const next = new Set(prev);
+      next.add(screenshotTargetIndex);
+      return next;
+    });
+  };
+
+  const handleClearScreenshotExtraction = () => {
+    setScreenshotScanResult(null);
+    setScreenshotStrictJson(null);
+    setScreenshotScanDebug(null);
+    setScreenshotScanMessage('');
+    setScreenshotScanError('');
+    setScreenshotScanStatus('idle');
+    setScreenshotScanProgress(0);
   };
 
   const getDealsTableClient = () => {
@@ -4781,6 +5398,9 @@ export default function App() {
         }
         if (queryOptions.useCreatedAtSort) {
           query = query.order('created_at', { ascending: false });
+        }
+        if (!includeAllStatuses) {
+          query = query.limit(PUBLIC_DEALS_FETCH_LIMIT);
         }
         return query;
       };
@@ -6416,7 +7036,9 @@ const deleteDealFromBackend = async (
         const remoteDeals = await fetchSharedDeals();
         if (cancelled) return;
 
-        const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(remoteDeals, savedDeals);
+        const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(remoteDeals, savedDeals, {
+          allowLocalFallbackWhenRemoteEmpty: true,
+        });
         const nextDeals = composeDealsWithLocationContext(
           mergedHydratedDeals,
           latestUserLocationRef.current,
@@ -6443,6 +7065,35 @@ const deleteDealFromBackend = async (
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (dealsLoading) {
+      setRenderAllDeals(false);
+      return;
+    }
+    let cancelled = false;
+    const scheduleIdle = (callback: () => void) => {
+      const requestIdle = typeof window !== 'undefined' ? (window as any).requestIdleCallback : undefined;
+      const cancelIdle = typeof window !== 'undefined' ? (window as any).cancelIdleCallback : undefined;
+      if (requestIdle) {
+        const id = requestIdle(callback, { timeout: 900 });
+        return () => cancelIdle?.(id);
+      }
+      const id = window.setTimeout(callback, 420);
+      return () => window.clearTimeout(id);
+    };
+
+    const cancel = scheduleIdle(() => {
+      if (!cancelled) {
+        setRenderAllDeals(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancel?.();
+    };
+  }, [dealsLoading]);
 
   useEffect(() => {
     if (!supabase || !hasSupabaseConfig) return;
@@ -7959,6 +8610,68 @@ const deleteDealFromBackend = async (
     await onContinue();
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !hasAdminAccess) return;
+
+    const handlePageScanMessage = (event: MessageEvent) => {
+      const data = event.data as {
+        type?: string;
+        source?: string;
+        nonce?: string;
+        payload?: AdminPageScanPayload;
+        debug?: AdminPageScanDebug;
+      };
+
+      if (!pageScanListening || data?.type !== 'livedrop-admin-extract') {
+        return;
+      }
+      if (data.source && data.source !== 'livedrop-admin-extractor') {
+        return;
+      }
+      if (pageScanNonce && data.nonce && data.nonce !== pageScanNonce) {
+        return;
+      }
+
+      const payload = data.payload ?? {};
+      setPageScanResult(payload);
+      setPageScanDebug(data.debug ?? null);
+      setPageScanStatus('received');
+      setPageScanListening(false);
+      setPageScanMessage('Scan received. Deal form populated from the live page.');
+
+      const mappedPayload = mapAdminPageScanToPortalPayload(payload, pageScanAffiliateUrl);
+      setPortalAutofillRequest({
+        id: Date.now(),
+        payload: mappedPayload,
+      });
+
+      void runWithUnsavedCreateGuard(() => {
+        handleOpenCreateDeal();
+      });
+
+      pushAdminLog(
+        'info',
+        'Live page scan received',
+        formatAdminLogDetail({
+          payload,
+          debug: data.debug,
+        }),
+      );
+    };
+
+    window.addEventListener('message', handlePageScanMessage);
+    return () => {
+      window.removeEventListener('message', handlePageScanMessage);
+    };
+  }, [
+    hasAdminAccess,
+    pageScanAffiliateUrl,
+    pageScanListening,
+    pageScanNonce,
+    handleOpenCreateDeal,
+    runWithUnsavedCreateGuard,
+  ]);
+
   const handleBackFromAdminEditor = async () => {
     await runWithUnsavedCreateGuard(async () => {
       if (isAdminRoute) {
@@ -8037,7 +8750,9 @@ const deleteDealFromBackend = async (
       }
       const sharedDeals = await fetchSharedDeals({ force });
       const storedDeals = readStoredDeals();
-      const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(sharedDeals, storedDeals);
+        const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(sharedDeals, storedDeals, {
+          allowLocalFallbackWhenRemoteEmpty: true,
+        });
       const nextDeals = composeDealsWithLocationContext(
         mergedHydratedDeals,
         latestUserLocationRef.current,
@@ -8264,14 +8979,14 @@ const deleteDealFromBackend = async (
 
     const canRetryPublish = Boolean(lastSharedPublishFailure) && (hasAdminAccess || currentView === 'business-portal' || isAdminRoute);
 
-      return (
-        <div className="rounded-[1.45rem] border border-amber-100 bg-amber-50 px-4 py-3 shadow-sm shadow-amber-100/40">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold leading-6 text-amber-700">{dealsError}</p>
-              {lastSharedPublishFailure ? (
-                <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
-                  Last backend error: {lastSharedPublishFailure.reason}
+    return (
+      <div className="rounded-[1.45rem] border border-amber-100 bg-amber-50 px-4 py-3 shadow-sm shadow-amber-100/40">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-6 text-amber-700">{dealsError}</p>
+            {lastSharedPublishFailure ? (
+              <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
+                Last backend error: {lastSharedPublishFailure.reason}
               </p>
             ) : null}
           </div>
@@ -8752,6 +9467,8 @@ const deleteDealFromBackend = async (
               alt={displayTitle}
               fit="contain"
               iconSize={40}
+              preferredWidth={720}
+              sizes="(min-width: 768px) 420px, 90vw"
               imageClassName="p-2.5"
             />
             <button
@@ -8856,7 +9573,7 @@ const deleteDealFromBackend = async (
             role="dialog"
             aria-modal="true"
             aria-labelledby="deal-preview-title"
-            className="w-full overflow-hidden rounded-t-[1.5rem] bg-white shadow-[0_30px_70px_rgba(15,23,42,0.24)] max-h-[78vh] overflow-y-auto"
+            className="w-full max-h-[78vh] overflow-y-auto overflow-hidden rounded-t-[1.5rem] bg-white shadow-[0_30px_70px_rgba(15,23,42,0.24)]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
@@ -8865,81 +9582,83 @@ const deleteDealFromBackend = async (
                 alt={displayTitle}
                 fit="contain"
                 iconSize={44}
+                preferredWidth={520}
+                sizes="90vw"
                 imageClassName="p-2.5"
               />
-            <div className="pointer-events-none absolute left-3 top-3">
-              <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
-                {discountLabel}
-              </span>
-            </div>
-          </div>
-          <div className="p-4 sm:p-5">
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">{displayBusinessName}</p>
-            <h3 id="deal-preview-title" className="mt-1 text-[1.05rem] font-extrabold text-slate-900">
-              {displayTitle}
-            </h3>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {originalPriceLabel ? (
-                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 line-through">
-                  {originalPriceLabel}
+              <div className="pointer-events-none absolute left-3 top-3">
+                <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-600 shadow-sm">
+                  {discountLabel}
                 </span>
-              ) : null}
-              {currentPriceLabel ? (
-                <span className="text-[1.1rem] font-black text-slate-900">{currentPriceLabel}</span>
-              ) : null}
-              {!currentPriceLabel && !originalPriceLabel ? (
-                <span className="text-sm font-semibold text-indigo-600">{previewOfferText}</span>
-              ) : null}
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
-                {discountLabel}
-              </span>
-            </div>
-            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{displayDescription}</p>
-            {detailItems.length > 0 ? (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {detailItems.map((item) => (
-                  <div key={item.label} className="rounded-[0.85rem] border border-slate-100 bg-slate-50 px-3 py-2">
-                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
-                    <p className="mt-1 text-[11px] font-semibold text-slate-700">{item.value}</p>
-                  </div>
-                ))}
               </div>
-            ) : null}
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <div
-                className="w-full sm:flex-1"
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-              >
-                <DealEngagementBar
-                  deal={previewDeal}
-                  pendingAction={dealEngagementPending[previewDeal.id] ?? null}
-                  onLike={handleLikeDeal}
-                  onDislike={handleDislikeDeal}
-                  onShare={handleShareDeal}
-                />
+            </div>
+            <div className="p-4 sm:p-5">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">{displayBusinessName}</p>
+              <h3 id="deal-preview-title" className="mt-1 text-[1.05rem] font-extrabold text-slate-900">
+                {displayTitle}
+              </h3>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {originalPriceLabel ? (
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 line-through">
+                    {originalPriceLabel}
+                  </span>
+                ) : null}
+                {currentPriceLabel ? (
+                  <span className="text-[1.1rem] font-black text-slate-900">{currentPriceLabel}</span>
+                ) : null}
+                {!currentPriceLabel && !originalPriceLabel ? (
+                  <span className="text-sm font-semibold text-indigo-600">{previewOfferText}</span>
+                ) : null}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setPreviewDealId(null);
-                  openExternalDealLink(previewDeal);
-                }}
-                disabled={!primaryActionUrl}
-                className={`inline-flex h-12 w-full items-center justify-center rounded-[1rem] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
-                  primaryActionUrl
-                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
-                    : 'cursor-not-allowed bg-slate-300 shadow-none'
-                }`}
-              >
-                Get Deal
-              </button>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                  {discountLabel}
+                </span>
+              </div>
+              <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{displayDescription}</p>
+              {detailItems.length > 0 ? (
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {detailItems.map((item) => (
+                    <div key={item.label} className="rounded-[0.85rem] border border-slate-100 bg-slate-50 px-3 py-2">
+                      <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-700">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <div
+                  className="w-full sm:flex-1"
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  <DealEngagementBar
+                    deal={previewDeal}
+                    pendingAction={dealEngagementPending[previewDeal.id] ?? null}
+                    onLike={handleLikeDeal}
+                    onDislike={handleDislikeDeal}
+                    onShare={handleShareDeal}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewDealId(null);
+                    openExternalDealLink(previewDeal);
+                  }}
+                  disabled={!primaryActionUrl}
+                  className={`inline-flex h-12 w-full items-center justify-center rounded-[1rem] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                    primaryActionUrl
+                      ? 'bg-emerald-500 shadow-emerald-100/80 hover:-translate-y-0.5 hover:bg-emerald-600 hover:shadow-xl hover:shadow-emerald-200/70 active:translate-y-0 active:scale-[0.985] livedrop-deal-gloss'
+                      : 'cursor-not-allowed bg-slate-300 shadow-none'
+                  }`}
+                >
+                  Get Deal
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
       </div>
     );
   };
@@ -8991,21 +9710,38 @@ const deleteDealFromBackend = async (
     setSelectedFeedFilter('all');
   };
 
-  const renderLiveDeals = () => {
-    const now = Date.now();
-    const isOnlineMode = dropMode === 'online';
-    const isDropModeActive = isOnlineMode && dropModeEnabled;
-    const localDeals = deals.filter(
+  const deferredDeals = useDeferredValue(deals);
+  const deferredSelectedCategory = useDeferredValue(selectedCategory);
+  const deferredSelectedLocalSubcategory = useDeferredValue(selectedLocalSubcategory);
+  const deferredSelectedOnlineSubcategory = useDeferredValue(selectedOnlineSubcategory);
+  const deferredSelectedFeedFilter = useDeferredValue(selectedFeedFilter);
+  const deferredDiscountFilterValue = useDeferredValue(discountFilterValue);
+  const deferredDiscountFilterEnabled = useDeferredValue(discountFilterEnabled);
+  const deferredDesktopSearchQuery = useDeferredValue(desktopSearchQuery);
+
+  const memoizedLocalDeals = useMemo(() => {
+    const now = liveClockNow;
+    return deferredDeals.filter(
       (deal) => deal.businessType !== 'online' && (deal.status ?? 'active') !== 'draft' && !isExpiredDeal(deal, now),
     );
-    const onlineDeals = deals.filter(
+  }, [deferredDeals, liveClockNow]);
+
+  const memoizedOnlineDeals = useMemo(() => {
+    const now = liveClockNow;
+    return deferredDeals.filter(
       (deal) => deal.businessType === 'online' && (deal.status ?? 'active') !== 'draft' && !isExpiredDeal(deal, now),
     );
-    const onlineDealsWithSubcategory = onlineDeals.map((deal) => ({
+  }, [deferredDeals, liveClockNow]);
+
+  const memoizedOnlineDealsWithSubcategory = useMemo(() => (
+    memoizedOnlineDeals.map((deal) => ({
       ...deal,
       onlineSubcategory: getOnlineDealSubcategory(deal),
-    }));
-    const dealsWithDistance = localDeals.map(deal => {
+    }))
+  ), [memoizedOnlineDeals]);
+
+  const memoizedDealsWithDistance = useMemo(() => (
+    memoizedLocalDeals.map((deal) => {
       const dist = getEffectiveLocalDealDistance(userLocation, deal, hasPreciseUserLocation);
       return {
         ...deal,
@@ -9013,22 +9749,30 @@ const deleteDealFromBackend = async (
         computedDistanceLabel: formatDistance(dist),
         localSubcategory: getLocalDealSubcategory(deal),
       };
-    });
-    const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? []);
+    })
+  ), [memoizedLocalDeals, userLocation, hasPreciseUserLocation]);
+
+  const renderLiveDeals = () => {
+    const now = Date.now();
+    const isOnlineMode = dropMode === 'online';
+    const isDropModeActive = isOnlineMode && dropModeEnabled;
+    const onlineDealsWithSubcategory = memoizedOnlineDealsWithSubcategory;
+    const dealsWithDistance = memoizedDealsWithDistance;
+    const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[deferredSelectedCategory] ?? []);
     const shouldShowLocalSubcategories =
-      dropMode === 'local' && selectedCategory !== 'All' && localSubcategoryOptions.length > 0;
+      dropMode === 'local' && deferredSelectedCategory !== 'All' && localSubcategoryOptions.length > 0;
     const shouldShowOnlineSubcategories =
-      dropMode === 'online' && (selectedCategory === 'Tech' || selectedCategory === 'Home' || selectedCategory === 'Fashion');
+      dropMode === 'online' && (deferredSelectedCategory === 'Tech' || deferredSelectedCategory === 'Home' || deferredSelectedCategory === 'Fashion');
     const onlineSubcategoryOptions = shouldShowOnlineSubcategories
       ? (
-        selectedCategory === 'Tech'
+        deferredSelectedCategory === 'Tech'
           ? ONLINE_TECH_SUBCATEGORY_OPTIONS
-          : selectedCategory === 'Home'
+          : deferredSelectedCategory === 'Home'
             ? ONLINE_HOME_SUBCATEGORY_OPTIONS
             : ONLINE_FASHION_SUBCATEGORY_OPTIONS
       ).filter((subcategory) => subcategory !== 'All')
       : [];
-    const normalizedDesktopSearch = desktopSearchQuery.trim().toLowerCase();
+    const normalizedDesktopSearch = deferredDesktopSearchQuery.trim().toLowerCase();
     const matchesDesktopSearch = (deal: Deal) => {
       if (!normalizedDesktopSearch) return true;
       return [
@@ -9048,11 +9792,11 @@ const deleteDealFromBackend = async (
       .filter(d =>
         !isExpiredDeal(d, now) &&
         d.computedDistanceValue <= radius &&
-        (selectedCategory === 'All' || d.category === selectedCategory) &&
+        (deferredSelectedCategory === 'All' || d.category === deferredSelectedCategory) &&
         (
-          selectedCategory === 'All'
-          || selectedLocalSubcategory === 'All'
-          || d.localSubcategory === selectedLocalSubcategory
+          deferredSelectedCategory === 'All'
+          || deferredSelectedLocalSubcategory === 'All'
+          || d.localSubcategory === deferredSelectedLocalSubcategory
         ) &&
         matchesDesktopSearch(d)
       )
@@ -9084,30 +9828,30 @@ const deleteDealFromBackend = async (
 
     const filteredActiveLocalDeals = activeLocalDeals.filter((deal) => {
       const dealTag = getDealFeedTag(deal.id);
-      if (selectedFeedFilter === 'trending') return dealTag === 'Trending';
-      if (selectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
-      if (selectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
+      if (deferredSelectedFeedFilter === 'trending') return dealTag === 'Trending';
+      if (deferredSelectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
+      if (deferredSelectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
       return true;
     });
 
     const matchesDiscountFilter = (deal: Deal) => {
-      if (!discountFilterEnabled) return true;
+      if (!deferredDiscountFilterEnabled) return true;
       const discountPercentValue = getDealDiscountPercentValue(deal);
       if (discountPercentValue === null) return false;
-      return discountPercentValue >= discountFilterValue;
+      return discountPercentValue >= deferredDiscountFilterValue;
     };
 
     const hasOnlineSubcategory =
-      selectedCategory === 'Tech' || selectedCategory === 'Home' || selectedCategory === 'Fashion';
+      deferredSelectedCategory === 'Tech' || deferredSelectedCategory === 'Home' || deferredSelectedCategory === 'Fashion';
 
     const activeOnlineDeals = onlineDealsWithSubcategory.filter(
       (deal) =>
         !isExpiredDeal(deal, now) &&
-        (selectedCategory === 'All' || deal.category === selectedCategory) &&
+        (deferredSelectedCategory === 'All' || deal.category === deferredSelectedCategory) &&
         (
           !hasOnlineSubcategory ||
-          selectedOnlineSubcategory === 'All' ||
-          deal.onlineSubcategory === selectedOnlineSubcategory
+          deferredSelectedOnlineSubcategory === 'All' ||
+          deal.onlineSubcategory === deferredSelectedOnlineSubcategory
         ) &&
         matchesDesktopSearch(deal) &&
         matchesDiscountFilter(deal),
@@ -9150,34 +9894,46 @@ const deleteDealFromBackend = async (
 
     const filteredOnlineDealsByTab = filteredOnlineDeals.filter((deal) => {
       const dealTag = getOnlineDropTag(deal.id);
-      if (selectedFeedFilter === 'trending') return dealTag === 'Trending';
-      if (selectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
-      if (selectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
+      if (deferredSelectedFeedFilter === 'trending') return dealTag === 'Trending';
+      if (deferredSelectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
+      if (deferredSelectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
       return true;
     });
     const isDesktopDealGrid = viewportWidth >= 1024;
-    const visibleLocalDeals = filteredActiveLocalDeals;
-    const isOnlineCategoryView = isOnlineMode && selectedCategory !== 'All';
+    const initialDealRenderCount = isDesktopDealGrid ? 12 : viewportWidth >= 520 ? 8 : 6;
+    const cardImageWidth = isDesktopDealGrid ? 640 : viewportWidth >= 520 ? 520 : 420;
+    const cardImageSizes = isDesktopDealGrid
+      ? '(min-width: 1024px) 320px'
+      : '(min-width: 520px) 45vw, 90vw';
+    const visibleLocalDeals = renderAllDeals
+      ? filteredActiveLocalDeals
+      : filteredActiveLocalDeals.slice(0, initialDealRenderCount);
+    const isOnlineCategoryView = isOnlineMode && deferredSelectedCategory !== 'All';
     const sortedOnlineDealsByTab = isDropModeActive
       ? filteredOnlineDealsByTab
       : [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
-    const visibleOnlineDealsByTab = sortedOnlineDealsByTab;
+    const visibleOnlineDealsByTab = renderAllDeals
+      ? sortedOnlineDealsByTab
+      : sortedOnlineDealsByTab.slice(0, initialDealRenderCount);
     const pagedCategoryOnlineDeals = [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
     const categoryOnlinePageSize = isDesktopDealGrid ? Math.max(1, pagedCategoryOnlineDeals.length) : 7;
     const categoryOnlineDealPages = chunkItems(pagedCategoryOnlineDeals, categoryOnlinePageSize);
     const totalCategoryOnlinePages = Math.max(1, categoryOnlineDealPages.length);
     const safeOnlineCategoryPage = Math.min(onlineCategoryPage, totalCategoryOnlinePages - 1);
-    const visibleCategoryOnlineDeals = categoryOnlineDealPages[safeOnlineCategoryPage] ?? [];
+    const visibleCategoryOnlineDeals = (categoryOnlineDealPages[safeOnlineCategoryPage] ?? []).slice(
+      0,
+      renderAllDeals ? (categoryOnlineDealPages[safeOnlineCategoryPage]?.length ?? 0) : initialDealRenderCount,
+    );
     const hasMoreCategoryPages = safeOnlineCategoryPage < totalCategoryOnlinePages - 1;
-    const onlineHeadline = selectedCategory === 'All' ? 'All' : getCategoryLabel(selectedCategory);
+    const onlineHeadline = deferredSelectedCategory === 'All' ? 'All' : getCategoryLabel(deferredSelectedCategory);
     const onlineCategoryDescription = isDropModeActive
-      ? selectedCategory === 'All'
+      ? deferredSelectedCategory === 'All'
         ? 'Urgent picks, newest first.'
-        : `Urgent ${getCategoryLabel(selectedCategory).toLowerCase()} picks, newest first.`
-      : selectedCategory === 'All'
+        : `Urgent ${getCategoryLabel(deferredSelectedCategory).toLowerCase()} picks, newest first.`
+      : deferredSelectedCategory === 'All'
         ? 'Fresh online deals, newest first.'
-        : `Fresh ${getCategoryLabel(selectedCategory).toLowerCase()} deals, newest first.`;
-    const onlineHeroIconName = selectedCategory === 'All' ? 'online' : getCategoryIconName(selectedCategory);
+        : `Fresh ${getCategoryLabel(deferredSelectedCategory).toLowerCase()} deals, newest first.`;
+    const onlineHeroIconName = deferredSelectedCategory === 'All' ? 'online' : getCategoryIconName(deferredSelectedCategory);
     const discountSteps = [10, 20, 30, 40, 50, 70, 90];
     const discountFilterLabel = discountFilterEnabled ? `${discountFilterValue}%+` : '10%+';
     const discountSliderIndex = discountFilterEnabled
@@ -9272,8 +10028,8 @@ const deleteDealFromBackend = async (
           }}
             className={`overflow-hidden rounded-[1.45rem] bg-white transition-all duration-200 ${
               isDropModeActive
-                ? 'border border-indigo-100/80 shadow-[0_14px_32px_rgba(15,23,42,0.08)] ring-1 ring-indigo-100/40'
-                : 'border border-slate-100 shadow-[0_10px_24px_rgba(148,163,184,0.14)]'
+                ? 'border border-indigo-100/80 shadow-[0_14px_32px_rgba(15,23,42,0.08)] ring-1 ring-indigo-100/40 max-[640px]:shadow-[0_8px_16px_rgba(15,23,42,0.08)]'
+                : 'border border-slate-100 shadow-[0_10px_24px_rgba(148,163,184,0.14)] max-[640px]:shadow-[0_8px_18px_rgba(148,163,184,0.12)]'
             } cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2`}
           >
           <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
@@ -9282,6 +10038,8 @@ const deleteDealFromBackend = async (
               alt={displayTitle}
               fit="contain"
               iconSize={28}
+              preferredWidth={cardImageWidth}
+              sizes={cardImageSizes}
               imageClassName="p-2.5 transition-transform duration-500 hover:scale-[1.02]"
             />
             {isDropModeActive ? (
@@ -9457,7 +10215,7 @@ const deleteDealFromBackend = async (
               handleOpenDealDetail(deal);
             }
           }}
-          className={`overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 ${
+          className={`overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] max-[640px]:shadow-[0_6px_14px_rgba(148,163,184,0.12)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 ${
             viewed ? 'opacity-90 border-slate-200 shadow-[0_6px_16px_rgba(148,163,184,0.12)]' : ''
           }`}
         >
@@ -9467,6 +10225,8 @@ const deleteDealFromBackend = async (
               alt={displayTitle}
               fit="contain"
               iconSize={24}
+              preferredWidth={cardImageWidth}
+              sizes={cardImageSizes}
               imageClassName={`p-2 ${viewed ? 'opacity-85' : ''}`}
             />
             <div className="pointer-events-none absolute left-2 top-2">
@@ -9599,7 +10359,15 @@ const deleteDealFromBackend = async (
           className="flex gap-3 rounded-[1.2rem] border border-slate-100 bg-white p-3 shadow-sm shadow-slate-200/30"
         >
           <div className="relative h-24 w-24 flex-shrink-0 overflow-hidden rounded-[1rem] bg-slate-100">
-            <DealArtwork src={deal.imageUrl} alt={displayTitle} fit="contain" iconSize={20} imageClassName="p-2" />
+            <DealArtwork
+              src={deal.imageUrl}
+              alt={displayTitle}
+              fit="contain"
+              iconSize={20}
+              preferredWidth={Math.min(cardImageWidth, 360)}
+              sizes="96px"
+              imageClassName="p-2"
+            />
             <div className="pointer-events-none absolute left-2 top-2">
               <span className="deal-ribbon-badge inline-flex min-h-[22px] items-center rounded-[0.85rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white shadow-[0_8px_16px_rgba(99,102,241,0.18)]">
                 {getOnlineDealHeroLabel(offerText)}
@@ -9705,13 +10473,20 @@ const deleteDealFromBackend = async (
       </button>
     );
 
+    const renderDealSkeletons = () => {
+      const skeletonCount = isDesktopDealGrid ? 8 : 6;
+      return (
+        <div className={`grid gap-3 ${isDesktopDealGrid ? 'grid-cols-3' : 'grid-cols-2'} max-[520px]:grid-cols-1`}>
+          {Array.from({ length: skeletonCount }).map((_, index) => (
+            <DealCardSkeleton key={`deal-skeleton-${index}`} />
+          ))}
+        </div>
+      );
+    };
+
     return (
       <div className="space-y-4">
-        {dealsLoading ? (
-          <div className="rounded-[1.25rem] border border-indigo-100 bg-indigo-50/80 px-4 py-3 text-[11px] font-semibold text-indigo-700">
-            Loading live deals...
-          </div>
-        ) : null}
+        {dealsLoading ? renderDealSkeletons() : null}
 
         {renderDealsErrorBanner()}
 
@@ -10758,6 +11533,8 @@ const deleteDealFromBackend = async (
               alt={selectedDetailDeal.title}
               fit="contain"
               iconSize={52}
+              preferredWidth={720}
+              sizes="(min-width: 768px) 420px, 90vw"
               imageClassName="p-4"
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950/18 via-slate-950/6 to-transparent" />
@@ -10911,6 +11688,8 @@ const deleteDealFromBackend = async (
                       alt={deal.title}
                       fit="contain"
                       iconSize={24}
+                      preferredWidth={420}
+                      sizes="(min-width: 768px) 200px, 45vw"
                       imageClassName="p-2"
                     />
                   </div>
@@ -13454,6 +14233,397 @@ const deleteDealFromBackend = async (
     </div>
   );
 
+  const renderAdminPageScanPanel = () => {
+    if (!hasAdminAccess) return null;
+
+    const statusLabel =
+      pageScanStatus === 'listening'
+        ? 'Listening'
+        : pageScanStatus === 'received'
+          ? 'Scan Ready'
+          : pageScanStatus === 'error'
+            ? 'Needs Attention'
+            : 'Idle';
+    const statusTone =
+      pageScanStatus === 'received'
+        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+        : pageScanStatus === 'error'
+          ? 'bg-rose-100 text-rose-700 border-rose-200'
+          : pageScanStatus === 'listening'
+            ? 'bg-indigo-100 text-indigo-700 border-indigo-200'
+            : 'bg-slate-100 text-slate-600 border-slate-200';
+
+    const summaryRows = [
+      { label: 'Title', value: trimDealTextValue(pageScanResult?.title) },
+      { label: 'Merchant', value: trimDealTextValue(pageScanResult?.merchant) },
+      { label: 'Current Price', value: trimDealTextValue(pageScanResult?.currentPriceText) },
+      { label: 'Original Price', value: trimDealTextValue(pageScanResult?.originalPriceText) },
+      { label: 'Discount', value: pageScanResult?.discountPercent ? `${pageScanResult.discountPercent}%` : '' },
+      { label: 'Image', value: trimDealTextValue(pageScanResult?.imageUrl) },
+    ].filter((row) => row.value);
+
+    return (
+      <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="max-w-2xl">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Live Page Extractor</p>
+            <h2 className="mt-1 text-lg font-black text-slate-900">Scan the currently open product page</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Open a product page, run the LiveDrop scan bookmarklet, and auto-fill the Business Portal form with the best available data.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+              Admin Only
+            </span>
+            <span className={`inline-flex h-9 items-center justify-center rounded-full border px-3 text-[10px] font-black uppercase tracking-[0.12em] ${statusTone}`}>
+              {statusLabel}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <label className="block">
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product Page URL</span>
+            <input
+              type="url"
+              value={pageScanProductUrl}
+              onChange={(event) => setPageScanProductUrl(event.target.value)}
+              placeholder="https://www.amazon.com/dp/..."
+              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+            />
+            <p className="mt-2 text-xs leading-5 text-slate-400">Use this to open the product page in a new tab for scanning.</p>
+          </label>
+          <label className="block">
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Affiliate / Outbound Link</span>
+            <input
+              type="url"
+              value={pageScanAffiliateUrl}
+              onChange={(event) => setPageScanAffiliateUrl(event.target.value)}
+              placeholder="https://amzn.to/... or tracking link"
+              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+            />
+            <p className="mt-2 text-xs leading-5 text-slate-400">Optional. If provided, Get Deal buttons will use this link.</p>
+          </label>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleOpenPageScanUrl}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+          >
+            Open Product Page
+          </button>
+          <button
+            type="button"
+            onClick={handleCopyPageScanBookmarklet}
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+          >
+            Copy LiveDrop Scanner
+          </button>
+          {pageScanResult ? (
+            <button
+              type="button"
+              onClick={() => setShowPageScanDebug((prev) => !prev)}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              {showPageScanDebug ? 'Hide Debug' : 'Show Debug'}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3 text-xs text-slate-500">
+          <p className="font-semibold text-slate-600">How to run a scan</p>
+          <p className="mt-1">1) Open the product page. 2) Paste the LiveDrop scanner bookmarklet in your browser’s bookmark bar. 3) Click it on the product page to send data back here.</p>
+        </div>
+
+        {pageScanMessage ? (
+          <p className="mt-3 text-sm font-semibold text-emerald-600">{pageScanMessage}</p>
+        ) : null}
+        {pageScanError ? (
+          <p className="mt-3 text-sm font-semibold text-rose-500">{pageScanError}</p>
+        ) : null}
+
+        {pageScanResult ? (
+          <div className="mt-4 rounded-[1.5rem] border border-slate-100 bg-white px-4 py-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Scan Summary</p>
+                <p className="mt-1 text-sm text-slate-500">Fields detected from the live page.</p>
+              </div>
+              {pageScanDebug?.missing?.length ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-amber-700">
+                  Missing {pageScanDebug.missing.length}
+                </span>
+              ) : (
+                <span className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                  Ready
+                </span>
+              )}
+            </div>
+            {summaryRows.length > 0 ? (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {summaryRows.map((row) => (
+                  <div key={row.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">{row.label}</p>
+                    <p className="mt-1 break-words text-sm font-semibold text-slate-700">{row.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">No fields were extracted yet.</p>
+            )}
+            {pageScanDebug?.missing?.length ? (
+              <p className="mt-3 text-xs text-amber-600">Missing fields: {pageScanDebug.missing.join(', ')}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {showPageScanDebug && pageScanResult ? (
+          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-slate-900 bg-slate-950 shadow-inner shadow-black/20">
+            <pre className="max-h-[320px] overflow-auto px-4 py-4 text-xs leading-6 text-slate-200 whitespace-pre-wrap">
+              {JSON.stringify({ payload: pageScanResult, debug: pageScanDebug }, null, 2)}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderAdminScreenshotScanPanel = () => {
+    if (!hasAdminAccess) return null;
+
+    const statusLabel =
+      screenshotScanStatus === 'scanning'
+        ? `Scanning ${screenshotScanProgress}%`
+        : screenshotScanStatus === 'loading'
+          ? 'Loading OCR'
+          : screenshotScanStatus === 'received'
+            ? 'Extraction Ready'
+            : screenshotScanStatus === 'error'
+              ? 'Needs Attention'
+              : 'Idle';
+    const statusTone =
+      screenshotScanStatus === 'received'
+        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+        : screenshotScanStatus === 'error'
+          ? 'bg-rose-100 text-rose-700 border-rose-200'
+          : screenshotScanStatus === 'loading' || screenshotScanStatus === 'scanning'
+            ? 'bg-indigo-100 text-indigo-700 border-indigo-200'
+            : 'bg-slate-100 text-slate-600 border-slate-200';
+
+    const summaryRows = [
+      { label: 'Title', value: trimDealTextValue(screenshotScanResult?.title) },
+      { label: 'Merchant', value: trimDealTextValue(screenshotScanResult?.merchant) },
+      { label: 'Current Price', value: trimDealTextValue(screenshotScanResult?.currentPriceText) },
+      { label: 'Original Price', value: trimDealTextValue(screenshotScanResult?.originalPriceText) },
+      { label: 'Discount', value: screenshotScanResult?.discountPercent ? `${screenshotScanResult.discountPercent}%` : '' },
+      { label: 'Product URL', value: trimDealTextValue(screenshotScanResult?.productUrl) },
+      {
+        label: 'Image Source',
+        value: screenshotStrictJson?.useCroppedProductImage ? 'Cropped product' : screenshotStrictJson ? 'Full screenshot' : '',
+      },
+    ].filter((row) => row.value);
+
+    return (
+      <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="max-w-2xl">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Image Extractor</p>
+            <h2 className="mt-1 text-lg font-black text-slate-900">Extract a deal from a screenshot or product image</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Upload a product screenshot, coupon image, or deal photo and LiveDrop will OCR the visible content into a preview you can apply to a deal maker.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-9 items-center justify-center rounded-full bg-indigo-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+              Admin Only
+            </span>
+            <span className={`inline-flex h-9 items-center justify-center rounded-full border px-3 text-[10px] font-black uppercase tracking-[0.12em] ${statusTone}`}>
+              {statusLabel}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-[1.2fr_1fr]">
+          <label className="block">
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product Screenshot</span>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleScreenshotUpload}
+              className="mt-2 block w-full rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-[11px] file:font-black file:uppercase file:tracking-[0.16em] file:text-indigo-600"
+            />
+            <p className="mt-2 text-xs leading-5 text-slate-400">Upload a full-page or close-cropped screenshot that includes the title and pricing.</p>
+          </label>
+          <div className="grid gap-3">
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Product URL (optional)</span>
+              <input
+                type="url"
+                value={screenshotScanProductUrl}
+                onChange={(event) => setScreenshotScanProductUrl(event.target.value)}
+                placeholder="https://www.amazon.com/dp/..."
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Affiliate / Outbound Link</span>
+              <input
+                type="url"
+                value={screenshotScanAffiliateUrl}
+                onChange={(event) => setScreenshotScanAffiliateUrl(event.target.value)}
+                placeholder="https://amzn.to/... or tracking link"
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+              />
+            </label>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Target Deal Maker</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Array.from({ length: BULK_RELEASE_MAX_DEALS }, (_, index) => (
+                  <button
+                    key={`screenshot-target-${index}`}
+                    type="button"
+                    onClick={() => setScreenshotTargetIndex(index)}
+                    className={`h-9 rounded-full px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-all ${
+                      screenshotTargetIndex === index
+                        ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                        : 'border border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
+                    }`}
+                  >
+                    Deal {index + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {screenshotScanImage ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50">
+              <p className="px-3 pt-3 text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Uploaded screenshot</p>
+              <img src={screenshotScanImage} alt="Screenshot preview" className="h-52 w-full object-contain bg-white" />
+            </div>
+            {screenshotStrictJson?.imageUrl ? (
+              <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50">
+                <p className="px-3 pt-3 text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                  {screenshotStrictJson.useCroppedProductImage ? 'Cropped product image' : 'Fallback image'}
+                </p>
+                <img src={screenshotStrictJson.imageUrl} alt="Extracted product" className="h-52 w-full object-contain bg-white" />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleScreenshotExtract}
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-indigo-500"
+          >
+            Extract Screenshot
+          </button>
+          {screenshotStrictJson ? (
+            <button
+              type="button"
+              onClick={handleApplyScreenshotToBulk}
+              className="inline-flex h-10 items-center justify-center rounded-xl bg-emerald-600 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-emerald-500"
+            >
+              Apply to Deal Maker
+            </button>
+          ) : null}
+          {screenshotScanStatus === 'received' ? (
+            <button
+              type="button"
+              onClick={handleScreenshotExtract}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              Try Again
+            </button>
+          ) : null}
+          {screenshotScanResult ? (
+            <button
+              type="button"
+              onClick={handleClearScreenshotExtraction}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-rose-600 transition-colors hover:bg-rose-100"
+            >
+              Clear Extracted Data
+            </button>
+          ) : null}
+          {screenshotScanResult ? (
+            <button
+              type="button"
+              onClick={() => setShowScreenshotScanDebug((prev) => !prev)}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              {showScreenshotScanDebug ? 'Hide Debug' : 'Show Debug'}
+            </button>
+          ) : null}
+        </div>
+
+        {screenshotScanMessage ? (
+          <p className="mt-3 text-sm font-semibold text-emerald-600">{screenshotScanMessage}</p>
+        ) : null}
+        {screenshotScanError ? (
+          <p className="mt-3 text-sm font-semibold text-rose-500">{screenshotScanError}</p>
+        ) : null}
+
+        {screenshotScanResult ? (
+          <div className="mt-4 rounded-[1.5rem] border border-slate-100 bg-white px-4 py-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Extraction Summary</p>
+                <p className="mt-1 text-sm text-slate-500">Fields detected from the screenshot.</p>
+              </div>
+              {screenshotScanDebug?.missing?.length ? (
+                <span className="inline-flex h-7 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-amber-700">
+                  Missing {screenshotScanDebug.missing.length}
+                </span>
+              ) : (
+                <span className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                  Ready
+                </span>
+              )}
+            </div>
+            {summaryRows.length > 0 ? (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {summaryRows.map((row) => (
+                  <div key={row.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">{row.label}</p>
+                    <p className="mt-1 break-words text-sm font-semibold text-slate-700">{row.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">No fields were extracted yet.</p>
+            )}
+            {screenshotScanDebug?.missing?.length ? (
+              <p className="mt-3 text-xs text-amber-600">Missing fields: {screenshotScanDebug.missing.join(', ')}</p>
+            ) : null}
+            {screenshotStrictJson ? (
+              <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Extracted JSON</p>
+                <pre className="mt-2 max-h-[240px] overflow-auto text-xs leading-6 text-slate-700 whitespace-pre-wrap">
+                  {JSON.stringify(screenshotStrictJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {showScreenshotScanDebug && screenshotScanResult ? (
+          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-slate-900 bg-slate-950 shadow-inner shadow-black/20">
+            <pre className="max-h-[320px] overflow-auto px-4 py-4 text-xs leading-6 text-slate-200 whitespace-pre-wrap">
+              {JSON.stringify({ payload: screenshotScanResult, debug: screenshotScanDebug }, null, 2)}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderBusinessPortal = () => {
     if (LOCAL_ADMIN_MODE) {
       if (isCreating) {
@@ -13464,16 +14634,24 @@ const deleteDealFromBackend = async (
                 Unsaved changes
               </p>
             ) : null}
-            <CreateDealForm
-              onSubmit={handleCreateDeal}
-              onCancel={closeCreateEditor}
-              userLocation={userLocation}
-              hasPreciseUserLocation={hasPreciseUserLocation}
-              initialData={dealDraft}
-              onDraftChange={setPortalFieldSnapshot}
-              onDirtyChange={setHasUnsavedFormChanges}
-              autofillRequest={portalAutofillRequest}
-            />
+            <Suspense
+              fallback={
+                <div className="rounded-[1.5rem] border border-slate-100 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
+                  Loading deal editor…
+                </div>
+              }
+            >
+              <CreateDealForm
+                onSubmit={handleCreateDeal}
+                onCancel={closeCreateEditor}
+                userLocation={userLocation}
+                hasPreciseUserLocation={hasPreciseUserLocation}
+                initialData={dealDraft}
+                onDraftChange={setPortalFieldSnapshot}
+                onDirtyChange={setHasUnsavedFormChanges}
+                autofillRequest={portalAutofillRequest}
+              />
+            </Suspense>
           </div>
         );
       }
@@ -13621,16 +14799,24 @@ const deleteDealFromBackend = async (
               Unsaved changes
             </p>
           ) : null}
-          <CreateDealForm 
-            onSubmit={handleCreateDeal} 
-            onCancel={closeCreateEditor}
-            userLocation={userLocation}
-            hasPreciseUserLocation={hasPreciseUserLocation}
-            initialData={dealDraft}
-            onDraftChange={setPortalFieldSnapshot}
-            onDirtyChange={setHasUnsavedFormChanges}
-            autofillRequest={portalAutofillRequest}
-          />
+          <Suspense
+            fallback={
+              <div className="rounded-[1.5rem] border border-slate-100 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
+                Loading deal editor…
+              </div>
+            }
+          >
+            <CreateDealForm 
+              onSubmit={handleCreateDeal} 
+              onCancel={closeCreateEditor}
+              userLocation={userLocation}
+              hasPreciseUserLocation={hasPreciseUserLocation}
+              initialData={dealDraft}
+              onDraftChange={setPortalFieldSnapshot}
+              onDirtyChange={setHasUnsavedFormChanges}
+              autofillRequest={portalAutofillRequest}
+            />
+          </Suspense>
         </div>
       );
     }
@@ -13960,16 +15146,24 @@ const deleteDealFromBackend = async (
                 Unsaved changes
               </p>
             ) : null}
-            <CreateDealForm
-              onSubmit={handleCreateDeal}
-              onCancel={closeCreateEditor}
-              userLocation={userLocation}
-              hasPreciseUserLocation={hasPreciseUserLocation}
-              initialData={dealDraft}
-              onDraftChange={setPortalFieldSnapshot}
-              onDirtyChange={setHasUnsavedFormChanges}
-              autofillRequest={portalAutofillRequest}
-            />
+            <Suspense
+              fallback={
+                <div className="rounded-[1.5rem] border border-slate-100 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
+                  Loading deal editor…
+                </div>
+              }
+            >
+              <CreateDealForm
+                onSubmit={handleCreateDeal}
+                onCancel={closeCreateEditor}
+                userLocation={userLocation}
+                hasPreciseUserLocation={hasPreciseUserLocation}
+                initialData={dealDraft}
+                onDraftChange={setPortalFieldSnapshot}
+                onDirtyChange={setHasUnsavedFormChanges}
+                autofillRequest={portalAutofillRequest}
+              />
+            </Suspense>
           </div>
         </div>
       );
@@ -14075,6 +15269,9 @@ const deleteDealFromBackend = async (
               <p className="mt-2 text-xs font-semibold text-indigo-600">{priceScanMessage}</p>
             ) : null}
           </div>
+
+          {renderAdminPageScanPanel()}
+          {renderAdminScreenshotScanPanel()}
 
           <div className="rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -14195,30 +15392,38 @@ const deleteDealFromBackend = async (
                     ) : null}
                     <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-[4000px] opacity-100' : 'max-h-0 opacity-0'}`}>
                       <div className="pt-4">
-                        <CreateDealForm
-                          key={`bulk-release-form-${index}-${bulkReleaseFormKeys[index]}`}
-                          onSubmit={handleCreateDeal}
-                          onCancel={() => {}}
-                          userLocation={userLocation}
-                          hasPreciseUserLocation={hasPreciseUserLocation}
-                          initialData={bulkReleaseInitialData[index]}
-                          onDraftChange={(draft) => {
-                            setBulkReleaseDrafts((prev) => {
-                              const next = [...prev];
-                              next[index] = draft;
-                              return next;
-                            });
-                          }}
-                          onValidationChange={(error) => {
-                            setBulkReleaseValidation((prev) => {
-                              const next = [...prev];
-                              next[index] = error;
-                              return next;
-                            });
-                          }}
-                          showHeader={false}
-                          showActions={false}
-                        />
+                        <Suspense
+                          fallback={
+                            <div className="rounded-[1.25rem] border border-slate-100 bg-white p-4 text-xs font-semibold text-slate-500 shadow-sm">
+                              Loading deal editor…
+                            </div>
+                          }
+                        >
+                          <CreateDealForm
+                            key={`bulk-release-form-${index}-${bulkReleaseFormKeys[index]}`}
+                            onSubmit={handleCreateDeal}
+                            onCancel={() => {}}
+                            userLocation={userLocation}
+                            hasPreciseUserLocation={hasPreciseUserLocation}
+                            initialData={bulkReleaseInitialData[index]}
+                            onDraftChange={(draft) => {
+                              setBulkReleaseDrafts((prev) => {
+                                const next = [...prev];
+                                next[index] = draft;
+                                return next;
+                              });
+                            }}
+                            onValidationChange={(error) => {
+                              setBulkReleaseValidation((prev) => {
+                                const next = [...prev];
+                                next[index] = error;
+                                return next;
+                              });
+                            }}
+                            showHeader={false}
+                            showActions={false}
+                          />
+                        </Suspense>
                       </div>
                     </div>
                   </div>

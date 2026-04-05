@@ -38,6 +38,8 @@ interface CreateDealFormProps {
       description: string;
       category: string;
       offerText: string;
+      originalPrice?: string;
+      currentPrice?: string;
     };
   } | null;
 }
@@ -351,6 +353,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         discountValue: getDiscountValueFromText(autofillRequest.payload.offerText),
         customOfferText: nextOfferType === 'custom' ? normalizeTextValue(autofillRequest.payload.offerText) : '',
         imageUrl: normalizeTextValue(autofillRequest.payload.imageUrl),
+        originalPrice: normalizeTextValue(autofillRequest.payload.originalPrice) || prev.originalPrice,
+        currentPrice: normalizeTextValue(autofillRequest.payload.currentPrice) || prev.currentPrice,
       };
       const normalizedCategory = normalizeCategoryValue(nextState.category, 'online', [
         nextState.title,

@@ -29,7 +29,7 @@ interface DealCardProps {
   isDeleting?: boolean;
 }
 
-export const DealCard: React.FC<DealCardProps> = ({
+export const DealCard = React.memo(({
   deal,
   onClaim,
   isClaimed = false,
@@ -49,7 +49,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   onEditDeal,
   onDeleteDeal,
   isDeleting = false,
-}) => {
+}: DealCardProps) => {
   const showTimer = deal.businessType !== 'online' && deal.hasTimer !== false;
   const [isExpired, setIsExpired] = useState(showTimer && deal.expiresAt <= Date.now());
   const getBadgeIcon = (badge: string) => {
@@ -168,7 +168,7 @@ export const DealCard: React.FC<DealCardProps> = ({
   }
 
   return (
-    <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3 max-[359px]:p-2.5 shadow-[0_12px_28px_rgba(148,163,184,0.16)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] active:scale-[0.985] ${isViewed ? 'opacity-90 border-slate-200 shadow-[0_8px_18px_rgba(148,163,184,0.12)]' : ''}`}>
+    <div className={`mb-3 overflow-hidden border bg-white ${isUrgent(deal.expiresAt) && !isExpired ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-100/90'} rounded-[1.5rem] p-3 max-[359px]:p-2.5 shadow-[0_12px_28px_rgba(148,163,184,0.16)] max-[640px]:shadow-[0_8px_16px_rgba(148,163,184,0.12)] transition-all hover:shadow-[0_16px_34px_rgba(148,163,184,0.18)] max-[640px]:hover:shadow-[0_8px_16px_rgba(148,163,184,0.12)] active:scale-[0.985] ${isViewed ? 'opacity-90 border-slate-200 shadow-[0_8px_18px_rgba(148,163,184,0.12)] max-[640px]:shadow-[0_6px_12px_rgba(148,163,184,0.1)]' : ''}`}>
       <div className="mb-2.5 flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           <CompanyLogo businessName={displayBusinessName} logoUrl={deal.logoUrl} category={deal.category} size={36} />
@@ -302,4 +302,6 @@ export const DealCard: React.FC<DealCardProps> = ({
       </div>
     </div>
   );
-};
+});
+
+DealCard.displayName = 'DealCard';

@@ -5,6 +5,7 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const imageExtractorTarget = env.VITE_IMAGE_EXTRACTOR_URL || 'http://127.0.0.1:8008';
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -19,6 +20,12 @@ export default defineConfig(({mode}) => {
       // HMR can be disabled with DISABLE_HMR in environments where file watching causes flicker.
       // Do not modify this unless the local LiveDrop editing flow changes.
       hmr: process.env.DISABLE_HMR !== 'true',
+      proxy: {
+        '/api/admin/image-extract': {
+          target: imageExtractorTarget,
+          changeOrigin: true,
+        },
+      },
     },
   };
 });
