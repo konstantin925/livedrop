@@ -328,6 +328,30 @@ const getFeedFilterIconName = (filter: DealStatusFilterId) => {
   return 'deal' as const;
 };
 
+const HOW_IT_WORKS_CARDS = [
+  {
+    key: 'find-deals',
+    title: 'Find Deals',
+    subtitle: 'Browse local and online drops fast.',
+    image: '/how-it-works/find-deals.png',
+    alt: 'Find deals illustration',
+  },
+  {
+    key: 'drop-activate',
+    title: 'Drop or Activate',
+    subtitle: 'Claim deals and activate offers instantly.',
+    image: '/how-it-works/drop-activate.png',
+    alt: 'Drop or activate illustration',
+  },
+  {
+    key: 'save-money',
+    title: 'Save Money',
+    subtitle: 'Use the deal and keep more money.',
+    image: '/how-it-works/save-money.png',
+    alt: 'Save money illustration',
+  },
+] as const;
+
 const DEAL_STATUS_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const DEAL_STATUS_LEAVING_SOON_WINDOW_MS = 2 * 60 * 60 * 1000;
 
@@ -10745,10 +10769,6 @@ const deleteDealFromBackend = async (
     };
 
     const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
-    const controlHeightClass = 'h-9.5';
-    const controlRadiusClass = 'rounded-[0.95rem]';
-    const controlPaddingClass = 'px-3';
-    const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.1em]';
     const selectedStatusLabel = getDealStatusFilterLabel(selectedFeedFilter).toLowerCase();
     const featuredSourceDeals = isOnlineMode
       ? (isOnlineCategoryView ? pagedCategoryOnlineDeals : sortedOnlineDealsByTab)
@@ -11804,6 +11824,87 @@ const deleteDealFromBackend = async (
           </div>
         </div>
 
+        <section className="py-1">
+          <div className="px-1 pb-1">
+            <div className="grid grid-cols-1 gap-3 min-[760px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] min-[760px]:items-center">
+              {HOW_IT_WORKS_CARDS.map((card, index) => (
+                <React.Fragment key={card.key}>
+                  <article className="group min-w-0">
+                    <div className="flex h-[220px] items-center justify-center min-[760px]:h-[280px] min-[1280px]:h-[310px]">
+                      <img
+                        src={card.image}
+                        alt={card.alt}
+                        loading="lazy"
+                        decoding="async"
+                        onError={(event) => {
+                          const target = event.currentTarget;
+                          if (target.dataset.fallbackApplied === '1') return;
+                          target.dataset.fallbackApplied = '1';
+                          target.src = '/how-it-works/fallback.svg';
+                        }}
+                        className="h-full w-full object-contain transition-transform duration-300 group-hover:scale-[1.01]"
+                      />
+                    </div>
+                  </article>
+
+                  {index < HOW_IT_WORKS_CARDS.length - 1 ? (
+                    <>
+                      <div className="hidden h-full items-center justify-center text-indigo-400/85 min-[760px]:flex">
+                        <svg
+                          viewBox="0 0 26 26"
+                          width="30"
+                          height="30"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M3.5 13H21.2"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path
+                            d="M15.7 7.7L21.6 13L15.7 18.3"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
+                      <div className="flex items-center justify-center py-0.5 text-indigo-400/85 min-[760px]:hidden">
+                        <svg
+                          viewBox="0 0 26 26"
+                          width="28"
+                          height="28"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M13 4.3V21.2"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path
+                            d="M7.7 15.7L13 21.6L18.3 15.7"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
+                    </>
+                  ) : null}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Developer Debug Section */}
         {isAdminRoute && showDebug && dropMode === 'local' && (
           <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-2xl mb-4 relative overflow-hidden">
@@ -11889,7 +11990,7 @@ const deleteDealFromBackend = async (
                   <button
                     key={r}
                     onClick={() => setRadius(r)}
-                    className={`inline-flex ${controlHeightClass} min-w-[38px] items-center justify-center rounded-lg border ${controlTextClass} transition-all ${
+                    className={`inline-flex h-9.5 min-w-[38px] items-center justify-center rounded-lg border text-[9px] font-black uppercase tracking-[0.1em] transition-all ${
                       radius === r
                         ? 'border-white bg-white text-indigo-600 shadow-sm shadow-slate-200/40'
                         : 'border-transparent bg-transparent text-slate-400 hover:text-slate-600'
@@ -11942,7 +12043,7 @@ const deleteDealFromBackend = async (
                 <button
                   key={filter.id}
                   onClick={() => setSelectedFeedFilter((current) => (current === filter.id ? 'all' : filter.id))}
-                  className={`inline-flex h-9 min-[640px]:${controlHeightClass} items-center px-3 min-[640px]:${controlPaddingClass} rounded-[0.9rem] min-[640px]:${controlRadiusClass} border text-[9px] min-[640px]:${controlTextClass} whitespace-nowrap transition-all ${
+                  className={`inline-flex h-9.5 items-center rounded-[0.95rem] border px-3 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
                     selectedFeedFilter === filter.id
                       ? 'border-indigo-300 bg-indigo-50 text-indigo-700 shadow-sm shadow-indigo-100/80'
                       : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'

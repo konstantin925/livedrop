@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap");
 @import "tailwindcss";
 
 @theme {
@@ -6,6 +7,27 @@
 }
 
 @layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-size: 16px;
+    line-height: 1.5;
+    width: 100%;
+    min-height: 100%;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+  }
+
   body {
     @apply bg-slate-50 text-slate-900 antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
@@ -548,4 +570,37 @@
 
 .livedrop-batch-rise {
   animation: livedrop-batch-rise 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root {
+  --livedrop-content-max-width: 1480px;
+  --livedrop-shell-x-mobile: 14px;
+  --livedrop-shell-x-desktop: clamp(16px, 2.2vw, 32px);
+  --livedrop-main-y-mobile: 12px;
+  --livedrop-main-y-desktop: 24px;
+}
+
+.livedrop-content-wrap {
+  width: min(100%, var(--livedrop-content-max-width));
+  margin-inline: auto;
+}
+
+.livedrop-shell-x-mobile {
+  padding-inline: var(--livedrop-shell-x-mobile);
+}
+
+.livedrop-shell-x-desktop {
+  padding-inline: var(--livedrop-shell-x-desktop);
+}
+
+.livedrop-main-mobile {
+  padding-inline: var(--livedrop-shell-x-mobile);
+  padding-top: var(--livedrop-main-y-mobile);
+  padding-bottom: var(--livedrop-main-y-mobile);
+}
+
+.livedrop-main-desktop {
+  padding-inline: var(--livedrop-shell-x-desktop);
+  padding-top: var(--livedrop-main-y-desktop);
+  padding-bottom: var(--livedrop-main-y-desktop);
 }

@@ -89,8 +89,8 @@ export const Layout: React.FC<LayoutProps> = ({
     >
       {/* Header */}
       {isDesktopLayout ? (
-        <header className="sticky top-0 z-50 border-b border-white/70 bg-white/92 px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <div className="mx-auto grid w-full max-w-[1480px] grid-cols-[auto_minmax(460px,1fr)_auto] items-center gap-6">
+        <header className="sticky top-0 z-50 border-b border-white/70 bg-white/92 py-4 backdrop-blur-xl livedrop-shell-x-desktop">
+          <div className="livedrop-content-wrap grid w-full grid-cols-[auto_minmax(460px,1fr)_auto] items-center gap-6">
             <div className="min-w-0">
               <div className="flex items-center leading-none">
                 <div className="min-w-0 flex items-baseline gap-0.5 leading-none">
@@ -169,7 +169,7 @@ export const Layout: React.FC<LayoutProps> = ({
           </div>
         </header>
       ) : (
-        <header className="sticky top-0 z-50 flex items-center justify-between gap-2 border-b border-white/70 bg-white/88 px-3.5 py-2.5 pt-4 backdrop-blur-xl max-[359px]:gap-1.5 max-[359px]:px-3 max-[359px]:pt-3.5">
+        <header className="sticky top-0 z-50 flex items-center justify-between gap-2 border-b border-white/70 bg-white/88 py-2.5 pt-4 backdrop-blur-xl livedrop-shell-x-mobile max-[359px]:gap-1.5 max-[359px]:pt-3.5">
         <div className="min-w-0 flex flex-1 flex-col items-start justify-center">
           <div className="flex items-center leading-none">
             <div className="min-w-0 flex items-baseline gap-0.5 leading-none">
@@ -237,16 +237,16 @@ export const Layout: React.FC<LayoutProps> = ({
       )}
 
       {isAdminSession ? (
-        <div className="border-b border-indigo-100/80 bg-indigo-50/85 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
-          <div className={`mx-auto w-full max-w-[1480px] ${isDesktopLayout ? 'px-0' : 'px-3.5 max-[359px]:px-2.5'}`}>
+        <div className={`border-b border-indigo-100/80 bg-indigo-50/85 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700 ${isDesktopLayout ? 'livedrop-shell-x-desktop' : 'livedrop-shell-x-mobile'}`}>
+          <div className="livedrop-content-wrap w-full">
             {adminLabel ? `Admin: ${adminLabel}` : 'Logged in as Admin'}
           </div>
         </div>
       ) : null}
 
       {role !== 'business' ? (
-        <div className={`hidden min-[1024px]:block border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-4 py-3 sm:px-6 lg:px-8' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
-          <div className="mx-auto flex w-full max-w-[1480px] items-center justify-center">
+        <div className="hidden min-[1024px]:block border-b border-slate-100/90 bg-white/88 py-3 livedrop-shell-x-desktop">
+          <div className="livedrop-content-wrap flex w-full items-center justify-center">
             <div className={`inline-grid grid-cols-4 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_22px_rgba(148,163,184,0.18)] ${isDesktopLayout ? 'h-12 w-[640px]' : 'h-11 w-full max-w-[430px]'}`}>
               <button
                 type="button"
@@ -348,8 +348,8 @@ export const Layout: React.FC<LayoutProps> = ({
       ) : null}
 
       {/* Main Content */}
-      <main className={`flex-1 overflow-y-auto py-3 ${isDesktopLayout ? 'px-8 py-6' : 'px-3.5 max-[359px]:px-2.5'}`} style={mainContentStyle}>
-        <div className="mx-auto w-full max-w-[1480px]">
+      <main className={`flex-1 overflow-y-auto ${isDesktopLayout ? 'livedrop-main-desktop' : 'livedrop-main-mobile'}`} style={mainContentStyle}>
+        <div className="livedrop-content-wrap w-full">
           {children}
         </div>
       </main>

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">LiveDrop All Categories Showcase</title>
+  <desc id="desc">A collage-style banner showing multiple shopping categories for LiveDrop.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E8EEFF"/>
+      <stop offset="55%" stop-color="#E1E9FF"/>
+      <stop offset="100%" stop-color="#D6E6FF"/>
+    </linearGradient>
+    <linearGradient id="cardA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6D5CF5"/>
+      <stop offset="100%" stop-color="#21B5F7"/>
+    </linearGradient>
+    <linearGradient id="cardB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#B086FF"/>
+      <stop offset="100%" stop-color="#5E82FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <g opacity="0.35">
+    <circle cx="220" cy="180" r="130" fill="#C8D9FF"/>
+    <circle cx="1430" cy="180" r="120" fill="#C4DBFF"/>
+    <circle cx="1320" cy="760" r="170" fill="#C2D4FF"/>
+  </g>
+
+  <g transform="translate(140,130)">
+    <rect x="0" y="0" width="460" height="250" rx="36" fill="url(#cardA)"/>
+    <rect x="500" y="0" width="340" height="180" rx="30" fill="#FFFFFF" fill-opacity="0.84"/>
+    <rect x="880" y="0" width="430" height="240" rx="34" fill="url(#cardB)"/>
+    <rect x="0" y="290" width="390" height="210" rx="32" fill="#FFFFFF" fill-opacity="0.9"/>
+    <rect x="430" y="220" width="420" height="280" rx="34" fill="#F2F6FF"/>
+    <rect x="890" y="280" width="420" height="220" rx="32" fill="#FFFFFF" fill-opacity="0.88"/>
+  </g>
+
+  <g font-family="Inter, Arial, sans-serif" fill="#22345E">
+    <text x="160" y="735" font-size="40" font-weight="700" opacity="0.9">ALL CATEGORIES</text>
+    <text x="160" y="782" font-size="26" opacity="0.7">Tech • Fashion • Gaming • Digital • Home • Food</text>
+  </g>
+</svg>

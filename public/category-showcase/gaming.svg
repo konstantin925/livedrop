@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">LiveDrop Gaming Category</title>
+  <desc id="desc">A gaming themed category banner featuring controller and neon accents.</desc>
+  <defs>
+    <linearGradient id="bgGaming" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EAE9FF"/>
+      <stop offset="50%" stop-color="#E1E4FF"/>
+      <stop offset="100%" stop-color="#DBEAFF"/>
+    </linearGradient>
+    <linearGradient id="control" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6A53FF"/>
+      <stop offset="100%" stop-color="#2DBBFF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bgGaming)"/>
+  <rect x="180" y="185" width="1240" height="500" rx="46" fill="#FFFFFF" fill-opacity="0.92"/>
+
+  <path d="M460 455C460 375 520 320 600 320H1000C1080 320 1140 375 1140 455C1140 532 1085 586 1010 586H590C515 586 460 532 460 455Z" fill="url(#control)"/>
+  <rect x="540" y="420" width="180" height="24" rx="12" fill="#E9F1FF"/>
+  <rect x="618" y="350" width="24" height="180" rx="12" fill="#E9F1FF"/>
+  <circle cx="930" cy="430" r="18" fill="#E9F1FF"/>
+  <circle cx="990" cy="490" r="18" fill="#E9F1FF"/>
+  <circle cx="1060" cy="420" r="14" fill="#EEF4FF"/>
+
+  <rect x="230" y="250" width="210" height="18" rx="9" fill="#B1BDE4"/>
+  <rect x="1160" y="250" width="210" height="18" rx="9" fill="#B1BDE4"/>
+
+  <g font-family="Inter, Arial, sans-serif" fill="#1F2C63">
+    <text x="180" y="760" font-size="44" font-weight="800">GAMING DEALS</text>
+    <text x="180" y="805" font-size="26" opacity="0.72">Controllers, consoles, and play-ready setup upgrades.</text>
+  </g>
+</svg>

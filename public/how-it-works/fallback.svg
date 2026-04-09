@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">LiveDrop How It Works Placeholder</title>
+  <desc id="desc">Fallback visual used when a how-it-works image is missing.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EEF3FF"/>
+      <stop offset="100%" stop-color="#E3EDFF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6E5DFF"/>
+      <stop offset="100%" stop-color="#31BAFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="260" y="210" width="1080" height="480" rx="44" fill="#FFFFFF" fill-opacity="0.92"/>
+  <circle cx="800" cy="450" r="150" fill="url(#accent)"/>
+  <path d="M800 350L725 470H790L760 560L875 425H810L840 350H800Z" fill="#FFFFFF"/>
+  <g font-family="Inter, Arial, sans-serif" text-anchor="middle" fill="#2A3A62">
+    <text x="800" y="770" font-size="38" font-weight="800">ADD YOUR CUSTOM STEP IMAGE</text>
+  </g>
+</svg>

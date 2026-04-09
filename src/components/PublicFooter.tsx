@@ -21,8 +21,8 @@ export const PublicFooter: React.FC<PublicFooterProps> = ({ onNavigate }) => {
   };
 
   return (
-    <footer className="border-t border-white/80 bg-white/95 px-4 py-6 shadow-[0_-12px_28px_rgba(148,163,184,0.08)] sm:px-8">
-      <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6">
+    <footer className="border-t border-white/80 bg-white/95 py-6 shadow-[0_-12px_28px_rgba(148,163,184,0.08)] livedrop-shell-x-desktop">
+      <div className="livedrop-content-wrap flex w-full flex-col gap-6">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
           <div className="max-w-[360px]">
             <div className="flex items-center gap-2">

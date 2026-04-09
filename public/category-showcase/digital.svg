@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">LiveDrop Digital Category</title>
+  <desc id="desc">A digital themed category banner with abstract spark and interface motifs.</desc>
+  <defs>
+    <linearGradient id="bgDigital" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E7F4FF"/>
+      <stop offset="54%" stop-color="#E0F0FF"/>
+      <stop offset="100%" stop-color="#DBE9FF"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5A6CFF"/>
+      <stop offset="100%" stop-color="#3FC6FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bgDigital)"/>
+  <rect x="210" y="180" width="1180" height="510" rx="44" fill="#FFFFFF" fill-opacity="0.93"/>
+  <rect x="300" y="260" width="620" height="330" rx="30" fill="#F2F7FF"/>
+  <rect x="360" y="325" width="240" height="24" rx="12" fill="#B8C8EA"/>
+  <rect x="360" y="372" width="390" height="20" rx="10" fill="#C7D5EE"/>
+  <rect x="360" y="414" width="320" height="20" rx="10" fill="#D1DCF1"/>
+
+  <g transform="translate(1020,305)">
+    <path d="M140 0L174 70L250 100L174 130L140 200L106 130L30 100L106 70L140 0Z" fill="url(#spark)"/>
+    <path d="M20 35L35 67L67 82L35 97L20 129L5 97L-27 82L5 67L20 35Z" fill="#8AA9FF"/>
+    <path d="M242 26L258 60L292 76L258 92L242 126L226 92L192 76L226 60L242 26Z" fill="#72C9FF"/>
+  </g>
+
+  <g font-family="Inter, Arial, sans-serif" fill="#1E3461">
+    <text x="210" y="760" font-size="44" font-weight="800">DIGITAL OFFERS</text>
+    <text x="210" y="805" font-size="26" opacity="0.72">Software, subscriptions, and instant digital-value drops.</text>
+  </g>
+</svg>
