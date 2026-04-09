@@ -6,6 +6,7 @@ import { getCategoryIconName, getCategoryLabel } from '../utils/categories';
 import { AppIcon } from './AppIcon';
 import { DealEngagementAction, DealEngagementBar } from './DealEngagementBar';
 import { DealArtwork } from './DealArtwork';
+import { buildDealIconPngPath, normalizeDealIconName } from '../utils/dealIcons';
 
 interface DealCardProps {
   deal: Deal;
@@ -66,12 +67,8 @@ export const DealCard = React.memo(({
   const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
   const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
   const displayOfferText = deal.offerText?.trim() || 'Live Deal';
-  const normalizedIconName = typeof deal.iconName === 'string'
-    ? deal.iconName.trim().replace(/\.png$/i, '')
-    : '';
-  const customCardIconSrc = normalizedIconName
-    ? `/category-icons/${normalizedIconName}.png`
-    : '';
+  const normalizedIconName = normalizeDealIconName(deal.iconName);
+  const customCardIconSrc = buildDealIconPngPath(normalizedIconName);
   const cardArtworkSrc =
     customCardIconSrc
     || (typeof deal.cardImageUrl === 'string' ? deal.cardImageUrl.trim() : '')

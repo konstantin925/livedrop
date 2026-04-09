@@ -29,6 +29,12 @@ import {
   type DealStatusFilterId,
   type DealStatusTagId,
 } from './utils/dealStatus';
+import {
+  buildDealIconPngPath,
+  getKnownDealIconNames,
+  isKnownDealIconName,
+  normalizeDealIconName,
+} from './utils/dealIcons';
 import { isManagedMockOnlineDeal, mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
@@ -762,8 +768,8 @@ const isInlineDataUrl = (value?: string | null) =>
 const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
   if (!deal) return '';
 
-  const normalizedIconName = trimDealTextValue(deal.iconName).replace(/\.png$/i, '');
-  const customIconPath = normalizedIconName ? `/category-icons/${normalizedIconName}.png` : '';
+  const normalizedIconName = normalizeDealIconName(trimDealTextValue(deal.iconName));
+  const customIconPath = buildDealIconPngPath(normalizedIconName);
 
   return (
     customIconPath
@@ -2468,7 +2474,7 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
   const normalizedIconName = (
     trimDealTextValue(deal.iconName)
     || trimDealTextValue(deal.icon_name)
-  ).replace(/\.png$/i, '');
+  );
   const safeTags = (deal.tags ?? [])
     .map((tag) => trimDealTextValue(tag))
     .filter(Boolean);
@@ -2495,7 +2501,7 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
     productLink: linkSet.productUrl || undefined,
     affiliateUrl: linkSet.affiliateUrl || undefined,
     imageUrl: primaryImageUrl || undefined,
-    iconName: normalizedIconName || undefined,
+    iconName: normalizeDealIconName(normalizedIconName) || undefined,
     availability: trimDealTextValue(deal.availability) || trimDealTextValue(deal.stockStatus) || undefined,
     stockStatus: trimDealTextValue(deal.stockStatus) || trimDealTextValue(deal.availability) || undefined,
     sourceQuery: trimDealTextValue(deal.sourceQuery) || sourceUrlCandidate || undefined,
@@ -3501,7 +3507,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
   const normalizedIconName = (
     trimDealTextValue(input.iconName)
     || trimDealTextValue((input as Record<string, unknown>).icon_name)
-  ).replace(/\.png$/i, '') || undefined;
+  );
 
   return {
     id: trimDealTextValue(input.id) || createUuid(),
@@ -3511,7 +3517,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     adminTag: input.adminTag === 'featured' || input.adminTag === 'trending' ? input.adminTag : null,
     businessName: normalizedBusinessName,
     logoUrl: trimDealTextValue(input.logoUrl) || undefined,
-    iconName: normalizedIconName,
+    iconName: normalizeDealIconName(normalizedIconName) || undefined,
     cardImage: normalizedCardImageUrl,
     detailImage: normalizedDetailImageUrl,
     cardImageUrl: normalizedCardImageUrl,
@@ -3600,7 +3606,7 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     || trimDealTextValue(fallback?.detailImageUrl)
     || cardImageUrl
     || undefined;
-  const rowIconName = trimDealTextValue((row as Record<string, unknown>).icon_name).replace(/\.png$/i, '');
+  const rowIconName = normalizeDealIconName(trimDealTextValue((row as Record<string, unknown>).icon_name));
   const createdAt = parseDealTimestampOrFallback(
     row.created_at,
     fallback?.createdAt ?? Date.now(),
@@ -3647,7 +3653,7 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     adminTag: row.admin_tag ?? fallback?.adminTag ?? null,
     businessName: row.business_name ?? row.merchant ?? fallback?.businessName ?? DEAL_BUSINESS_FALLBACK,
     logoUrl: row.logo_url ?? fallback?.logoUrl ?? undefined,
-    iconName: rowIconName || trimDealTextValue(fallback?.iconName).replace(/\.png$/i, '') || undefined,
+    iconName: rowIconName || normalizeDealIconName(trimDealTextValue(fallback?.iconName)) || undefined,
     cardImage: cardImageUrl,
     detailImage: detailImageUrl,
     cardImageUrl,
@@ -3699,7 +3705,7 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const sourceProductUrl = deal.productUrl ?? null;
   const affiliateUrl = deal.affiliateUrl ?? null;
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
-  const iconName = trimDealTextValue(deal.iconName).replace(/\.png$/i, '') || null;
+  const iconName = normalizeDealIconName(trimDealTextValue(deal.iconName)) || null;
   const cardImageUrl =
     trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
@@ -4820,6 +4826,7 @@ export default function App() {
   const hasBootstrappedOnlineFilters = useRef(false);
   const hasRecoveredOnlineEmptyState = useRef(false);
   const onlineDebugSignatureRef = useRef('');
+  const iconAuditSignatureRef = useRef('');
   const autoRestoredHiddenDealsRef = useRef(false);
   const [onlineDealPage, setOnlineDealPage] = useState(0);
   const [loadingMoreOnlineDeals, setLoadingMoreOnlineDeals] = useState(false);
@@ -4886,6 +4893,52 @@ export default function App() {
       JSON.stringify(pendingDeleteDescriptors),
     );
   }, [pendingDeleteDescriptors]);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (deals.length === 0) return;
+
+    const iconAuditRows = deals
+      .map((deal) => {
+        const rawIconName = trimDealTextValue(deal.iconName);
+        if (!rawIconName) return null;
+        const normalizedIconName = normalizeDealIconName(rawIconName);
+        const expectedPath = buildDealIconPngPath(rawIconName);
+        return {
+          dealId: deal.id,
+          rawIconName,
+          normalizedIconName,
+          expectedPath,
+          isKnown: isKnownDealIconName(rawIconName),
+        };
+      })
+      .filter((entry): entry is {
+        dealId: string;
+        rawIconName: string;
+        normalizedIconName: string;
+        expectedPath: string;
+        isKnown: boolean;
+      } => Boolean(entry));
+
+    const mismatches = iconAuditRows.filter((entry) => !entry.isKnown);
+    const signature = JSON.stringify(mismatches.map((entry) => `${entry.dealId}:${entry.rawIconName}:${entry.normalizedIconName}`));
+    if (iconAuditSignatureRef.current === signature) {
+      return;
+    }
+    iconAuditSignatureRef.current = signature;
+
+    if (mismatches.length > 0) {
+      console.warn('[LiveDrop] deal iconName mismatch audit', {
+        mismatches,
+        knownIconNames: getKnownDealIconNames(),
+      });
+      return;
+    }
+
+    console.info('[LiveDrop] deal iconName audit passed', {
+      auditedDeals: iconAuditRows.length,
+      knownIconNames: getKnownDealIconNames(),
+    });
+  }, [deals]);
   const [selectedAIFinderUrl, setSelectedAIFinderUrl] = useState('');
   const [aiFinderUseDirectUrlFallback, setAiFinderUseDirectUrlFallback] = useState(false);
   const [showSearchMeter, setShowSearchMeter] = useState(false);
@@ -7521,7 +7574,7 @@ const deleteDealFromBackend = async (
       availability: normalizedItem.availability ?? normalizedItem.stockStatus ?? null,
       stockStatus: normalizedItem.stockStatus ?? normalizedItem.availability ?? null,
       imageUrl: normalizedItem.imageUrl || undefined,
-      iconName: trimDealTextValue(normalizedItem.iconName).replace(/\.png$/i, '') || undefined,
+      iconName: normalizeDealIconName(trimDealTextValue(normalizedItem.iconName)) || undefined,
       websiteUrl,
       productUrl: sourceProductUrl,
       hasTimer: true,
@@ -8964,8 +9017,8 @@ const deleteDealFromBackend = async (
       ...dealData,
       id: persistedEditingDealId ?? createUuid(),
       createdAt: relaunchedCreatedAt,
-      iconName: trimDealTextValue(dealData.iconName).replace(/\.png$/i, '')
-        || trimDealTextValue(existingDraft?.iconName).replace(/\.png$/i, '')
+      iconName: normalizeDealIconName(trimDealTextValue(dealData.iconName))
+        || normalizeDealIconName(trimDealTextValue(existingDraft?.iconName))
         || undefined,
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,

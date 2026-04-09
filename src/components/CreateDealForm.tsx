@@ -12,6 +12,7 @@ import {
   getDealStatusFilterLabel,
   sanitizeDealStatusTags,
 } from '../utils/dealStatus';
+import { normalizeDealIconName } from '../utils/dealIcons';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
@@ -364,7 +365,7 @@ const getInitialFormData = (
       customDuration: durationFields.customDuration,
       radiusMiles: inferredRadiusMiles,
       boostDeal: false,
-      iconName: normalizeTextValue(initialData.iconName),
+      iconName: normalizeDealIconName(normalizeTextValue(initialData.iconName)),
       cardImageUrl: pickCardImageValue(initialData),
       detailImageUrl: pickDetailImageValue(initialData),
       originalPrice: formatPriceInput(normalizedOriginalPrice),
@@ -580,7 +581,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
-      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
+      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:
@@ -655,7 +656,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title) || (isOnline ? 'Your online drop title' : 'Your Deal Title'),
       description: normalizeTextValue(formData.description) || 'Your deal description will appear here in the preview.',
       offerText: offerText || 'SPECIAL OFFER',
-      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
+      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
       distance: isOnline ? 'Online' : `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi`,
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
@@ -734,7 +735,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       durationPreset: formData.durationPreset,
       customDuration: normalizeTextValue(formData.customDuration).trim(),
       radiusMiles: normalizeTextValue(formData.radiusMiles).trim(),
-      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, ''),
+      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)),
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim(),
       detailImageUrl: normalizeTextValue(formData.detailImageUrl).trim(),
     });
@@ -783,7 +784,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentPrice: normalizedCurrentPrice,
       originalPrice: normalizedOriginalPrice,
       discountPercent: normalizedDiscountPercent,
-      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
+      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:

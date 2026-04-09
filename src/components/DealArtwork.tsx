@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
 import type { IconName } from './AppIcon';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
+import { buildDealIconCandidatePaths, buildDealIconPngPath, normalizeDealIconName } from '../utils/dealIcons';
 
 interface DealArtworkProps {
   src?: string | null;
@@ -19,28 +20,6 @@ interface DealArtworkProps {
 }
 
 const failedImageSrcCache = new Set<string>();
-const buildCategoryIconPath = (iconFileStem: string) =>
-  `/category-icons/${encodeURIComponent(iconFileStem).replace(/%2F/gi, '')}.png`;
-
-const toCategoryIconCandidates = (value: string) => {
-  const stem = value.trim().replace(/\.png$/i, '');
-  if (!stem) return [];
-
-  const variants = [
-    stem,
-    stem.toLowerCase(),
-    stem.replace(/[-_]+/g, ' '),
-    stem.replace(/[-_]+/g, ' ').toLowerCase(),
-    stem.replace(/\s+/g, '-'),
-    stem.replace(/\s+/g, '-').toLowerCase(),
-    stem.replace(/\s+/g, '_'),
-    stem.replace(/\s+/g, '_').toLowerCase(),
-  ]
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(variants.map((entry) => buildCategoryIconPath(entry))));
-};
 
 const findFirstLoadableCandidateIndex = (candidates: string[], startIndex = 0) => {
   for (let index = Math.max(0, startIndex); index < candidates.length; index += 1) {
@@ -73,27 +52,27 @@ export const DealArtwork = React.memo(({
     [src],
   );
   const normalizedIconName = useMemo(
-    () => (typeof iconName === 'string' ? iconName.trim().replace(/\.png$/i, '') : ''),
+    () => normalizeDealIconName(iconName),
     [iconName],
   );
   const customIconSrc = useMemo(
-    () => (normalizedIconName ? `/category-icons/${normalizedIconName}.png` : ''),
+    () => buildDealIconPngPath(normalizedIconName),
     [normalizedIconName],
   );
   const imageCandidates = useMemo(() => {
     const candidates: string[] = [];
     if (normalizedIconName) {
-      candidates.push(...toCategoryIconCandidates(normalizedIconName));
+      candidates.push(...buildDealIconCandidatePaths(normalizedIconName));
     }
 
     if (normalizedSrc) {
       candidates.push(normalizedSrc);
-      const iconSrcMatch = normalizedSrc.match(/^\/category-icons\/(.+)\.png$/i);
+      const iconSrcMatch = normalizedSrc.match(/\/category-icons\/(.+)\.(png|jpg|jpeg|webp|svg)$/i);
       if (iconSrcMatch?.[1]) {
         try {
-          candidates.push(...toCategoryIconCandidates(decodeURIComponent(iconSrcMatch[1])));
+          candidates.push(...buildDealIconCandidatePaths(decodeURIComponent(iconSrcMatch[1])));
         } catch {
-          candidates.push(...toCategoryIconCandidates(iconSrcMatch[1]));
+          candidates.push(...buildDealIconCandidatePaths(iconSrcMatch[1]));
         }
       }
     }
