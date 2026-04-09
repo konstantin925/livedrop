@@ -1,6 +1,6 @@
 import React from 'react';
 
-type IconName =
+export type IconName =
   | 'live'
   | 'play'
   | 'online'

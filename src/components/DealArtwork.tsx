@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
+import type { IconName } from './AppIcon';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 
 interface DealArtworkProps {
@@ -10,12 +11,45 @@ interface DealArtworkProps {
   className?: string;
   imageClassName?: string;
   fallbackClassName?: string;
+  iconName?: string | null;
+  fallbackIconName?: IconName;
   preferredWidth?: number;
   sizes?: string;
   fetchPriority?: 'high' | 'low' | 'auto';
 }
 
 const failedImageSrcCache = new Set<string>();
+const buildCategoryIconPath = (iconFileStem: string) =>
+  `/category-icons/${encodeURIComponent(iconFileStem).replace(/%2F/gi, '')}.png`;
+
+const toCategoryIconCandidates = (value: string) => {
+  const stem = value.trim().replace(/\.png$/i, '');
+  if (!stem) return [];
+
+  const variants = [
+    stem,
+    stem.toLowerCase(),
+    stem.replace(/[-_]+/g, ' '),
+    stem.replace(/[-_]+/g, ' ').toLowerCase(),
+    stem.replace(/\s+/g, '-'),
+    stem.replace(/\s+/g, '-').toLowerCase(),
+    stem.replace(/\s+/g, '_'),
+    stem.replace(/\s+/g, '_').toLowerCase(),
+  ]
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(variants.map((entry) => buildCategoryIconPath(entry))));
+};
+
+const findFirstLoadableCandidateIndex = (candidates: string[], startIndex = 0) => {
+  for (let index = Math.max(0, startIndex); index < candidates.length; index += 1) {
+    if (!failedImageSrcCache.has(candidates[index])) {
+      return index;
+    }
+  }
+  return -1;
+};
 
 export const DealArtwork = React.memo(({
   src,
@@ -25,28 +59,99 @@ export const DealArtwork = React.memo(({
   className = '',
   imageClassName = '',
   fallbackClassName = '',
+  iconName,
+  fallbackIconName = 'deal',
   preferredWidth,
   sizes,
   fetchPriority = 'low',
 }: DealArtworkProps) => {
   const [imageFailed, setImageFailed] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageCandidateIndex, setImageCandidateIndex] = useState(0);
   const normalizedSrc = useMemo(
     () => (typeof src === 'string' ? src.trim() : ''),
     [src],
   );
+  const normalizedIconName = useMemo(
+    () => (typeof iconName === 'string' ? iconName.trim().replace(/\.png$/i, '') : ''),
+    [iconName],
+  );
+  const customIconSrc = useMemo(
+    () => (normalizedIconName ? `/category-icons/${normalizedIconName}.png` : ''),
+    [normalizedIconName],
+  );
+  const imageCandidates = useMemo(() => {
+    const candidates: string[] = [];
+    if (normalizedIconName) {
+      candidates.push(...toCategoryIconCandidates(normalizedIconName));
+    }
+
+    if (normalizedSrc) {
+      candidates.push(normalizedSrc);
+      const iconSrcMatch = normalizedSrc.match(/^\/category-icons\/(.+)\.png$/i);
+      if (iconSrcMatch?.[1]) {
+        try {
+          candidates.push(...toCategoryIconCandidates(decodeURIComponent(iconSrcMatch[1])));
+        } catch {
+          candidates.push(...toCategoryIconCandidates(iconSrcMatch[1]));
+        }
+      }
+    }
+
+    if (customIconSrc) {
+      candidates.unshift(customIconSrc);
+    }
+
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [customIconSrc, normalizedIconName, normalizedSrc]);
+  const effectiveSrc = imageCandidates[imageCandidateIndex] || '';
   const optimizedSrc = useMemo(() => {
-    return getOptimizedDealImageUrl(normalizedSrc, { width: preferredWidth, fit });
-  }, [fit, normalizedSrc, preferredWidth]);
+    return getOptimizedDealImageUrl(effectiveSrc, { width: preferredWidth, fit });
+  }, [effectiveSrc, fit, preferredWidth]);
   const optimizedSrcSet = useMemo(() => {
-    return getOptimizedDealImageSrcSet(normalizedSrc, { width: preferredWidth, fit });
-  }, [fit, normalizedSrc, preferredWidth]);
-  const showImage = Boolean(normalizedSrc) && !imageFailed;
+    return getOptimizedDealImageSrcSet(effectiveSrc, { width: preferredWidth, fit });
+  }, [effectiveSrc, fit, preferredWidth]);
+  const showImage = Boolean(effectiveSrc) && !imageFailed;
 
   useEffect(() => {
-    setImageFailed(Boolean(normalizedSrc) && failedImageSrcCache.has(normalizedSrc));
+    const nextIndex = findFirstLoadableCandidateIndex(imageCandidates);
+    if (nextIndex >= 0) {
+      setImageCandidateIndex(nextIndex);
+      setImageFailed(false);
+      setImageLoaded(false);
+      return;
+    }
+
+    setImageCandidateIndex(0);
+    setImageFailed(imageCandidates.length > 0);
     setImageLoaded(false);
-  }, [normalizedSrc]);
+  }, [imageCandidates]);
+
+  useEffect(() => {
+    if (!effectiveSrc) {
+      setImageFailed(false);
+      setImageLoaded(false);
+      return;
+    }
+
+    const didPreviouslyFail = failedImageSrcCache.has(effectiveSrc);
+    if (!didPreviouslyFail) {
+      setImageFailed(false);
+      setImageLoaded(false);
+      return;
+    }
+
+    const nextIndex = findFirstLoadableCandidateIndex(imageCandidates, imageCandidateIndex + 1);
+    if (nextIndex >= 0) {
+      setImageCandidateIndex(nextIndex);
+      setImageFailed(false);
+      setImageLoaded(false);
+      return;
+    }
+
+    setImageFailed(true);
+    setImageLoaded(false);
+  }, [effectiveSrc, imageCandidateIndex, imageCandidates]);
 
   return (
     <div className={`h-full w-full ${className}`}>
@@ -56,7 +161,7 @@ export const DealArtwork = React.memo(({
             <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-slate-100 via-white to-indigo-50" />
           ) : null}
           <img
-            src={optimizedSrc || normalizedSrc}
+            src={optimizedSrc || effectiveSrc}
             srcSet={optimizedSrcSet}
             sizes={sizes}
             alt={alt}
@@ -65,8 +170,15 @@ export const DealArtwork = React.memo(({
             fetchPriority={fetchPriority}
             onLoad={() => setImageLoaded(true)}
             onError={() => {
-              if (normalizedSrc) {
-                failedImageSrcCache.add(normalizedSrc);
+              if (effectiveSrc) {
+                failedImageSrcCache.add(effectiveSrc);
+              }
+              const nextCandidateIndex = findFirstLoadableCandidateIndex(imageCandidates, imageCandidateIndex + 1);
+              if (nextCandidateIndex >= 0) {
+                setImageCandidateIndex(nextCandidateIndex);
+                setImageLoaded(false);
+                setImageFailed(false);
+                return;
               }
               setImageFailed(true);
             }}
@@ -75,7 +187,7 @@ export const DealArtwork = React.memo(({
         </div>
       ) : (
         <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100 text-slate-300 ${fallbackClassName}`}>
-          <AppIcon name="deal" size={iconSize} />
+          <AppIcon name={fallbackIconName} size={iconSize} />
         </div>
       )}
     </div>

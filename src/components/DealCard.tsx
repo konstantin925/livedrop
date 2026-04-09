@@ -66,6 +66,19 @@ export const DealCard = React.memo(({
   const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
   const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
   const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+  const normalizedIconName = typeof deal.iconName === 'string'
+    ? deal.iconName.trim().replace(/\.png$/i, '')
+    : '';
+  const customCardIconSrc = normalizedIconName
+    ? `/category-icons/${normalizedIconName}.png`
+    : '';
+  const cardArtworkSrc =
+    customCardIconSrc
+    || (typeof deal.cardImageUrl === 'string' ? deal.cardImageUrl.trim() : '')
+    || (typeof deal.cardImage === 'string' ? deal.cardImage.trim() : '')
+    || (typeof deal.imageUrl === 'string' ? deal.imageUrl.trim() : '')
+    || undefined;
+  const fallbackCategoryIconName = getCategoryIconName(deal.category);
   const parseOfferPrices = () => {
     if (!displayOfferText) return { current: null, original: null };
     const match = displayOfferText.match(
@@ -115,7 +128,9 @@ export const DealCard = React.memo(({
       }`}>
         <div className="relative aspect-[4/3] w-full bg-slate-50">
           <DealArtwork
-            src={deal.imageUrl}
+            src={cardArtworkSrc}
+            iconName={normalizedIconName || undefined}
+            fallbackIconName={fallbackCategoryIconName}
             alt={displayTitle}
             preferredWidth={360}
             sizes="(max-width: 520px) 90vw, 340px"
@@ -212,7 +227,9 @@ export const DealCard = React.memo(({
     } ${isViewed ? 'opacity-90 border-slate-200' : ''}`}>
       <div className="relative aspect-[4/3] w-full bg-slate-50">
         <DealArtwork
-          src={deal.imageUrl}
+          src={cardArtworkSrc}
+          iconName={normalizedIconName || undefined}
+          fallbackIconName={fallbackCategoryIconName}
           alt={displayTitle}
           preferredWidth={520}
           sizes="(max-width: 640px) 90vw, 420px"

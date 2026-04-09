@@ -39,7 +39,16 @@ import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { DealEngagementAction, DealEngagementBar } from './components/DealEngagementBar';
 import { DealArtwork } from './components/DealArtwork';
 import { DealEmptyState } from './components/DealEmptyState';
-import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupabaseUrl, supabase, supabaseConfigIssue, supabaseEdgeClient } from './lib/supabase';
+import {
+  getAuthRedirectUrl,
+  hasSupabaseAnonKey,
+  hasSupabaseConfig,
+  resolvedSupabaseUrl,
+  supabase,
+  supabaseConfigIssue,
+  supabaseEdgeClient,
+  supabaseRuntimeDiagnostics,
+} from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from './utils/dealImages';
 import { AppIcon } from './components/AppIcon';
@@ -52,6 +61,7 @@ const CreateDealForm = React.lazy(() =>
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const DEALS_STORAGE_BACKUP_KEY = 'livedrop_deals_backup';
+const DEAL_IMAGES_STORAGE_KEY = 'livedrop_deal_images';
 const CLAIMS_STORAGE_KEY = 'livedrop_claims';
 const CATALOG_STORAGE_KEY = 'livedrop_catalog';
 const NOTIFICATIONS_STORAGE_KEY = 'livedrop_notifications';
@@ -746,19 +756,159 @@ const isStoredManagedLocalSeedDeal = (deal: Partial<Deal>) =>
 
 const INLINE_IMAGE_DATA_URL_MAX_LENGTH = 180_000;
 
+const isInlineDataUrl = (value?: string | null) =>
+  typeof value === 'string' && value.startsWith('data:image/');
+
+const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
+  if (!deal) return '';
+
+  const normalizedIconName = trimDealTextValue(deal.iconName).replace(/\.png$/i, '');
+  const customIconPath = normalizedIconName ? `/category-icons/${normalizedIconName}.png` : '';
+
+  return (
+    customIconPath
+    || trimDealTextValue(deal.cardImageUrl)
+    || trimDealTextValue(deal.cardImage)
+    || trimDealTextValue(deal.imageUrl)
+    || ''
+  );
+};
+
+const getDealDetailImageSource = (deal?: Partial<Deal> | null) => {
+  if (!deal) return '';
+
+  return (
+    trimDealTextValue(deal.detailImageUrl)
+    || trimDealTextValue(deal.detailImage)
+    || trimDealTextValue(deal.cardImageUrl)
+    || trimDealTextValue(deal.cardImage)
+    || trimDealTextValue(deal.imageUrl)
+    || ''
+  );
+};
+
+type StoredDealImageSnapshotEntry = {
+  cardImageUrl?: string;
+  detailImageUrl?: string;
+};
+
+const parseStoredDealImageSnapshot = (raw: string | null): Record<string, StoredDealImageSnapshotEntry> => {
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const normalized: Record<string, StoredDealImageSnapshotEntry> = {};
+    Object.entries(parsed as Record<string, unknown>).forEach(([dealId, value]) => {
+      if (!dealId) {
+        return;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return;
+      }
+
+      const valueRecord = value as Record<string, unknown>;
+      const cardImageUrl = trimDealTextValue(valueRecord.cardImageUrl);
+      const detailImageUrl = trimDealTextValue(valueRecord.detailImageUrl);
+      if (!cardImageUrl && !detailImageUrl) {
+        return;
+      }
+
+      normalized[dealId] = {
+        cardImageUrl: cardImageUrl || undefined,
+        detailImageUrl: detailImageUrl || cardImageUrl || undefined,
+      };
+    });
+
+    return normalized;
+  } catch {
+    return {};
+  }
+};
+
+const buildDealImageSnapshot = (deals: Deal[]): Record<string, StoredDealImageSnapshotEntry> => {
+  const snapshot: Record<string, StoredDealImageSnapshotEntry> = {};
+
+  deals.forEach((deal) => {
+    const dealId = trimDealTextValue(deal.id);
+    if (!dealId) {
+      return;
+    }
+
+    const cardImageUrl = getDealCardImageSource(deal);
+    const detailImageUrl = getDealDetailImageSource(deal);
+    if (!cardImageUrl && !detailImageUrl) {
+      return;
+    }
+
+    snapshot[dealId] = {
+      cardImageUrl: cardImageUrl || undefined,
+      detailImageUrl: detailImageUrl || cardImageUrl || undefined,
+    };
+  });
+
+  return snapshot;
+};
+
+const readStoredDealImageSnapshot = () =>
+  parseStoredDealImageSnapshot(localStorage.getItem(DEAL_IMAGES_STORAGE_KEY));
+
+const applyStoredDealImageSnapshot = (deals: Deal[]): Deal[] => {
+  const imageSnapshot = readStoredDealImageSnapshot();
+  if (Object.keys(imageSnapshot).length === 0) {
+    return deals;
+  }
+
+  return deals.map((deal) => {
+    const override = imageSnapshot[deal.id];
+    if (!override) {
+      return deal;
+    }
+
+    const cardImageUrl = trimDealTextValue(override.cardImageUrl) || getDealCardImageSource(deal) || undefined;
+    const detailImageUrl =
+      trimDealTextValue(override.detailImageUrl) || getDealDetailImageSource(deal) || cardImageUrl;
+
+    return sanitizeDealRecord({
+      ...deal,
+      cardImage: cardImageUrl,
+      detailImage: detailImageUrl,
+      cardImageUrl,
+      detailImageUrl,
+      imageUrl: cardImageUrl,
+    }) ?? deal;
+  });
+};
+
 const trimLargeInlineImageForStorage = (deal: Deal): Deal => {
-  const imageUrl = typeof deal.imageUrl === 'string' ? deal.imageUrl.trim() : '';
-  if (!imageUrl.startsWith('data:image/')) {
+  const cardImageUrl = getDealCardImageSource(deal);
+  const detailImageUrl = getDealDetailImageSource(deal);
+  const hasLargeCardInlineImage =
+    isInlineDataUrl(cardImageUrl) && cardImageUrl.length > INLINE_IMAGE_DATA_URL_MAX_LENGTH;
+  const hasLargeDetailInlineImage =
+    isInlineDataUrl(detailImageUrl) && detailImageUrl.length > INLINE_IMAGE_DATA_URL_MAX_LENGTH;
+
+  if (!hasLargeCardInlineImage && !hasLargeDetailInlineImage) {
     return deal;
   }
 
-  if (imageUrl.length <= INLINE_IMAGE_DATA_URL_MAX_LENGTH) {
-    return deal;
-  }
+  const nextCardImageUrl = hasLargeCardInlineImage ? undefined : cardImageUrl || undefined;
+  const nextDetailImageUrl = hasLargeDetailInlineImage
+    ? nextCardImageUrl
+    : detailImageUrl || nextCardImageUrl;
 
   return {
     ...deal,
-    imageUrl: undefined,
+    cardImage: nextCardImageUrl,
+    detailImage: nextDetailImageUrl,
+    cardImageUrl: nextCardImageUrl,
+    detailImageUrl: nextDetailImageUrl,
+    imageUrl: nextCardImageUrl,
   };
 };
 
@@ -795,35 +945,53 @@ const buildDealsStorageSnapshot = (deals: Deal[]) =>
 
 const persistDealsSnapshot = (deals: Deal[]) => {
   const snapshot = buildDealsStorageSnapshot(deals);
+  const imageSnapshot = buildDealImageSnapshot(snapshot);
+  const persistImageSnapshot = () => {
+    if (Object.keys(imageSnapshot).length === 0) {
+      safeRemoveLocalStorageItem(DEAL_IMAGES_STORAGE_KEY);
+      return true;
+    }
+    return safeSetLocalStorageItem(DEAL_IMAGES_STORAGE_KEY, JSON.stringify(imageSnapshot));
+  };
   const serializedSnapshot = JSON.stringify(snapshot);
 
   const wrotePrimary = safeSetLocalStorageItem(DEALS_STORAGE_KEY, serializedSnapshot);
   if (wrotePrimary) {
     safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, serializedSnapshot);
+    persistImageSnapshot();
     return true;
   }
 
-  const compactSnapshot = snapshot.map((deal) => ({
-    ...deal,
-    imageUrl:
-      typeof deal.imageUrl === 'string' && deal.imageUrl.startsWith('data:image/')
-        ? undefined
-        : deal.imageUrl,
-  }));
+  const compactSnapshot = snapshot.map((deal) => {
+    const cardImageValue = getDealCardImageSource(deal) || undefined;
+    const detailImageValue = getDealDetailImageSource(deal) || cardImageValue;
+    const compactCardImage = isInlineDataUrl(cardImageValue) ? undefined : cardImageValue;
+    const compactDetailImage = isInlineDataUrl(detailImageValue) ? compactCardImage : detailImageValue;
+
+    return {
+      ...deal,
+      cardImage: compactCardImage,
+      detailImage: compactDetailImage,
+      cardImageUrl: compactCardImage,
+      detailImageUrl: compactDetailImage,
+      imageUrl: compactCardImage,
+    };
+  });
   const compactSerializedSnapshot = JSON.stringify(compactSnapshot);
   const wroteCompactPrimary = safeSetLocalStorageItem(DEALS_STORAGE_KEY, compactSerializedSnapshot);
   if (wroteCompactPrimary) {
     safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, compactSerializedSnapshot);
+    persistImageSnapshot();
   }
   return wroteCompactPrimary;
 };
 
 const readStoredDeals = (): Deal[] => {
   const primary = parseStoredDealsPayload(localStorage.getItem(DEALS_STORAGE_KEY));
-  if (primary.ok) return primary.deals;
+  if (primary.ok) return applyStoredDealImageSnapshot(primary.deals);
 
   const backup = parseStoredDealsPayload(localStorage.getItem(DEALS_STORAGE_BACKUP_KEY));
-  return backup.ok ? backup.deals : [];
+  return backup.ok ? applyStoredDealImageSnapshot(backup.deals) : [];
 };
 
 const readSharedDealsFastCache = (): Deal[] => {
@@ -1376,6 +1544,8 @@ type BulkImportDealInput = {
   stockStatus?: string;
   availability?: string;
   imageUrl?: string;
+  iconName?: string;
+  icon_name?: string;
   galleryImages?: string[];
   productLink?: string;
   productUrl?: string;
@@ -2295,6 +2465,10 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
   const primaryImageUrl = trimDealTextValue(deal.imageUrl)
     || (deal.galleryImages ?? []).map((image) => trimDealTextValue(image)).find(Boolean)
     || '';
+  const normalizedIconName = (
+    trimDealTextValue(deal.iconName)
+    || trimDealTextValue(deal.icon_name)
+  ).replace(/\.png$/i, '');
   const safeTags = (deal.tags ?? [])
     .map((tag) => trimDealTextValue(tag))
     .filter(Boolean);
@@ -2321,6 +2495,7 @@ const normalizeImportedDealInput = (deal?: BulkImportDealInput | null): BulkImpo
     productLink: linkSet.productUrl || undefined,
     affiliateUrl: linkSet.affiliateUrl || undefined,
     imageUrl: primaryImageUrl || undefined,
+    iconName: normalizedIconName || undefined,
     availability: trimDealTextValue(deal.availability) || trimDealTextValue(deal.stockStatus) || undefined,
     stockStatus: trimDealTextValue(deal.stockStatus) || trimDealTextValue(deal.availability) || undefined,
     sourceQuery: trimDealTextValue(deal.sourceQuery) || sourceUrlCandidate || undefined,
@@ -2732,6 +2907,7 @@ type DealRow = {
   business_name: string | null;
   merchant: string | null;
   logo_url: string | null;
+  icon_name: string | null;
   image_url: string | null;
   image: string | null;
   title: string;
@@ -2817,6 +2993,7 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
   'admin_tag',
   'business_name',
   'merchant',
+  'icon_name',
   'image_url',
   'image',
   'title',
@@ -2858,7 +3035,9 @@ const PUBLIC_DEALS_FEED_FIELDS = [
   'admin_tag',
   'business_name',
   'merchant',
+  'icon_name',
   'image_url',
+  'image',
   'title',
   'description',
   'offer_text',
@@ -2896,7 +3075,9 @@ const PUBLIC_DEALS_FAST_FEED_FIELDS = [
   'admin_tag',
   'business_name',
   'merchant',
+  'icon_name',
   'image_url',
+  'image',
   'title',
   'description',
   'offer_text',
@@ -3116,7 +3297,11 @@ const getDefaultDealExpiry = (createdAt: number, businessType: Deal['businessTyp
 
 const getDealDataPresenceScore = (deal: Deal) => {
   let score = 0;
-  if (deal.imageUrl) score += 3;
+  const cardImageSource = getDealCardImageSource(deal);
+  const detailImageSource = getDealDetailImageSource(deal);
+  if (cardImageSource) score += 2;
+  if (detailImageSource) score += 2;
+  if (cardImageSource && detailImageSource && cardImageSource !== detailImageSource) score += 1;
   if (deal.affiliateUrl || deal.productUrl || deal.websiteUrl) score += 3;
   if (deal.description !== DEAL_DESCRIPTION_FALLBACK) score += 2;
   if (deal.category !== DEAL_CATEGORY_FALLBACK) score += 1;
@@ -3211,6 +3396,10 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     input.title,
     input.description,
     input.offerText,
+    input.cardImage,
+    input.detailImage,
+    input.cardImageUrl,
+    input.detailImageUrl,
     input.imageUrl,
     input.affiliateUrl,
     input.productUrl,
@@ -3257,6 +3446,16 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     DEAL_BUSINESS_FALLBACK,
     DEAL_MAX_TEXT_LENGTH.businessName,
   );
+  const normalizedCardImageUrl =
+    trimDealTextValue(input.cardImageUrl)
+    || trimDealTextValue(input.cardImage)
+    || trimDealTextValue(input.imageUrl)
+    || undefined;
+  const normalizedDetailImageUrl =
+    trimDealTextValue(input.detailImageUrl)
+    || trimDealTextValue(input.detailImage)
+    || normalizedCardImageUrl
+    || undefined;
   const normalizedTitle = trimDealTextWithFallback(
     input.title,
     DEAL_TITLE_FALLBACK,
@@ -3299,6 +3498,10 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     ? normalizeSubcategoryValue(input.onlineSubcategory, 'online', normalizedCategory) || undefined
     : undefined;
   const normalizedStatusTags = sanitizeDealStatusTags(input.statusTags);
+  const normalizedIconName = (
+    trimDealTextValue(input.iconName)
+    || trimDealTextValue((input as Record<string, unknown>).icon_name)
+  ).replace(/\.png$/i, '') || undefined;
 
   return {
     id: trimDealTextValue(input.id) || createUuid(),
@@ -3308,7 +3511,12 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     adminTag: input.adminTag === 'featured' || input.adminTag === 'trending' ? input.adminTag : null,
     businessName: normalizedBusinessName,
     logoUrl: trimDealTextValue(input.logoUrl) || undefined,
-    imageUrl: trimDealTextValue(input.imageUrl) || undefined,
+    iconName: normalizedIconName,
+    cardImage: normalizedCardImageUrl,
+    detailImage: normalizedDetailImageUrl,
+    cardImageUrl: normalizedCardImageUrl,
+    detailImageUrl: normalizedDetailImageUrl,
+    imageUrl: normalizedCardImageUrl,
     title: normalizedTitle,
     description: normalizedDescription,
     offerText: normalizedOfferText,
@@ -3379,6 +3587,20 @@ const inferDealBusinessType = (row: Partial<DealRow>, fallback?: Deal['businessT
 
 const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal => {
   const businessType = inferDealBusinessType(row, fallback?.businessType);
+  const cardImageUrl =
+    trimDealTextValue(row.image_url)
+    || trimDealTextValue(row.image)
+    || trimDealTextValue(fallback?.cardImage)
+    || trimDealTextValue(fallback?.cardImageUrl)
+    || trimDealTextValue(fallback?.imageUrl)
+    || undefined;
+  const detailImageUrl =
+    trimDealTextValue(row.image)
+    || trimDealTextValue(fallback?.detailImage)
+    || trimDealTextValue(fallback?.detailImageUrl)
+    || cardImageUrl
+    || undefined;
+  const rowIconName = trimDealTextValue((row as Record<string, unknown>).icon_name).replace(/\.png$/i, '');
   const createdAt = parseDealTimestampOrFallback(
     row.created_at,
     fallback?.createdAt ?? Date.now(),
@@ -3425,7 +3647,12 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     adminTag: row.admin_tag ?? fallback?.adminTag ?? null,
     businessName: row.business_name ?? row.merchant ?? fallback?.businessName ?? DEAL_BUSINESS_FALLBACK,
     logoUrl: row.logo_url ?? fallback?.logoUrl ?? undefined,
-    imageUrl: row.image_url ?? row.image ?? fallback?.imageUrl ?? undefined,
+    iconName: rowIconName || trimDealTextValue(fallback?.iconName).replace(/\.png$/i, '') || undefined,
+    cardImage: cardImageUrl,
+    detailImage: detailImageUrl,
+    cardImageUrl,
+    detailImageUrl,
+    imageUrl: cardImageUrl,
     title: row.title ?? fallback?.title ?? DEAL_TITLE_FALLBACK,
     description: row.description ?? fallback?.description ?? DEAL_DESCRIPTION_FALLBACK,
     offerText: row.offer_text ?? fallback?.offerText ?? DEAL_OFFER_FALLBACK,
@@ -3472,6 +3699,16 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const sourceProductUrl = deal.productUrl ?? null;
   const affiliateUrl = deal.affiliateUrl ?? null;
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
+  const iconName = trimDealTextValue(deal.iconName).replace(/\.png$/i, '') || null;
+  const cardImageUrl =
+    trimDealTextValue(deal.cardImageUrl)
+    || trimDealTextValue(deal.cardImage)
+    || trimDealTextValue(deal.imageUrl)
+    || null;
+  const detailImageUrl =
+    trimDealTextValue(deal.detailImageUrl)
+    || trimDealTextValue(deal.detailImage)
+    || cardImageUrl;
 
   return {
     id: ensureUuid(deal.id),
@@ -3482,8 +3719,9 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     business_name: deal.businessName,
     merchant: deal.businessName,
     logo_url: deal.logoUrl ?? null,
-    image_url: deal.imageUrl ?? null,
-    image: deal.imageUrl ?? null,
+    icon_name: iconName,
+    image_url: cardImageUrl,
+    image: detailImageUrl,
     title: deal.title,
     description: deal.description,
     offer_text: deal.offerText,
@@ -4223,6 +4461,7 @@ const buildSharedWriteLogDetail = (options: {
     payloadKeys: options.payloadKeys ?? [],
     missingColumns: options.missingColumns ?? [],
     requiredSchemaMissingColumns: options.requiredSchemaMissingColumns ?? [],
+    runtimeDiagnostics: supabaseRuntimeDiagnostics,
     payload: options.payload,
     error: options.error ? getSupabaseErrorContext(options.error) : null,
   });
@@ -4339,6 +4578,11 @@ const parseBulkImportDeals = (input: string): BulkImportDealInput[] => {
       stockStatus: typeof item.stockStatus === 'string' ? item.stockStatus.trim() : undefined,
       availability: typeof item.availability === 'string' ? item.availability.trim() : undefined,
       imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl.trim() : undefined,
+      iconName: typeof item.iconName === 'string'
+        ? item.iconName.trim()
+        : typeof item.icon_name === 'string'
+          ? item.icon_name.trim()
+          : undefined,
       galleryImages: Array.isArray(item.galleryImages)
         ? item.galleryImages.filter((value) => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
         : undefined,
@@ -4747,6 +4991,28 @@ export default function App() {
   const aiFinderDirectUrl = aiFinderSourceValidation.url ?? '';
   const aiFinderHasDirectUrlFallback = aiFinderUseDirectUrlFallback && Boolean(aiFinderDirectUrl);
   const aiFinderSelectedSourceUrl = aiFinderDirectUrl;
+  const SHARED_SCHEMA_LOOKUP_TIMEOUT_MS = 8_000;
+  const SHARED_WRITE_TIMEOUT_MS = 18_000;
+  const runWithTimeout = async <T,>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    label: string,
+  ): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = globalThis.setTimeout(() => {
+        reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+      }
+    }
+  };
 
   const getLocalCloudState = () => ({
     claims: readStoredClaims(),
@@ -5327,7 +5593,32 @@ export default function App() {
     row: DealRow,
     operation: 'insert' | 'update' | 'upsert' | 'bulk-upsert',
   ): Promise<DealsSchemaPreflightResult> => {
-    const { columns: schemaColumns, source: schemaSource } = await fetchDealsSchemaColumns();
+    let schemaColumns: string[] = [...PUBLIC_DEALS_SCHEMA_FIELDS];
+    let schemaSource: DealsSchemaPreflightResult['schemaSource'] = 'local-fallback';
+    try {
+      const schemaResult = await runWithTimeout(
+        fetchDealsSchemaColumns(),
+        SHARED_SCHEMA_LOOKUP_TIMEOUT_MS,
+        'Deals schema preflight',
+      );
+      schemaColumns = schemaResult.columns;
+      schemaSource = schemaResult.source;
+    } catch (error) {
+      console.warn('[LiveDrop] Deals schema preflight fallback engaged', {
+        operation,
+        error,
+      });
+      pushAdminLog(
+        'info',
+        `Schema preflight timed out for ${operation}; using local fallback column map.`,
+        buildSharedWriteLogDetail({
+          operation,
+          schemaColumns,
+          schemaSource,
+          error,
+        }),
+      );
+    }
     const normalizedRow = normalizeDealRowForSchema(row, schemaColumns);
     const { payload, extraFieldsRemoved } = sanitizeDealRowForPublish(normalizedRow, schemaColumns);
     const payloadKeys = Object.keys(payload);
@@ -5404,6 +5695,17 @@ export default function App() {
   ): SharedPublishFailure => {
     const { payload } = sanitizeDealRowForPublish(mapDealToDealRow(deal, authUser?.id ?? null));
     const errorContext = getSupabaseErrorContext(error);
+    const failedToFetch = errorContext.reason.toLowerCase().includes('failed to fetch');
+    const diagnosticReasonSuffix = failedToFetch
+      ? [
+          `Runtime URL host: ${supabaseRuntimeDiagnostics.urlHost}`,
+          `Runtime URL valid: ${supabaseRuntimeDiagnostics.urlLooksValid ? 'yes' : 'no'}`,
+          `Runtime anon key present: ${supabaseRuntimeDiagnostics.anonKeyPresent ? 'yes' : 'no'}`,
+        ].join(' | ')
+      : '';
+    const reason = diagnosticReasonSuffix
+      ? `${errorContext.reason} | ${diagnosticReasonSuffix}`
+      : errorContext.reason;
 
     return {
       deal,
@@ -5412,7 +5714,7 @@ export default function App() {
       projectUrl: resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)',
       schema: DEALS_SCHEMA,
       table: DEALS_TABLE,
-      reason: errorContext.reason,
+      reason,
       errorCode: errorContext.code,
       errorDetails: errorContext.details,
       errorHint: errorContext.hint,
@@ -6045,6 +6347,7 @@ export default function App() {
         'business_type',
         'business_name',
         'merchant',
+        'icon_name',
         'image_url',
         'image',
         'title',
@@ -7218,6 +7521,7 @@ const deleteDealFromBackend = async (
       availability: normalizedItem.availability ?? normalizedItem.stockStatus ?? null,
       stockStatus: normalizedItem.stockStatus ?? normalizedItem.availability ?? null,
       imageUrl: normalizedItem.imageUrl || undefined,
+      iconName: trimDealTextValue(normalizedItem.iconName).replace(/\.png$/i, '') || undefined,
       websiteUrl,
       productUrl: sourceProductUrl,
       hasTimer: true,
@@ -8612,7 +8916,7 @@ const deleteDealFromBackend = async (
       });
       setDealsError(locationError);
       setPortalSuccessMessage('');
-      return;
+      throw new Error(locationError);
     }
 
     const existingDraft = editingDealId ? deals.find((deal) => deal.id === editingDealId) : null;
@@ -8620,7 +8924,11 @@ const deleteDealFromBackend = async (
     const persistedEditingDealId = editingDealId ? ensureUuid(editingDealId) : null;
     if ((shouldPublish || isEditingExistingDeal) && supabase && hasSupabaseConfig) {
       try {
-        const { columns } = await fetchDealsSchemaColumns();
+        const { columns } = await runWithTimeout(
+          fetchDealsSchemaColumns(),
+          SHARED_SCHEMA_LOOKUP_TIMEOUT_MS,
+          'Deals schema check',
+        );
         const missingColumns: string[] = [];
         if (dealData.businessType === 'online' && dealData.onlineSubcategory && !columns.includes('online_subcategory')) {
           missingColumns.push('online_subcategory');
@@ -8634,9 +8942,14 @@ const deleteDealFromBackend = async (
           setPortalSuccessMessage('');
           pushToast('Subcategory columns missing in Supabase. Apply schema migration.', 'error');
           pushAdminLog('error', 'Missing subcategory columns for publish', message);
-          return;
+          const schemaMismatchError = new Error(message);
+          schemaMismatchError.name = 'MissingSubcategoryColumnsError';
+          throw schemaMismatchError;
         }
       } catch (error) {
+        if (error instanceof Error && error.name === 'MissingSubcategoryColumnsError') {
+          throw error;
+        }
         console.warn('[LiveDrop] Could not verify subcategory columns before publish', error);
       }
     }
@@ -8651,6 +8964,9 @@ const deleteDealFromBackend = async (
       ...dealData,
       id: persistedEditingDealId ?? createUuid(),
       createdAt: relaunchedCreatedAt,
+      iconName: trimDealTextValue(dealData.iconName).replace(/\.png$/i, '')
+        || trimDealTextValue(existingDraft?.iconName).replace(/\.png$/i, '')
+        || undefined,
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
       status: nextStatus,
@@ -8668,9 +8984,14 @@ const deleteDealFromBackend = async (
 
     if (supabase && hasSupabaseConfig) {
       try {
-        publishedDeal = editingDealId
-          ? await upsertDealInBackend(localDeal)
-          : await publishDealToBackend(localDeal);
+        const sharedWritePromise = editingDealId
+          ? upsertDealInBackend(localDeal)
+          : publishDealToBackend(localDeal);
+        publishedDeal = await runWithTimeout(
+          sharedWritePromise,
+          SHARED_WRITE_TIMEOUT_MS,
+          editingDealId ? 'Deal update' : 'Deal publish',
+        );
         setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
@@ -8682,7 +9003,8 @@ const deleteDealFromBackend = async (
         if (requiresSharedPersistence) {
           setPortalSuccessMessage('');
           pushToast('Save failed. Shared database was not updated.', 'error');
-          return;
+          // Keep the local copy so edits are not lost even when shared sync is slow.
+          publishedDeal = localDeal;
         }
       }
     } else if (shouldPublish) {
@@ -9332,28 +9654,15 @@ const deleteDealFromBackend = async (
     return likelyMatch ?? inputDeal;
   };
 
-  const handleEditDeal = async (deal: Deal) => {
-    let latestDeal = resolveEditableDealFromCard(deal);
+  const handleEditDeal = (deal: Deal) => {
+    const resolvedDeal = resolveEditableDealFromCard(deal);
+    const editingTargetId = resolvedDeal.id;
 
-    if (supabase && hasSupabaseConfig) {
-      try {
-        const latestPersistedDeal = await fetchSharedDealById(latestDeal.id);
-        if (latestPersistedDeal && !isTombstonedDeal(latestPersistedDeal)) {
-          latestDeal = latestPersistedDeal;
-          setDeals((prev) => [latestPersistedDeal, ...prev.filter((item) => item.id !== latestPersistedDeal.id)]);
-        }
-      } catch (error) {
-        console.warn('[LiveDrop] Falling back to in-memory deal snapshot for edit', {
-          dealId: latestDeal.id,
-          error,
-        });
-      }
-    }
-
+    // Open the editor immediately so the Edit button always feels responsive.
     setPortalSuccessMessage('');
-    setDealDraft(latestDeal);
-    setPortalFieldSnapshot(latestDeal);
-    setEditingDealId(latestDeal.id);
+    setDealDraft(resolvedDeal);
+    setPortalFieldSnapshot(resolvedDeal);
+    setEditingDealId(editingTargetId);
     setHasUnsavedFormChanges(false);
     setBulkImportCandidates([]);
     setSelectedBulkImportIndex(0);
@@ -9361,6 +9670,29 @@ const deleteDealFromBackend = async (
       setCurrentView('business-portal');
     }
     setIsCreating(true);
+
+    if (!(supabase && hasSupabaseConfig)) {
+      return;
+    }
+
+    // Refresh from backend in the background without blocking the edit flow.
+    void (async () => {
+      try {
+        const latestPersistedDeal = await fetchSharedDealById(editingTargetId);
+        if (!latestPersistedDeal || isTombstonedDeal(latestPersistedDeal)) {
+          return;
+        }
+
+        setDeals((prev) => [latestPersistedDeal, ...prev.filter((item) => item.id !== latestPersistedDeal.id)]);
+        setDealDraft((current) => (current?.id === editingTargetId ? latestPersistedDeal : current));
+        setPortalFieldSnapshot((current) => (current?.id === editingTargetId ? latestPersistedDeal : current));
+      } catch (error) {
+        console.warn('[LiveDrop] Falling back to in-memory deal snapshot for edit', {
+          dealId: editingTargetId,
+          error,
+        });
+      }
+    })();
   };
 
   const runWithUnsavedCreateGuard = async (onContinue: () => void | Promise<void>) => {
@@ -10277,10 +10609,11 @@ const deleteDealFromBackend = async (
         >
           <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
             <DealArtwork
-              src={previewDeal.imageUrl}
+              src={getDealDetailImageSource(previewDeal)}
               alt={displayTitle}
               fit="contain"
               iconSize={40}
+              fallbackIconName={getCategoryIconName(previewDeal.category)}
               preferredWidth={720}
               sizes="(min-width: 768px) 420px, 90vw"
               imageClassName="p-2.5"
@@ -10392,10 +10725,11 @@ const deleteDealFromBackend = async (
           >
             <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
               <DealArtwork
-                src={previewDeal.imageUrl}
+                src={getDealDetailImageSource(previewDeal)}
                 alt={displayTitle}
                 fit="contain"
                 iconSize={44}
+                fallbackIconName={getCategoryIconName(previewDeal.category)}
                 preferredWidth={520}
                 sizes="90vw"
                 imageClassName="p-2.5"
@@ -10777,6 +11111,7 @@ const deleteDealFromBackend = async (
     const totalVisibleOnlineDeals = isOnlineCategoryView
       ? pagedCategoryOnlineDeals.length
       : sortedOnlineDealsByTab.length;
+    const showAdminCardActions = hasAdminAccess || isAdminRoute || currentView === 'business-portal';
     const localEmptyStateMessage =
       selectedFeedFilter === 'all'
         ? `No live deals within ${radius} miles.`
@@ -10807,6 +11142,7 @@ const deleteDealFromBackend = async (
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
       const statusLabel = getFeaturedDealStatusLabel(deal);
+      const featuredImageSrc = getDealDetailImageSource(deal) || getDealCardImageSource(deal);
 
       return (
         <article
@@ -10863,13 +11199,14 @@ const deleteDealFromBackend = async (
             </div>
             <div className="relative aspect-[4/3] overflow-hidden rounded-[1rem] border border-white/70 bg-white/80">
               <DealArtwork
-                src={deal.imageUrl}
+                src={featuredImageSrc}
                 alt={displayTitle}
-                fit="contain"
+                fit="cover"
                 iconSize={26}
+                fallbackIconName={getCategoryIconName(deal.category)}
                 preferredWidth={760}
                 sizes="(min-width: 1280px) 300px, (min-width: 768px) 34vw, 45vw"
-                imageClassName="p-2.5"
+                imageClassName="h-full w-full object-cover"
               />
             </div>
           </div>
@@ -10880,18 +11217,19 @@ const deleteDealFromBackend = async (
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
-      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
       const priceSnapshot = getDealPriceSnapshot(deal);
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
-      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
+      const cardArtworkSrc = getDealCardImageSource(deal);
       const discountPercentValue = getDealDiscountPercentValue(deal);
-      const badgeLabel = discountPercentValue ? `${discountPercentValue}% OFF` : 'DEAL';
-      const viewed = viewedDealIds.has(deal.id);
+      const discountValueLabel = discountPercentValue !== null ? `${discountPercentValue}%` : 'DEAL';
+      const discountTypeLabel = discountPercentValue !== null ? 'OFF' : 'COUPON';
+      const likeCount = Math.max(0, deal.likeCount ?? 0);
+      const dislikeCount = Math.max(0, deal.dislikeCount ?? 0);
 
       return (
-        <div
+        <article
           key={deal.id}
           role="button"
           tabIndex={0}
@@ -10905,128 +11243,163 @@ const deleteDealFromBackend = async (
               handleOpenDealDetail(deal);
             }
           }}
-            className="h-full overflow-hidden rounded-[1.35rem] border border-slate-100 bg-white shadow-[0_8px_20px_rgba(148,163,184,0.12)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 flex flex-col"
-          >
-          <div className="relative aspect-[4/3] overflow-hidden bg-slate-50">
-            <DealArtwork
-              src={deal.imageUrl}
-              alt={displayTitle}
-              fit="contain"
-              iconSize={28}
-              preferredWidth={cardImageWidth}
-              sizes={cardImageSizes}
-              imageClassName="p-3"
-            />
-            <div className="pointer-events-none absolute left-3 top-3">
-              <span className="inline-flex items-center rounded-full bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-3 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-white shadow-sm">
-                {badgeLabel}
+          className="group relative h-full overflow-hidden rounded-[1.3rem] border border-indigo-100/70 bg-[linear-gradient(160deg,rgba(255,255,255,0.98),rgba(247,249,255,0.96))] p-3 shadow-[0_10px_24px_rgba(99,102,241,0.12)] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-[0_16px_32px_rgba(99,102,241,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
+        >
+          <div className="flex h-full gap-3.5">
+            <div className="relative flex h-[182px] w-[182px] shrink-0 items-center justify-center overflow-hidden rounded-[1.05rem] bg-white/90 ring-1 ring-indigo-100/70 min-[1280px]:h-[198px] min-[1280px]:w-[198px]">
+              <DealArtwork
+                src={cardArtworkSrc}
+                alt={displayTitle}
+                fit="contain"
+                iconSize={78}
+                fallbackIconName={getCategoryIconName(deal.category)}
+                preferredWidth={1024}
+                sizes="(min-width: 1280px) 198px, 182px"
+                imageClassName="p-1 !bg-transparent"
+                fallbackClassName="!bg-transparent text-indigo-300"
+              />
+              <span className="pointer-events-none absolute left-2 top-2 inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/90 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-indigo-600">
+                {getCategoryLabel(deal.category)}
               </span>
             </div>
-          </div>
-          <div className="flex flex-1 flex-col p-3 max-[359px]:p-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{displayBusinessName}</p>
-            <h3 className="mt-1 line-clamp-2 break-words text-[0.98rem] font-bold leading-[1.2] text-slate-900">{displayTitle}</h3>
-            <div className="mt-2 flex items-center gap-2">
-              {originalPriceLabel ? (
-                <span className="text-[11px] font-semibold text-slate-400 line-through">{originalPriceLabel}</span>
-              ) : null}
-              {currentPriceLabel ? (
-                <span className="text-[15px] font-black text-slate-900">{currentPriceLabel}</span>
-              ) : (
-                <span className="text-[12px] font-semibold text-indigo-600">{displayOfferText}</span>
-              )}
+            <div className="relative hidden w-[1px] shrink-0 lg:block">
+              <div className="absolute inset-y-1 left-0 border-l border-dashed border-indigo-200/90" />
+              <div className="absolute -left-[8px] top-0 h-4 w-4 rounded-full border border-indigo-100 bg-slate-100" />
+              <div className="absolute -left-[8px] bottom-0 h-4 w-4 rounded-full border border-indigo-100 bg-slate-100" />
             </div>
-            <div
-              className="mt-2"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              <DealEngagementBar
-                deal={deal}
-                pendingAction={dealEngagementPending[deal.id] ?? null}
-                onLike={handleLikeDeal}
-                onDislike={handleDislikeDeal}
-                onShare={handleShareDeal}
-              />
-            </div>
-            {hasAdminAccess ? (
-              <div
-                className="mt-3 grid grid-cols-2 gap-2"
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-              >
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleEditDeal(deal);
-                  }}
-                  className="inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void handleAdminDeleteDeal(deal);
-                  }}
-                  disabled={deletingDealIds.has(deal.id)}
-                  className={`inline-flex h-9.5 items-center justify-center rounded-[0.95rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
-                    deletingDealIds.has(deal.id)
-                      ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
-                      : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
-                  }`}
-                >
-                  {deletingDealIds.has(deal.id) ? 'Deleting...' : 'Delete'}
-                </button>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex items-start gap-3">
+                <div className="shrink-0">
+                  <p className="leading-none text-[1.7rem] font-black tracking-[-0.05em] text-indigo-700 min-[1280px]:text-[1.85rem]">
+                    {discountValueLabel}
+                  </p>
+                  <p className="mt-1 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-500">
+                    {discountTypeLabel}
+                  </p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{displayBusinessName}</p>
+                  <h3 className="mt-1.5 line-clamp-2 break-words text-[0.98rem] font-bold leading-[1.2] text-slate-900">
+                    {displayTitle}
+                  </h3>
+                </div>
               </div>
-            ) : null}
-            {isAdminRoute && showDebug ? (
-              <p className="mb-3 mt-3 truncate rounded-[0.9rem] bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-400">
-                Link: {primaryActionUrl ?? 'No link saved'}
-              </p>
-            ) : null}
-            <div className="mt-auto flex w-full flex-col gap-2 pt-2 min-[390px]:flex-row">
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openDealProductDetails(deal, event);
-                }}
-                className="inline-flex h-9 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[0.95rem] border border-slate-200 bg-white px-2.5 text-[10px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-slate-700 shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
-              >
-                <AppIcon name="search" size={15} />
-                <span>Details</span>
-              </button>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openExternalDealLink(deal);
-                }}
-                disabled={!primaryActionUrl}
-                className={`inline-flex h-9 w-full flex-1 min-w-0 items-center justify-center gap-1.5 rounded-[0.95rem] px-2.5 text-[10px] min-[390px]:px-4 min-[390px]:text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 whitespace-nowrap ${
-                  primaryActionUrl
-                    ? 'bg-emerald-500 shadow-emerald-100/80 hover:bg-emerald-600 livedrop-deal-gloss'
-                    : 'cursor-not-allowed bg-slate-300 shadow-none'
-                }`}
-              >
-                <AppIcon name="check" size={15} />
-                <span>Deal</span>
-              </button>
+              <div className="mt-2.5 flex items-end gap-2.5">
+                {currentPriceLabel ? (
+                  <span className="text-[1.06rem] font-black text-slate-900">{currentPriceLabel}</span>
+                ) : (
+                  <span className="text-[12px] font-semibold text-indigo-600">{displayOfferText}</span>
+                )}
+                {originalPriceLabel ? (
+                  <span className="text-[11px] font-semibold text-slate-400 line-through">{originalPriceLabel}</span>
+                ) : null}
+              </div>
+              <div className="mt-2 border-t border-dashed border-indigo-100/90" />
+              <div className="mt-auto space-y-2.5 pt-2.5">
+                <div
+                  className="grid grid-cols-2 gap-2"
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleLikeDeal(deal)}
+                    disabled={dealEngagementPending[deal.id] === 'like'}
+                    className="inline-flex h-8 items-center justify-center gap-1 rounded-[0.8rem] border border-slate-200 bg-white px-2 text-[9px] font-black uppercase tracking-[0.08em] text-slate-500 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <AppIcon name="thumbs-up" size={12} />
+                    <span className="tabular-nums">{likeCount}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDislikeDeal(deal)}
+                    disabled={dealEngagementPending[deal.id] === 'dislike'}
+                    className="inline-flex h-8 items-center justify-center gap-1 rounded-[0.8rem] border border-slate-200 bg-white px-2 text-[9px] font-black uppercase tracking-[0.08em] text-slate-500 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <AppIcon name="thumbs-down" size={12} />
+                    <span className="tabular-nums">{dislikeCount}</span>
+                  </button>
+                </div>
+                <div
+                  className="grid grid-cols-2 gap-2"
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openDealProductDetails(deal, event);
+                    }}
+                    className="inline-flex h-8.5 w-full items-center justify-center gap-1.5 rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.09em] text-slate-700 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 hover:border-slate-300 hover:bg-slate-50"
+                  >
+                    <AppIcon name="search" size={13} />
+                    <span>Product Details</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openExternalDealLink(deal);
+                    }}
+                    disabled={!primaryActionUrl}
+                    className={`inline-flex h-8.5 w-full items-center justify-center gap-1.5 rounded-[0.9rem] border border-emerald-300/70 px-3 text-[9px] font-black uppercase tracking-[0.09em] text-white transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 ${
+                      primaryActionUrl
+                        ? 'bg-emerald-500/90 shadow-[0_5px_12px_rgba(16,185,129,0.18)] hover:bg-emerald-600/90'
+                        : 'cursor-not-allowed bg-slate-300 shadow-none'
+                    }`}
+                  >
+                    <AppIcon name="check" size={13} />
+                    <span>Get Deal</span>
+                  </button>
+                </div>
+                {showAdminCardActions ? (
+                  <div
+                    className="grid grid-cols-2 gap-2"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleEditDeal(deal);
+                      }}
+                      className="inline-flex h-8.5 w-full items-center justify-center rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-[0.09em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleAdminDeleteDeal(deal);
+                      }}
+                      disabled={deletingDealIds.has(deal.id)}
+                      className={`inline-flex h-8.5 w-full items-center justify-center rounded-[0.9rem] border px-3 text-[9px] font-black uppercase tracking-[0.09em] transition-colors ${
+                        deletingDealIds.has(deal.id)
+                          ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                          : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+                      }`}
+                    >
+                      {deletingDealIds.has(deal.id) ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
+        </article>
       );
     };
 
-  const renderCompactCategoryOnlineDealCard = (deal: Deal) => {
+    const renderCompactCategoryOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const cardArtworkSrc = getDealCardImageSource(deal);
       const priceSnapshot = getDealPriceSnapshot(deal);
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
@@ -11056,10 +11429,11 @@ const deleteDealFromBackend = async (
         >
           <div className="relative aspect-[4/3] overflow-hidden bg-slate-50">
             <DealArtwork
-              src={deal.imageUrl}
+              src={cardArtworkSrc}
               alt={displayTitle}
               fit="contain"
               iconSize={24}
+              fallbackIconName={getCategoryIconName(deal.category)}
               preferredWidth={cardImageWidth}
               sizes={cardImageSizes}
               imageClassName={`p-3 ${viewed ? 'opacity-85' : ''}`}
@@ -11105,7 +11479,7 @@ const deleteDealFromBackend = async (
                 onShare={handleShareDeal}
               />
             </div>
-            {hasAdminAccess ? (
+            {showAdminCardActions ? (
               <div
                 className="grid grid-cols-2 gap-2"
                 onClick={(event) => event.stopPropagation()}
@@ -11310,10 +11684,11 @@ const deleteDealFromBackend = async (
           <div className="grid gap-3 p-3.5 lg:grid-cols-[184px_minmax(0,1fr)_280px] lg:items-stretch lg:gap-4 lg:p-4">
             <div className="relative overflow-hidden rounded-[1rem] border border-slate-100 bg-slate-50 lg:h-full">
               <DealArtwork
-                src={deal.imageUrl}
+                src={getDealCardImageSource(deal)}
                 alt={displayTitle}
                 fit="contain"
                 iconSize={30}
+                fallbackIconName={getCategoryIconName(deal.category)}
                 preferredWidth={640}
                 sizes="(min-width: 1200px) 184px, (min-width: 1024px) 160px, 94vw"
                 imageClassName="p-3"
@@ -11410,7 +11785,7 @@ const deleteDealFromBackend = async (
                 onClick={(event) => event.stopPropagation()}
                 onKeyDown={(event) => event.stopPropagation()}
               >
-                {hasAdminAccess ? (
+                {showAdminCardActions ? (
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
@@ -12193,30 +12568,31 @@ const deleteDealFromBackend = async (
                 />
               ) : pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
-                  {categoryOnlineBatchItems.map((item, index) => (
-                    item.type === 'deal' ? (
-                      <div key={item.deal.id} className={getBatchItemClassName(index)}>
-                        {renderHorizontalDealCard(item.deal, {
-                          mode: 'online',
-                          feedLabel: getDealStatusFilterLabel(getDealStatusTags(item.deal, now)[0] ?? 'all'),
-                        })}
-                      </div>
-                    ) : (
-                      <div key={`category-load-more-${safeOnlineCategoryPage}-${index}`} className={getBatchItemClassName(index)}>
-                        {renderHorizontalLoadMoreCard(
-                          () => {
-                            setIsMoreDealsAnimating(true);
-                            setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));
-                            window.setTimeout(() => setIsMoreDealsAnimating(false), 220);
-                          },
-                          'Load 40 More',
-                          'ready',
-                          `category-load-more-horizontal-${safeOnlineCategoryPage}-${index}`,
-                        )}
-                      </div>
-                    )
-                  ))}
-                  {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {categoryOnlineBatchItems.map((item, index) => (
+                      item.type === 'deal' ? (
+                        <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                          {renderOnlineDealCard(item.deal)}
+                        </div>
+                      ) : (
+                        <div key={`category-load-more-${safeOnlineCategoryPage}-${index}`} className={getBatchItemClassName(index)}>
+                          {renderOnlineGridFiller(
+                            () => {
+                              setIsMoreDealsAnimating(true);
+                              setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));
+                              window.setTimeout(() => {
+                                setIsMoreDealsAnimating(false);
+                                onlineDealsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 220);
+                            },
+                            'Load 40 More',
+                            'ready',
+                            `category-load-more-grid-${safeOnlineCategoryPage}-${index}`,
+                          )}
+                        </div>
+                      )
+                    ))}
+                  </div>
                   {totalCategoryOnlinePages > 1 ? (
                     <div className="flex items-center justify-between gap-2 rounded-[1.3rem] border border-slate-100 bg-white px-2.5 py-2 min-[360px]:gap-3 min-[360px]:px-3 shadow-sm shadow-slate-200/35">
                       <button
@@ -12282,20 +12658,17 @@ const deleteDealFromBackend = async (
                   subtitle="We’re scanning for the latest LiveDrop drops right now."
                 />
               ) : sortedOnlineDealsByTab.length > 0 ? (
-                <div className="space-y-3">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                   {onlineByTabBatchItems.map((item, index) => (
                     item.type === 'deal'
                       ? (
                         <div key={item.deal.id} className={getBatchItemClassName(index)}>
-                          {renderHorizontalDealCard(item.deal, {
-                            mode: 'online',
-                            feedLabel: getDealStatusFilterLabel(getDealStatusTags(item.deal, now)[0] ?? 'all'),
-                          })}
+                          {renderOnlineDealCard(item.deal)}
                         </div>
                       )
                       : (
                         <div key={`online-load-more-${safeOnlineDealPage}-${index}`} className={getBatchItemClassName(index)}>
-                          {renderHorizontalLoadMoreCard(
+                          {renderOnlineGridFiller(
                             () => {
                               if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;
                               setLoadingMoreOnlineDeals(true);
@@ -12307,12 +12680,11 @@ const deleteDealFromBackend = async (
                             },
                             'Load 40 More',
                             loadingMoreOnlineDeals ? 'loading' : 'ready',
-                            `online-load-more-horizontal-${safeOnlineDealPage}-${index}`,
+                            `online-load-more-grid-${safeOnlineDealPage}-${index}`,
                           )}
                         </div>
                       )
                   ))}
-                  {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
                 </div>
               ) : (
                 <DealEmptyState
@@ -12409,10 +12781,11 @@ const deleteDealFromBackend = async (
         <div className="overflow-hidden rounded-[2rem] border border-slate-100 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
           <div className="relative aspect-[1/1] overflow-hidden bg-[linear-gradient(180deg,rgba(248,250,252,0.92),rgba(241,245,249,0.98))]">
             <DealArtwork
-              src={selectedDetailDeal.imageUrl}
+              src={getDealDetailImageSource(selectedDetailDeal)}
               alt={selectedDetailDeal.title}
               fit="contain"
               iconSize={52}
+              fallbackIconName={getCategoryIconName(selectedDetailDeal.category)}
               preferredWidth={720}
               sizes="(min-width: 768px) 420px, 90vw"
               imageClassName="p-4"
@@ -12564,10 +12937,11 @@ const deleteDealFromBackend = async (
                 >
                   <div className="aspect-[1/1] overflow-hidden bg-slate-100">
                     <DealArtwork
-                      src={deal.imageUrl}
+                      src={getDealCardImageSource(deal)}
                       alt={deal.title}
                       fit="contain"
                       iconSize={24}
+                      fallbackIconName={getCategoryIconName(deal.category)}
                       preferredWidth={420}
                       sizes="(min-width: 768px) 200px, 45vw"
                       imageClassName="p-2"

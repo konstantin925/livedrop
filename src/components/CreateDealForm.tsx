@@ -37,7 +37,10 @@ interface CreateDealFormProps {
       websiteUrl: string;
       productUrl: string;
       affiliateUrl: string;
+      cardImage?: string;
       imageUrl: string;
+      detailImage?: string;
+      detailImageUrl?: string;
       dealTitle: string;
       description: string;
       category: string;
@@ -49,6 +52,9 @@ interface CreateDealFormProps {
 }
 
 const BUSINESS_DEFAULTS_KEY = 'livedrop_business_defaults';
+const CARD_IMAGE_TARGET_DATA_URL_LENGTH = 95_000;
+const DETAIL_IMAGE_TARGET_DATA_URL_LENGTH = 125_000;
+const FORM_SUBMIT_TIMEOUT_MS = 20_000;
 
 type OfferType = 'percentage' | 'fixed' | 'custom';
 type BusinessMode = 'local' | 'online';
@@ -56,6 +62,103 @@ type DealStatusTag = Exclude<(typeof DEAL_STATUS_FILTER_OPTIONS)[number]['id'], 
 const DEAL_STATUS_TAG_OPTIONS = DEAL_STATUS_FILTER_OPTIONS.filter((option) => option.id !== 'all');
 
 const normalizeTextValue = (value: string | null | undefined) => (typeof value === 'string' ? value : '');
+const pickCardImageValue = (deal?: Deal | null) =>
+  normalizeTextValue(deal?.cardImageUrl) || normalizeTextValue(deal?.cardImage) || normalizeTextValue(deal?.imageUrl);
+const pickDetailImageValue = (deal?: Deal | null) =>
+  normalizeTextValue(deal?.detailImageUrl)
+  || normalizeTextValue(deal?.detailImage)
+  || normalizeTextValue(deal?.cardImageUrl)
+  || normalizeTextValue(deal?.cardImage)
+  || normalizeTextValue(deal?.imageUrl);
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error('Could not read selected image file.'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read selected image file.'));
+    reader.readAsDataURL(file);
+  });
+
+const loadImageElement = (dataUrl: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not process selected image.'));
+    image.src = dataUrl;
+  });
+
+const optimizeUploadedImage = async (
+  file: File,
+  options: { maxDimension: number; targetDataUrlLength: number },
+) => {
+  const rawDataUrl = await readFileAsDataUrl(file);
+
+  if (!rawDataUrl.startsWith('data:image/')) {
+    return rawDataUrl;
+  }
+
+  try {
+    const image = await loadImageElement(rawDataUrl);
+    const longestSide = Math.max(image.naturalWidth, image.naturalHeight, 1);
+    const initialScale = Math.min(1, options.maxDimension / longestSide);
+    let width = Math.max(1, Math.round(image.naturalWidth * initialScale));
+    let height = Math.max(1, Math.round(image.naturalHeight * initialScale));
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return rawDataUrl;
+    }
+
+    const qualitySteps = [0.9, 0.82, 0.74, 0.66, 0.58, 0.5, 0.42, 0.36, 0.32];
+    let bestDataUrl = rawDataUrl;
+
+    for (let dimensionAttempt = 0; dimensionAttempt < 12; dimensionAttempt += 1) {
+      canvas.width = width;
+      canvas.height = height;
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.clearRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+
+      for (const quality of qualitySteps) {
+        const webpDataUrl = canvas.toDataURL('image/webp', quality);
+        if (webpDataUrl.length < bestDataUrl.length) {
+          bestDataUrl = webpDataUrl;
+        }
+        if (webpDataUrl.length <= options.targetDataUrlLength) {
+          return webpDataUrl;
+        }
+      }
+
+      const nextWidth = Math.max(120, Math.round(width * 0.78));
+      const nextHeight = Math.max(120, Math.round(height * 0.78));
+      if (nextWidth === width && nextHeight === height) {
+        break;
+      }
+
+      width = nextWidth;
+      height = nextHeight;
+    }
+
+    if (bestDataUrl.length > options.targetDataUrlLength) {
+      console.warn('[LiveDrop] Optimized image still above preferred storage threshold', {
+        targetDataUrlLength: options.targetDataUrlLength,
+        actualDataUrlLength: bestDataUrl.length,
+      });
+    }
+
+    return bestDataUrl;
+  } catch (error) {
+    console.warn('[LiveDrop] Falling back to original image upload payload', error);
+    return rawDataUrl;
+  }
+};
 const normalizePriceInput = (value: string | null | undefined) => {
   const cleaned = normalizeTextValue(value).replace(/[^0-9.]/g, '').trim();
   if (!cleaned) return null;
@@ -261,7 +364,9 @@ const getInitialFormData = (
       customDuration: durationFields.customDuration,
       radiusMiles: inferredRadiusMiles,
       boostDeal: false,
-      imageUrl: normalizeTextValue(initialData.imageUrl),
+      iconName: normalizeTextValue(initialData.iconName),
+      cardImageUrl: pickCardImageValue(initialData),
+      detailImageUrl: pickDetailImageValue(initialData),
       originalPrice: formatPriceInput(normalizedOriginalPrice),
       currentPrice: formatPriceInput(normalizedCurrentPrice),
     };
@@ -290,7 +395,9 @@ const getInitialFormData = (
     customDuration: '45',
     radiusMiles: '1',
     boostDeal: false,
-    imageUrl: '',
+    iconName: '',
+    cardImageUrl: '',
+    detailImageUrl: '',
     originalPrice: '',
     currentPrice: '',
   };
@@ -357,7 +464,14 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         offerType: nextOfferType,
         discountValue: getDiscountValueFromText(autofillRequest.payload.offerText),
         customOfferText: nextOfferType === 'custom' ? normalizeTextValue(autofillRequest.payload.offerText) : '',
-        imageUrl: normalizeTextValue(autofillRequest.payload.imageUrl),
+        cardImageUrl:
+          normalizeTextValue(autofillRequest.payload.cardImage)
+          || normalizeTextValue(autofillRequest.payload.imageUrl),
+        detailImageUrl:
+          normalizeTextValue(autofillRequest.payload.detailImage)
+          || normalizeTextValue(autofillRequest.payload.detailImageUrl)
+          || normalizeTextValue(autofillRequest.payload.cardImage)
+          || normalizeTextValue(autofillRequest.payload.imageUrl),
         originalPrice: normalizeTextValue(autofillRequest.payload.originalPrice) || prev.originalPrice,
         currentPrice: normalizeTextValue(autofillRequest.payload.currentPrice) || prev.currentPrice,
       };
@@ -466,7 +580,18 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
-      imageUrl: normalizeTextValue(formData.imageUrl).trim() || undefined,
+      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
+      cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
+      cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
+      detailImageUrl:
+        normalizeTextValue(formData.detailImageUrl).trim()
+        || normalizeTextValue(formData.cardImageUrl).trim()
+        || undefined,
+      detailImage:
+        normalizeTextValue(formData.detailImageUrl).trim()
+        || normalizeTextValue(formData.cardImageUrl).trim()
+        || undefined,
+      imageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       websiteUrl: normalizedLinkState.websiteUrl || undefined,
       productUrl: normalizedLinkState.productUrl || undefined,
       hasTimer: formData.durationPreset !== 'none',
@@ -489,7 +614,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.currentClaims,
     formData.description,
     formData.durationPreset,
-    formData.imageUrl,
+    formData.iconName,
+    formData.cardImageUrl,
+    formData.detailImageUrl,
     formData.quantity,
     formData.statusTags,
     formData.title,
@@ -528,10 +655,21 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title) || (isOnline ? 'Your online drop title' : 'Your Deal Title'),
       description: normalizeTextValue(formData.description) || 'Your deal description will appear here in the preview.',
       offerText: offerText || 'SPECIAL OFFER',
+      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
       distance: isOnline ? 'Online' : `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi`,
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
-      imageUrl: normalizeTextValue(formData.imageUrl) || undefined,
+      cardImageUrl: normalizeTextValue(formData.cardImageUrl) || undefined,
+      cardImage: normalizeTextValue(formData.cardImageUrl) || undefined,
+      detailImageUrl:
+        normalizeTextValue(formData.detailImageUrl)
+        || normalizeTextValue(formData.cardImageUrl)
+        || undefined,
+      detailImage:
+        normalizeTextValue(formData.detailImageUrl)
+        || normalizeTextValue(formData.cardImageUrl)
+        || undefined,
+      imageUrl: normalizeTextValue(formData.cardImageUrl) || undefined,
       websiteUrl: normalizedLinkState.websiteUrl || undefined,
       productUrl: normalizedLinkState.productUrl || undefined,
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
@@ -555,7 +693,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.currentClaims,
     formData.description,
     formData.durationPreset,
-    formData.imageUrl,
+    formData.iconName,
+    formData.cardImageUrl,
+    formData.detailImageUrl,
     formData.quantity,
     formData.statusTags,
     formData.title,
@@ -594,7 +734,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       durationPreset: formData.durationPreset,
       customDuration: normalizeTextValue(formData.customDuration).trim(),
       radiusMiles: normalizeTextValue(formData.radiusMiles).trim(),
-      imageUrl: normalizeTextValue(formData.imageUrl).trim(),
+      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, ''),
+      cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim(),
+      detailImageUrl: normalizeTextValue(formData.detailImageUrl).trim(),
     });
 
   const [initialFingerprint, setInitialFingerprint] = useState(getDraftFingerprint());
@@ -641,7 +783,18 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentPrice: normalizedCurrentPrice,
       originalPrice: normalizedOriginalPrice,
       discountPercent: normalizedDiscountPercent,
-      imageUrl: normalizeTextValue(formData.imageUrl).trim() || undefined,
+      iconName: normalizeTextValue(formData.iconName).trim().replace(/\.png$/i, '') || undefined,
+      cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
+      cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
+      detailImageUrl:
+        normalizeTextValue(formData.detailImageUrl).trim()
+        || normalizeTextValue(formData.cardImageUrl).trim()
+        || undefined,
+      detailImage:
+        normalizeTextValue(formData.detailImageUrl).trim()
+        || normalizeTextValue(formData.cardImageUrl).trim()
+        || undefined,
+      imageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       websiteUrl: normalizedLinkState.websiteUrl || undefined,
       productUrl: normalizedLinkState.productUrl || undefined,
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
@@ -703,8 +856,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       if (normalizeTextValue(formData.affiliateUrl).trim() && !normalizedLinkState.affiliateUrl) {
         return 'Paste a valid affiliate / outbound URL or leave that field blank.';
       }
-      if (!normalizeTextValue(formData.imageUrl).trim()) {
-        return 'Please upload a product image for online drops.';
+      if (!normalizeTextValue(formData.cardImageUrl).trim()) {
+        return 'Please upload a card image for online drops.';
       }
     }
 
@@ -741,7 +894,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.description,
     formData.discountValue,
     formData.durationPreset,
-    formData.imageUrl,
+    formData.cardImageUrl,
+    formData.detailImageUrl,
     formData.offerType,
     formData.productUrl,
     formData.quantity,
@@ -773,6 +927,26 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     setIsDirty(false);
   };
 
+  const submitWithTimeout = async (mode: 'publish' | 'draft') => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = globalThis.setTimeout(() => {
+        reject(new Error('Save request timed out. Please try again.'));
+      }, FORM_SUBMIT_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([
+        Promise.resolve(onSubmit(buildDealPayload(), { mode })),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+      }
+    }
+  };
+
   const handlePublish = async () => {
     setSubmitError('');
     const validationError = publishValidationError;
@@ -783,8 +957,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
     setIsPublishing(true);
     try {
-      await onSubmit(buildDealPayload(), { mode: 'publish' });
+      await submitWithTimeout('publish');
       finalizeSavedDefaults();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not publish this deal right now.';
+      setSubmitError(message);
     } finally {
       setIsPublishing(false);
     }
@@ -794,8 +971,11 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     setSubmitError('');
     setIsSavingDraft(true);
     try {
-      await onSubmit(buildDealPayload(), { mode: 'draft' });
+      await submitWithTimeout('draft');
       finalizeSavedDefaults();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not save this draft right now.';
+      setSubmitError(message);
     } finally {
       setIsSavingDraft(false);
     }
@@ -914,10 +1094,10 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         ) : (
           <div className="overflow-hidden rounded-[2rem] border border-slate-100 bg-white shadow-sm">
             <div className="aspect-[16/10] bg-slate-100 overflow-hidden">
-              {previewDeal.imageUrl ? (
+              {previewDeal.cardImageUrl || previewDeal.imageUrl ? (
                 <img
-                  src={getOptimizedDealImageUrl(previewDeal.imageUrl, { width: 720, fit: 'cover' })}
-                  srcSet={getOptimizedDealImageSrcSet(previewDeal.imageUrl, { width: 720, fit: 'cover' })}
+                  src={getOptimizedDealImageUrl(previewDeal.cardImageUrl ?? previewDeal.imageUrl ?? '', { width: 720, fit: 'cover' })}
+                  srcSet={getOptimizedDealImageSrcSet(previewDeal.cardImageUrl ?? previewDeal.imageUrl ?? '', { width: 720, fit: 'cover' })}
                   alt={previewDeal.title}
                   loading="lazy"
                   decoding="async"
@@ -1027,37 +1207,71 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
               </p>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Upload Image</label>
-              <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-indigo-200 bg-indigo-50 px-4 py-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-indigo-500 shadow-sm">
-                  <AppIcon name="image" size={18} />
-                </div>
-                <div>
-                  <p className="text-sm font-black text-indigo-700">Choose product image</p>
-                  <p className="text-xs text-indigo-400 mt-1">{formData.imageUrl ? 'Image ready for this online drop' : 'PNG, JPG, or WEBP'}</p>
-                </div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={event => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      if (typeof reader.result === 'string') {
-                        setFormData(prev => ({ ...prev, imageUrl: reader.result }));
-                      }
-                    };
-                    reader.readAsDataURL(file);
-                  }}
-                />
-              </label>
-            </div>
           </>
         ) : null}
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Card Image</label>
+          <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-indigo-200 bg-indigo-50 px-4 py-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-indigo-500 shadow-sm">
+              <AppIcon name="image" size={18} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-indigo-700">Choose card image</p>
+              <p className="text-xs text-indigo-400 mt-1">
+                {formData.cardImageUrl ? 'Card image ready for feed cards' : 'Shown on main deal cards (PNG, JPG, or WEBP)'}
+              </p>
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={event => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                void (async () => {
+                  const optimizedDataUrl = await optimizeUploadedImage(file, {
+                    maxDimension: 960,
+                    targetDataUrlLength: CARD_IMAGE_TARGET_DATA_URL_LENGTH,
+                  });
+                  setFormData((prev) => ({ ...prev, cardImageUrl: optimizedDataUrl }));
+                })();
+              }}
+            />
+          </label>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Detail Image</label>
+          <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-sky-200 bg-sky-50 px-4 py-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-sky-500 shadow-sm">
+              <AppIcon name="image" size={18} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-sky-700">Choose detail image</p>
+              <p className="text-xs text-sky-400 mt-1">
+                {formData.detailImageUrl
+                  ? 'Detail image ready for Product Details'
+                  : 'Shown only inside Product Details'}
+              </p>
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={event => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                void (async () => {
+                  const optimizedDataUrl = await optimizeUploadedImage(file, {
+                    maxDimension: 1280,
+                    targetDataUrlLength: DETAIL_IMAGE_TARGET_DATA_URL_LENGTH,
+                  });
+                  setFormData((prev) => ({ ...prev, detailImageUrl: optimizedDataUrl }));
+                })();
+              }}
+            />
+          </label>
+        </div>
 
         <div className="space-y-1.5">
           <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Deal Title</label>
@@ -1072,6 +1286,25 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
               onChange={e => setFormData({ ...formData, title: e.target.value })}
             />
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">
+            Card Icon Name (Optional)
+          </label>
+          <div className="relative">
+            <AppIcon name="grid" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+            <input
+              type="text"
+              placeholder="e.g. monitor, stand-mixer, gaming-chair"
+              className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+              value={formData.iconName}
+              onChange={e => setFormData({ ...formData, iconName: e.target.value })}
+            />
+          </div>
+          <p className="px-1 text-xs leading-5 text-slate-400">
+            Uses <code>/category-icons/{'{iconName}'}.png</code> on feed cards.
+          </p>
         </div>
 
         <div className="space-y-1.5">

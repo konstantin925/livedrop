@@ -6,6 +6,11 @@ export interface Deal {
   adminTag?: 'featured' | 'trending' | null;
   businessName: string;
   logoUrl?: string;
+  iconName?: string;
+  cardImage?: string;
+  detailImage?: string;
+  cardImageUrl?: string;
+  detailImageUrl?: string;
   imageUrl?: string;
   title: string;
   description: string;
