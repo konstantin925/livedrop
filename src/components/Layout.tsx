@@ -85,16 +85,12 @@ export const Layout: React.FC<LayoutProps> = ({
 
   return (
     <div
-      className={`relative isolate mx-auto flex min-h-[100dvh] w-full flex-col overflow-x-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98)_20%,rgba(241,245,249,0.9))] text-slate-900 ${
-        isDesktopLayout
-          ? 'max-w-[1420px] shadow-[0_22px_58px_rgba(15,23,42,0.09)]'
-          : 'max-w-[430px] shadow-[0_22px_58px_rgba(15,23,42,0.11)]'
-      } sm:border-x sm:border-slate-200/70`}
+      className="relative isolate flex min-h-[100dvh] w-full flex-col overflow-x-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98)_20%,rgba(241,245,249,0.9))] text-slate-900"
     >
       {/* Header */}
       {isDesktopLayout ? (
-        <header className="sticky top-0 z-50 border-b border-white/70 bg-white/92 px-8 py-4 backdrop-blur-xl">
-          <div className="grid w-full grid-cols-[auto_minmax(460px,1fr)_auto] items-center gap-6">
+        <header className="sticky top-0 z-50 border-b border-white/70 bg-white/92 px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-8">
+          <div className="mx-auto grid w-full max-w-[1480px] grid-cols-[auto_minmax(460px,1fr)_auto] items-center gap-6">
             <div className="min-w-0">
               <div className="flex items-center leading-none">
                 <div className="min-w-0 flex items-baseline gap-0.5 leading-none">
@@ -241,14 +237,16 @@ export const Layout: React.FC<LayoutProps> = ({
       )}
 
       {isAdminSession ? (
-        <div className={`border-b border-indigo-100/80 bg-indigo-50/85 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700 ${isDesktopLayout ? 'px-8' : 'px-3.5 max-[359px]:px-2.5'}`}>
-          {adminLabel ? `Admin: ${adminLabel}` : 'Logged in as Admin'}
+        <div className="border-b border-indigo-100/80 bg-indigo-50/85 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-indigo-700">
+          <div className={`mx-auto w-full max-w-[1480px] ${isDesktopLayout ? 'px-0' : 'px-3.5 max-[359px]:px-2.5'}`}>
+            {adminLabel ? `Admin: ${adminLabel}` : 'Logged in as Admin'}
+          </div>
         </div>
       ) : null}
 
       {role !== 'business' ? (
-        <div className={`hidden min-[1024px]:block border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-8 py-3' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
-          <div className="mx-auto flex w-full max-w-[840px] items-center justify-center">
+        <div className={`hidden min-[1024px]:block border-b border-slate-100/90 bg-white/88 ${isDesktopLayout ? 'px-4 py-3 sm:px-6 lg:px-8' : 'px-3.5 py-2.5 max-[359px]:px-2.5'}`}>
+          <div className="mx-auto flex w-full max-w-[1480px] items-center justify-center">
             <div className={`inline-grid grid-cols-4 items-center gap-1 rounded-[1.2rem] border border-slate-200 bg-white p-1 shadow-[0_8px_22px_rgba(148,163,184,0.18)] ${isDesktopLayout ? 'h-12 w-[640px]' : 'h-11 w-full max-w-[430px]'}`}>
               <button
                 type="button"
@@ -351,17 +349,19 @@ export const Layout: React.FC<LayoutProps> = ({
 
       {/* Main Content */}
       <main className={`flex-1 overflow-y-auto py-3 ${isDesktopLayout ? 'px-8 py-6' : 'px-3.5 max-[359px]:px-2.5'}`} style={mainContentStyle}>
-        {children}
+        <div className="mx-auto w-full max-w-[1480px]">
+          {children}
+        </div>
       </main>
 
       {showFooter ? <PublicFooter onNavigate={onNavigate} /> : null}
 
       {/* Navigation */}
       <nav
-        className={`fixed left-0 right-0 z-50 mx-auto flex w-full items-center justify-between border-t border-white/80 bg-white/94 pt-1 shadow-[0_-8px_26px_rgba(15,23,42,0.06)] backdrop-blur-xl ${
+        className={`fixed left-0 right-0 z-50 flex w-full items-center justify-between border-t border-white/80 bg-white/94 pt-1 shadow-[0_-8px_26px_rgba(15,23,42,0.06)] backdrop-blur-xl ${
           isDesktopLayout
             ? 'hidden'
-            : 'max-w-[430px] px-3 max-[359px]:px-2.5'
+            : 'px-3 max-[359px]:px-2.5'
         }`}
         style={bottomNavStyle}
       >

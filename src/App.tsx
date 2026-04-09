@@ -7719,7 +7719,7 @@ const deleteDealFromBackend = async (
           setDealsError(nextDeals.length > 0 ? '' : 'Shared feed is empty.');
         };
 
-        const firstPaintDeals = await fetchSharedDeals({ limit: PUBLIC_DEALS_FETCH_LIMIT });
+        const firstPaintDeals = await fetchSharedDeals({ limit: PUBLIC_DEALS_FIRST_PAINT_LIMIT });
         if (cancelled) return;
 
         if (import.meta.env.DEV) {
@@ -7817,10 +7817,20 @@ const deleteDealFromBackend = async (
       return;
     }
     if (hasRecoveredOnlineEmptyState.current) return;
-    const onlineDealCount = deals.filter((deal) => deal.businessType === 'online').length;
+    const now = Date.now();
+    const onlineDealCount = deals.filter(
+      (deal) =>
+        deal.businessType === 'online'
+        && (deal.status ?? 'active') !== 'draft'
+        && !isExpiredDeal(deal, now),
+    ).length;
     if (onlineDealCount === 0) return;
     const hasCategoryMatch = deals.some(
-      (deal) => deal.businessType === 'online' && deal.category === selectedCategory,
+      (deal) =>
+        deal.businessType === 'online'
+        && (deal.status ?? 'active') !== 'draft'
+        && !isExpiredDeal(deal, now)
+        && deal.category === selectedCategory,
     );
     if (hasCategoryMatch) return;
     setSelectedCategory('All');
@@ -11190,6 +11200,286 @@ const deleteDealFromBackend = async (
       </button>
     );
 
+    const getVerifiedRecencyLabel = (deal: Deal) => {
+      const elapsedMinutes = Math.max(1, Math.round((now - deal.createdAt) / 60000));
+      if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+      if (elapsedMinutes < 1440) return `${Math.round(elapsedMinutes / 60)}h ago`;
+      return `${Math.round(elapsedMinutes / 1440)}d ago`;
+    };
+
+    const renderHorizontalLoadMoreCard = (
+      onClick: () => void,
+      label: string,
+      state: 'ready' | 'loading',
+      key: string,
+    ) => (
+      <button
+        key={key}
+        type="button"
+        onClick={onClick}
+        disabled={state !== 'ready'}
+        className={`w-full rounded-[1.25rem] border px-4 py-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 ${
+          state === 'ready'
+            ? 'border-indigo-200/80 bg-[linear-gradient(135deg,rgba(244,247,255,0.98),rgba(236,241,255,0.95))] shadow-[0_12px_28px_rgba(99,102,241,0.12)] hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(99,102,241,0.18)]'
+            : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-indigo-600">{label}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              {state === 'loading' ? 'Loading next deal batch...' : 'Browse the next set of fresh drops'}
+            </p>
+          </div>
+          <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[1rem] ${
+            state === 'loading'
+              ? 'bg-indigo-100 text-indigo-500 animate-pulse'
+              : 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white livedrop-primary-gloss'
+          }`}>
+            <AppIcon name="live" size={16} />
+          </span>
+        </div>
+      </button>
+    );
+
+    const renderHorizontalDealCard = (
+      deal: Deal,
+      options: {
+        mode: 'local' | 'online';
+        feedLabel?: string | null;
+      },
+    ) => {
+      const primaryActionUrl = getDealPrimaryActionUrl(deal);
+      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
+      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
+      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
+      const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const priceSnapshot = getDealPriceSnapshot(deal);
+      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
+      const discountPercentValue = getDealDiscountPercentValue(deal);
+      const badgeLabel = discountPercentValue ? `${discountPercentValue}% OFF` : 'DEAL';
+      const sourceLabel = options.mode === 'local'
+        ? (
+          (deal as Deal & { computedDistanceLabel?: string }).computedDistanceLabel
+          || deal.distance
+          || 'Local'
+        )
+        : 'Online';
+      const isTimerVisible = deal.businessType !== 'online' && deal.hasTimer !== false;
+      const canSaveToCatalogDeal = canSaveDealToCatalog(deal);
+      const savedToCatalog = catalogCoupons.some((coupon) => coupon.dealId === deal.id && coupon.status === 'active');
+
+      return (
+        <article
+          key={deal.id}
+          role="button"
+          tabIndex={0}
+          aria-label={`Open details for ${displayTitle}`}
+          onClick={() => handleOpenDealDetail(deal)}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleOpenDealDetail(deal);
+            }
+          }}
+          className="group overflow-hidden rounded-[1.35rem] border border-slate-200/80 bg-white shadow-[0_14px_30px_rgba(148,163,184,0.14)] transition-all duration-200 hover:border-indigo-200/80 hover:shadow-[0_18px_38px_rgba(99,102,241,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
+        >
+          <div className="grid gap-3 p-3.5 lg:grid-cols-[184px_minmax(0,1fr)_280px] lg:items-stretch lg:gap-4 lg:p-4">
+            <div className="relative overflow-hidden rounded-[1rem] border border-slate-100 bg-slate-50 lg:h-full">
+              <DealArtwork
+                src={deal.imageUrl}
+                alt={displayTitle}
+                fit="contain"
+                iconSize={30}
+                preferredWidth={640}
+                sizes="(min-width: 1200px) 184px, (min-width: 1024px) 160px, 94vw"
+                imageClassName="p-3"
+              />
+              <div className="pointer-events-none absolute left-2 top-2">
+                <CompanyLogo
+                  businessName={displayBusinessName}
+                  logoUrl={deal.logoUrl}
+                  category={deal.category}
+                  size={30}
+                />
+              </div>
+              <div className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-white shadow-sm">
+                {badgeLabel}
+              </div>
+            </div>
+
+            <div className="flex min-w-0 flex-col">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                  <AppIcon name={getCategoryIconName(deal.category)} size={11} />
+                  {getCategoryLabel(deal.category)}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-100 bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
+                  <AppIcon name={options.mode === 'local' ? 'pin' : 'online'} size={11} />
+                  {sourceLabel}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-emerald-600">
+                  <AppIcon name="check" size={10} />
+                  Verified {getVerifiedRecencyLabel(deal)}
+                </span>
+                {options.feedLabel ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-sky-100 bg-sky-50 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-sky-600">
+                    <AppIcon name="spark" size={10} />
+                    {options.feedLabel}
+                  </span>
+                ) : null}
+              </div>
+
+              <h3 className="mt-2 line-clamp-2 text-[1.15rem] font-black leading-[1.15] tracking-[-0.02em] text-slate-900">
+                {displayTitle}
+              </h3>
+              <p className="mt-1.5 line-clamp-2 text-[13px] leading-5 text-slate-500">{displayDescription}</p>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                <span className="inline-flex items-center gap-1">
+                  <AppIcon name="store" size={11} />
+                  {displayBusinessName}
+                </span>
+                {isTimerVisible ? (
+                  <Timer
+                    expiresAt={deal.expiresAt}
+                    onExpire={forceRefreshDealsView}
+                    className="rounded-full border border-amber-100 bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-600"
+                  />
+                ) : null}
+              </div>
+
+              <div
+                className="mt-3"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <DealEngagementBar
+                  deal={deal}
+                  pendingAction={dealEngagementPending[deal.id] ?? null}
+                  onLike={handleLikeDeal}
+                  onDislike={handleDislikeDeal}
+                  onShare={handleShareDeal}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-between gap-3 rounded-[1rem] border border-slate-100 bg-slate-50/75 p-3">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Deal Price</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  {originalPriceLabel ? (
+                    <span className="text-[12px] font-semibold text-slate-400 line-through">{originalPriceLabel}</span>
+                  ) : null}
+                  {currentPriceLabel ? (
+                    <span className="text-[1.15rem] font-black text-slate-900">{currentPriceLabel}</span>
+                  ) : (
+                    <span className="text-[12px] font-semibold text-indigo-600">{displayOfferText}</span>
+                  )}
+                </div>
+                {!hasPriceRow ? (
+                  <p className="mt-2 text-[11px] font-semibold text-slate-500">{displayOfferText}</p>
+                ) : null}
+              </div>
+
+              <div
+                className="space-y-2"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                {hasAdminAccess ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleEditDeal(deal);
+                      }}
+                      className="inline-flex h-9 items-center justify-center rounded-[0.9rem] border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleAdminDeleteDeal(deal);
+                      }}
+                      disabled={deletingDealIds.has(deal.id)}
+                      className={`inline-flex h-9 items-center justify-center rounded-[0.9rem] border px-3 text-[10px] font-black uppercase tracking-[0.1em] transition-colors ${
+                        deletingDealIds.has(deal.id)
+                          ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                          : 'border-rose-200 bg-rose-50 text-rose-600 hover:border-rose-300 hover:bg-rose-100'
+                      }`}
+                    >
+                      {deletingDealIds.has(deal.id) ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openDealProductDetails(deal, event);
+                    }}
+                    className="inline-flex h-10 items-center justify-center rounded-[0.95rem] border border-emerald-200 bg-emerald-50 px-3 text-[10px] font-black uppercase tracking-[0.08em] text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100"
+                  >
+                    Product Details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openExternalDealLink(deal);
+                    }}
+                    disabled={!primaryActionUrl}
+                    className={`inline-flex h-10 items-center justify-center rounded-[0.95rem] px-3 text-[10px] font-black uppercase tracking-[0.08em] text-white transition-all ${
+                      primaryActionUrl
+                        ? 'bg-emerald-500 shadow-emerald-100/80 hover:bg-emerald-600 livedrop-deal-gloss'
+                        : 'cursor-not-allowed bg-slate-300'
+                    }`}
+                  >
+                    Get Deal
+                  </button>
+                </div>
+
+                {canSaveToCatalogDeal ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!savedToCatalog) {
+                        handleSaveToCatalog(deal);
+                      }
+                    }}
+                    disabled={savedToCatalog}
+                    className={`inline-flex h-8 w-full items-center justify-center rounded-[0.85rem] border px-3 text-[9px] font-black uppercase tracking-[0.1em] transition-colors ${
+                      savedToCatalog
+                        ? 'border-emerald-100 bg-emerald-50 text-emerald-600'
+                        : 'border-indigo-100 bg-white text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50'
+                    }`}
+                  >
+                    {savedToCatalog ? 'Saved to Catalog' : 'Save to Catalog'}
+                  </button>
+                ) : null}
+
+                {catalogSaveFeedback[deal.id] ? (
+                  <p className="text-center text-[11px] font-semibold text-emerald-600">
+                    {catalogSaveFeedback[deal.id]}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </article>
+      );
+    };
+
     return (
       <div className="space-y-4">
         {renderDealsErrorBanner()}
@@ -11758,29 +12048,13 @@ const deleteDealFromBackend = async (
           })()}
           {viewportWidth < 640 ? null : dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              <div className="space-y-3">
                 {localBatchDeals.map((deal, index) => (
                   <div key={deal.id} className={getBatchItemClassName(index)}>
-                    <DealCard 
-                      deal={deal} 
-                      onClaim={handleClaimDeal} 
-                      isClaimed={claims.some(c => c.dealId === deal.id)}
-                      isViewed={viewedDealIds.has(deal.id)}
-                      computedDistance={deal.computedDistanceLabel}
-                      onSaveToCatalog={handleSaveToCatalog}
-                      canSaveToCatalog={canSaveDealToCatalog(deal)}
-                      isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
-                      saveFeedback={catalogSaveFeedback[deal.id]}
-                    badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
-                    pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
-                    onLike={handleLikeDeal}
-                    onDislike={handleDislikeDeal}
-                    onShare={handleShareDeal}
-                    showAdminActions={hasAdminAccess}
-                    onEditDeal={handleEditDeal}
-                    onDeleteDeal={handleAdminDeleteDeal}
-                    isDeleting={deletingDealIds.has(deal.id)}
-                  />
+                    {renderHorizontalDealCard(deal, {
+                      mode: 'local',
+                      feedLabel: getDealFeedTag(deal.id),
+                    })}
                   </div>
                 ))}
                 {hasMoreBatchDeals ? renderBatchDividerRow('More Deals') : null}
@@ -11810,7 +12084,7 @@ const deleteDealFromBackend = async (
             )
           ) : (
             isOnlineCategoryView ? (
-              dealsLoading ? (
+              dealsLoading && pagedCategoryOnlineDeals.length === 0 ? (
                 <DealEmptyState
                   variant="loading"
                   title="Scanning for new drops…"
@@ -11818,14 +12092,17 @@ const deleteDealFromBackend = async (
                 />
               ) : pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
-                  <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
-                    <div className="grid auto-rows-fr grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-                      {categoryOnlineBatchItems.map((item, index) => (
-                        item.type === 'deal' ? (
-                          <div key={item.deal.id} className={getBatchItemClassName(index)}>
-                            {renderCompactCategoryOnlineDealCard(item.deal)}
-                          </div>
-                        ) : renderOnlineGridFiller(
+                  {categoryOnlineBatchItems.map((item, index) => (
+                    item.type === 'deal' ? (
+                      <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                        {renderHorizontalDealCard(item.deal, {
+                          mode: 'online',
+                          feedLabel: getDealStatusFilterLabel(getDealStatusTags(item.deal, now)[0] ?? 'all'),
+                        })}
+                      </div>
+                    ) : (
+                      <div key={`category-load-more-${safeOnlineCategoryPage}-${index}`} className={getBatchItemClassName(index)}>
+                        {renderHorizontalLoadMoreCard(
                           () => {
                             setIsMoreDealsAnimating(true);
                             setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));
@@ -11833,12 +12110,12 @@ const deleteDealFromBackend = async (
                           },
                           'Load 40 More',
                           'ready',
-                          `category-load-more-${safeOnlineCategoryPage}-${index}`,
-                        )
-                      ))}
-                      {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
-                    </div>
-                  </div>
+                          `category-load-more-horizontal-${safeOnlineCategoryPage}-${index}`,
+                        )}
+                      </div>
+                    )
+                  ))}
+                  {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
                   {totalCategoryOnlinePages > 1 ? (
                     <div className="flex items-center justify-between gap-2 rounded-[1.3rem] border border-slate-100 bg-white px-2.5 py-2 min-[360px]:gap-3 min-[360px]:px-3 shadow-sm shadow-slate-200/35">
                       <button
@@ -11897,7 +12174,7 @@ const deleteDealFromBackend = async (
                 />
               )
             ) : (
-              dealsLoading ? (
+              dealsLoading && sortedOnlineDealsByTab.length === 0 ? (
                 <DealEmptyState
                   variant="loading"
                   title="Pulling live deals…"
@@ -11905,15 +12182,19 @@ const deleteDealFromBackend = async (
                 />
               ) : sortedOnlineDealsByTab.length > 0 ? (
                 <div className="space-y-3">
-                  <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                    {onlineByTabBatchItems.map((item, index) => (
-                      item.type === 'deal'
-                        ? (
-                          <div key={item.deal.id} className={getBatchItemClassName(index)}>
-                            {renderOnlineDealCard(item.deal)}
-                          </div>
-                        )
-                        : renderOnlineGridFiller(
+                  {onlineByTabBatchItems.map((item, index) => (
+                    item.type === 'deal'
+                      ? (
+                        <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                          {renderHorizontalDealCard(item.deal, {
+                            mode: 'online',
+                            feedLabel: getDealStatusFilterLabel(getDealStatusTags(item.deal, now)[0] ?? 'all'),
+                          })}
+                        </div>
+                      )
+                      : (
+                        <div key={`online-load-more-${safeOnlineDealPage}-${index}`} className={getBatchItemClassName(index)}>
+                          {renderHorizontalLoadMoreCard(
                             () => {
                               if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;
                               setLoadingMoreOnlineDeals(true);
@@ -11925,11 +12206,12 @@ const deleteDealFromBackend = async (
                             },
                             'Load 40 More',
                             loadingMoreOnlineDeals ? 'loading' : 'ready',
-                            `online-load-more-${safeOnlineDealPage}-${index}`,
-                          )
-                    ))}
-                    {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
-                  </div>
+                            `online-load-more-horizontal-${safeOnlineDealPage}-${index}`,
+                          )}
+                        </div>
+                      )
+                  ))}
+                  {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
                 </div>
               ) : (
                 <DealEmptyState
