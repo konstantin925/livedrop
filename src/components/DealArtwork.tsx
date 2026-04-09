@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
+import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 
 interface DealArtworkProps {
   src?: string | null;
@@ -35,44 +36,11 @@ export const DealArtwork = React.memo(({
     [src],
   );
   const optimizedSrc = useMemo(() => {
-    if (!normalizedSrc) return '';
-    const width = preferredWidth ?? 900;
-    const supabasePublicPath = '/storage/v1/object/public/';
-    const supabaseRenderPath = '/storage/v1/render/image/public/';
-    if (normalizedSrc.includes(supabaseRenderPath)) {
-      const separator = normalizedSrc.includes('?') ? '&' : '?';
-      return `${normalizedSrc}${separator}width=${width}&quality=72&resize=contain`;
-    }
-    if (normalizedSrc.includes(supabasePublicPath)) {
-      const transformed = normalizedSrc.replace(supabasePublicPath, supabaseRenderPath);
-      const separator = transformed.includes('?') ? '&' : '?';
-      return `${transformed}${separator}width=${width}&quality=72&resize=contain`;
-    }
-    if (normalizedSrc.includes('images.unsplash.com')) {
-      try {
-        const url = new URL(normalizedSrc);
-        url.searchParams.set('w', String(width));
-        url.searchParams.set('q', '70');
-        url.searchParams.set('auto', 'format');
-        url.searchParams.set('fit', 'crop');
-        return url.toString();
-      } catch {
-        return normalizedSrc;
-      }
-    }
-    return normalizedSrc;
-  }, [normalizedSrc, preferredWidth]);
+    return getOptimizedDealImageUrl(normalizedSrc, { width: preferredWidth, fit });
+  }, [fit, normalizedSrc, preferredWidth]);
   const optimizedSrcSet = useMemo(() => {
-    if (!optimizedSrc || !preferredWidth) return undefined;
-    const highWidth = Math.round(preferredWidth * 1.6);
-    if (optimizedSrc.includes('width=')) {
-      return `${optimizedSrc} 1x, ${optimizedSrc.replace(/width=\d+/i, `width=${highWidth}`)} 2x`;
-    }
-    if (optimizedSrc.includes('w=')) {
-      return `${optimizedSrc} 1x, ${optimizedSrc.replace(/w=\d+/i, `w=${highWidth}`)} 2x`;
-    }
-    return undefined;
-  }, [optimizedSrc, preferredWidth]);
+    return getOptimizedDealImageSrcSet(normalizedSrc, { width: preferredWidth, fit });
+  }, [fit, normalizedSrc, preferredWidth]);
   const showImage = Boolean(normalizedSrc) && !imageFailed;
 
   useEffect(() => {
@@ -92,7 +60,7 @@ export const DealArtwork = React.memo(({
             srcSet={optimizedSrcSet}
             sizes={sizes}
             alt={alt}
-            loading={fetchPriority === 'high' ? 'eager' : 'lazy'}
+            loading="lazy"
             decoding="async"
             fetchPriority={fetchPriority}
             onLoad={() => setImageLoaded(true)}

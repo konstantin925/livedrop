@@ -35,6 +35,7 @@ export interface Deal {
   currentClaims: number;
   claimCount: number;
   category: string;
+  statusTags?: string[];
   // Derived grouping helpers used in UI filtering
   localSubcategory?: string;
   onlineSubcategory?: string;
@@ -80,7 +81,7 @@ export interface CatalogCoupon {
 export interface AppNotification {
   id: string;
   message: string;
-  type: 'new_deal' | 'ending_soon' | 'catalog_drop' | 'share';
+  type: 'new_deal' | 'ending_soon' | 'catalog_drop' | 'share' | 'error';
   timestamp: number;
   read: boolean;
   dealId?: string;

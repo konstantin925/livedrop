@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef, useDeferredValue, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue, Suspense, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { Layout } from './components/Layout';
 import { DealCard } from './components/DealCard';
@@ -22,6 +22,13 @@ import {
   normalizeCategoryValue,
   normalizeSubcategoryValue,
 } from './utils/categories';
+import {
+  DEAL_STATUS_FILTER_OPTIONS,
+  getDealStatusFilterLabel,
+  sanitizeDealStatusTags,
+  type DealStatusFilterId,
+  type DealStatusTagId,
+} from './utils/dealStatus';
 import { isManagedMockOnlineDeal, mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
 import { CompanyLogo } from './components/CompanyLogo';
@@ -34,10 +41,10 @@ import { DealArtwork } from './components/DealArtwork';
 import { DealEmptyState } from './components/DealEmptyState';
 import { getAuthRedirectUrl, hasSupabaseAnonKey, hasSupabaseConfig, resolvedSupabaseUrl, supabase, supabaseConfigIssue, supabaseEdgeClient } from './lib/supabase';
 import { emptyCloudAppState, mergeCloudState } from './utils/cloudState';
+import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from './utils/dealImages';
 import { AppIcon } from './components/AppIcon';
 import brandBoltLogo from './assets/logo-bolt.svg';
 import brandBoltLogo3d from './assets/bolt-3d.png';
-import brandBoltLogo3dActive from './assets/bolt-3d-active.png';
 
 const CreateDealForm = React.lazy(() =>
   import('./components/CreateDealForm').then((module) => ({ default: module.CreateDealForm })),
@@ -313,45 +320,54 @@ const normalizeNotificationMessage = (message: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const getFeedFilterIconName = (filter: 'all' | 'trending' | 'ending-soon' | 'just-dropped') => {
-  if (filter === 'trending') return 'trending' as const;
-  if (filter === 'ending-soon') return 'ending' as const;
-  if (filter === 'just-dropped') return 'dropped' as const;
+const getFeedFilterIconName = (filter: DealStatusFilterId) => {
+  if (filter === 'popular') return 'trending' as const;
+  if (filter === 'best-deals') return 'spark' as const;
+  if (filter === 'leaving-soon') return 'ending' as const;
+  if (filter === 'new-deals') return 'dropped' as const;
   return 'deal' as const;
 };
 
-const getFeedTagIconName = (tag: 'Trending' | 'Ending Soon' | 'Just Dropped') => {
-  if (tag === 'Trending') return 'trending' as const;
-  if (tag === 'Ending Soon') return 'ending' as const;
-  return 'dropped' as const;
+const DEAL_STATUS_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const DEAL_STATUS_LEAVING_SOON_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+const normalizeFeedFilterId = (value: unknown): DealStatusFilterId => {
+  if (typeof value !== 'string') return 'all';
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'new-deals' || normalized === 'popular' || normalized === 'best-deals' || normalized === 'leaving-soon' || normalized === 'all') {
+    return normalized;
+  }
+
+  if (normalized === 'trending') return 'popular';
+  if (normalized === 'ending-soon') return 'leaving-soon';
+  if (normalized === 'just-dropped') return 'new-deals';
+
+  return 'all';
 };
 
-const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
-  'Fast Food': ['Burgers', 'Tacos', 'Sandwiches', 'Sweets'],
-  Coffee: ['Hot Coffee', 'Iced Coffee', 'Espresso', 'Bakery'],
-  Fitness: ['Gyms', 'Protein', 'Supplements', 'Activewear'],
-  Pet: ['Grooming', 'Treats', 'Toys', 'Wellness'],
-  Home: ['Cleaning', 'Books', 'Furniture', 'Services'],
+const getDealStatusTags = (deal: Deal, now: number): DealStatusTagId[] => {
+  const tags = new Set<DealStatusTagId>(sanitizeDealStatusTags(deal.statusTags));
+
+  if (now - deal.createdAt <= DEAL_STATUS_RECENT_WINDOW_MS || tags.has('new-deals')) {
+    tags.add('new-deals');
+  }
+  if (deal.adminTag === 'trending' || tags.has('popular')) {
+    tags.add('popular');
+  }
+  if (deal.adminTag === 'featured' || tags.has('best-deals')) {
+    tags.add('best-deals');
+  }
+  if (tags.has('leaving-soon') || (deal.hasTimer !== false && deal.expiresAt - now <= DEAL_STATUS_LEAVING_SOON_WINDOW_MS)) {
+    tags.add('leaving-soon');
+  }
+
+  return [...tags];
 };
 
-const ONLINE_TECH_SUBCATEGORY_OPTIONS = [
-  'All',
-  'Phones',
-  'Laptops',
-  'Tablets',
-  'Smartwatches',
-  'Headphones',
-  'Earbuds',
-  'Speakers',
-  'Gaming',
-  'PC Accessories',
-  'Keyboards',
-  'Mice',
-  'Monitors',
-  'TVs',
-  'Cameras',
-  'Drones',
-] as const;
+const dealMatchesStatusFilter = (deal: Deal, filterId: DealStatusFilterId, now: number) => (
+  filterId === 'all' || getDealStatusTags(deal, now).includes(filterId)
+);
 
 const ONLINE_TECH_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Phones: ['phone', 'iphone', 'galaxy', 'pixel', 'smartphone', 'mobile'],
@@ -371,22 +387,6 @@ const ONLINE_TECH_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Drones: ['drone', 'quadcopter'],
 };
 
-const ONLINE_HOME_SUBCATEGORY_OPTIONS = [
-  'All',
-  'Furniture',
-  'Home Decor',
-  'Kitchen',
-  'Bedding',
-  'Bath',
-  'Storage',
-  'Cleaning',
-  'Appliances',
-  'Smart Home',
-  'Lighting',
-  'Outdoor',
-  'Patio',
-] as const;
-
 const ONLINE_HOME_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Furniture: ['sofa', 'couch', 'chair', 'table', 'desk', 'dresser', 'bed frame', 'furniture'],
   'Home Decor': ['decor', 'throw pillow', 'wall art', 'rug', 'vase', 'frame', 'decorative'],
@@ -402,6 +402,7 @@ const ONLINE_HOME_SUBCATEGORY_KEYWORDS: Record<string, string[]> = {
   Patio: ['patio', 'outdoor furniture', 'umbrella', 'deck'],
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const ONLINE_FASHION_SUBCATEGORY_OPTIONS = [
   'All',
   'Men’s Clothing',
@@ -592,6 +593,8 @@ const chunkItems = <T,>(items: T[], chunkSize: number) => {
 
   return chunks;
 };
+
+const DEAL_FEED_BATCH_SIZE = 15;
 
 const extractPriceDropSavings = (value: string) => {
   const priceDropMatch = value.match(/\$?\s*(\d{1,4}(?:,\d{3})?(?:\.\d{1,2})?)\s*(?:->|â†’|to)\s*\$?\s*(\d{1,4}(?:,\d{3})?(?:\.\d{1,2})?)/i);
@@ -1708,6 +1711,8 @@ const PORTAL_FIELD_FALLBACK_SOURCES: Record<keyof PortalAutofillPayload, string[
   imageUrl: ['imageUrl'],
   dealTitle: ['title'],
   description: ['summary', 'description'],
+  currentPrice: ['price', 'currentPrice'],
+  originalPrice: ['originalPrice', 'price'],
   category: ['category'],
   offerText: ['couponText', 'offerText'],
 };
@@ -2731,6 +2736,7 @@ type DealRow = {
   current_claims: number;
   claim_count: number;
   category: string;
+  status_tags: string[] | null;
   local_subcategory: string | null;
   online_subcategory: string | null;
   owner_id: string | null;
@@ -2813,6 +2819,7 @@ const PUBLIC_DEALS_SCHEMA_FIELDS = [
   'current_claims',
   'claim_count',
   'category',
+  'status_tags',
   'local_subcategory',
   'online_subcategory',
   'owner_id',
@@ -2852,6 +2859,7 @@ const PUBLIC_DEALS_FEED_FIELDS = [
   'current_claims',
   'claim_count',
   'category',
+  'status_tags',
   'local_subcategory',
   'online_subcategory',
 ] as const satisfies ReadonlyArray<keyof DealRow>;
@@ -2876,6 +2884,7 @@ const PUBLIC_DEALS_FAST_FEED_FIELDS = [
   'product_link',
   'created_at',
   'category',
+  'status_tags',
   'local_subcategory',
   'online_subcategory',
   'claim_count',
@@ -3132,6 +3141,41 @@ const getDealDedupKey = (deal: Deal) => {
   ].join('|');
 };
 
+const inferDealBusinessTypeFromInput = (input: Partial<Deal> & Record<string, unknown>): Deal['businessType'] => {
+  if (input.businessType === 'online' || input.businessType === 'local') {
+    return input.businessType;
+  }
+
+  const legacyBusinessType = typeof input.business_type === 'string'
+    ? input.business_type.trim().toLowerCase()
+    : '';
+  if (legacyBusinessType === 'online' || legacyBusinessType === 'local') {
+    return legacyBusinessType;
+  }
+
+  if (typeof input.isOnline === 'boolean') {
+    return input.isOnline ? 'online' : 'local';
+  }
+
+  const distanceSignal = typeof input.distance === 'string' ? input.distance.trim().toLowerCase() : '';
+  if (distanceSignal === 'online') {
+    return 'online';
+  }
+
+  const hasOnlineUrlSignal = [
+    input.productUrl,
+    input.product_url,
+    input.productLink,
+    input.product_link,
+    input.affiliateUrl,
+    input.affiliate_url,
+    input.websiteUrl,
+    input.website_url,
+  ].some((value) => typeof value === 'string' && value.trim().length > 0);
+
+  return hasOnlineUrlSignal ? 'online' : 'local';
+};
+
 const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | null => {
   if (!input || typeof input !== 'object') {
     return null;
@@ -3153,7 +3197,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     return null;
   }
 
-  const businessType = input.businessType === 'online' ? 'online' : 'local';
+  const businessType = inferDealBusinessTypeFromInput(input as Partial<Deal> & Record<string, unknown>);
   const createdAt = clampWholeNumber(input.createdAt, Date.now(), 0);
   const requestedHasTimer = typeof input.hasTimer === 'boolean' ? input.hasTimer : true;
   const rawExpiresAt = clampWholeNumber(input.expiresAt, getDefaultDealExpiry(createdAt, businessType), 0);
@@ -3230,6 +3274,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
   const normalizedOnlineSubcategory = businessType === 'online'
     ? normalizeSubcategoryValue(input.onlineSubcategory, 'online', normalizedCategory) || undefined
     : undefined;
+  const normalizedStatusTags = sanitizeDealStatusTags(input.statusTags);
 
   return {
     id: trimDealTextValue(input.id) || createUuid(),
@@ -3268,6 +3313,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     currentClaims,
     claimCount,
     category: normalizedCategory,
+    statusTags: normalizedStatusTags,
     localSubcategory: normalizedLocalSubcategory,
     onlineSubcategory: normalizedOnlineSubcategory,
   };
@@ -3384,6 +3430,7 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     currentClaims,
     claimCount,
     category: normalizedCategory,
+    statusTags: sanitizeDealStatusTags(row.status_tags ?? fallback?.statusTags),
     localSubcategory: normalizeSubcategoryValue(
       row.local_subcategory ?? fallback?.localSubcategory,
       'local',
@@ -3439,6 +3486,7 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
     current_claims: deal.currentClaims,
     claim_count: deal.claimCount ?? deal.currentClaims,
     category: deal.category,
+    status_tags: sanitizeDealStatusTags(deal.statusTags),
     local_subcategory: deal.localSubcategory ?? null,
     online_subcategory: deal.onlineSubcategory ?? null,
     owner_id: normalizedOwnerId,
@@ -4131,7 +4179,7 @@ const getSupabaseErrorContext = (error: unknown) => {
 
 const buildSharedWriteLogDetail = (options: {
   operation: 'insert' | 'update' | 'upsert' | 'delete' | 'select' | 'bulk-upsert';
-  payload?: DealPublishPayload | DealPublishPayload[];
+  payload?: DealPublishPayload | DealPublishPayload[] | Record<string, unknown> | Record<string, unknown>[];
   extraFieldsRemoved?: string[];
   schemaColumns?: string[];
   schemaSource?: 'rpc' | 'local-fallback' | 'row-probe';
@@ -4443,19 +4491,14 @@ export default function App() {
     [deals, previewDealId],
   );
   const [dropMode, setDropMode] = useState<'local' | 'online'>('online');
-  const [dropModeEnabled, setDropModeEnabled] = useState(false);
-  const [dropModeShuffleSeed, setDropModeShuffleSeed] = useState<number>(() => Date.now());
+  const [, setDropModeEnabled] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [selectedLocalSubcategory, setSelectedLocalSubcategory] = useState<string>('All');
-  const [selectedOnlineSubcategory, setSelectedOnlineSubcategory] = useState<string>('All');
   const [onlineCategoryPage, setOnlineCategoryPage] = useState(0);
   const [viewportWidth, setViewportWidth] = useState<number>(() =>
     typeof window === 'undefined' ? 1280 : window.innerWidth,
   );
   const [claimsFilter, setClaimsFilter] = useState<'all' | 'pending' | 'completed' | 'expired'>('all');
-  const [selectedFeedFilter, setSelectedFeedFilter] = useState<'all' | 'trending' | 'ending-soon' | 'just-dropped'>('all');
-  const [discountFilterValue, setDiscountFilterValue] = useState(30);
-  const [discountFilterEnabled, setDiscountFilterEnabled] = useState(false);
+  const [selectedFeedFilter, setSelectedFeedFilter] = useState<DealStatusFilterId>('all');
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [liveClockNow, setLiveClockNow] = useState(() => Date.now());
   const [locationStatus, setLocationStatus] = useState<'loading' | 'success' | 'denied' | 'error'>('loading');
@@ -4508,13 +4551,20 @@ export default function App() {
   const [renderAllDeals, setRenderAllDeals] = useState(false);
   const hasBootstrappedOnlineFilters = useRef(false);
   const hasRecoveredOnlineEmptyState = useRef(false);
-  const hasRecoveredDiscountEmptyState = useRef(false);
   const onlineDebugSignatureRef = useRef('');
   const autoRestoredHiddenDealsRef = useRef(false);
   const [onlineDealPage, setOnlineDealPage] = useState(0);
   const [loadingMoreOnlineDeals, setLoadingMoreOnlineDeals] = useState(false);
   const onlineDealsSectionRef = useRef<HTMLDivElement | null>(null);
+  const [dealBatchVisibleCount, setDealBatchVisibleCount] = useState(DEAL_FEED_BATCH_SIZE);
+  const [dealBatchRevealStartIndex, setDealBatchRevealStartIndex] = useState<number | null>(null);
+  const [dealBatchLoading, setDealBatchLoading] = useState(false);
+  const dealBatchVisibleCountRef = useRef(DEAL_FEED_BATCH_SIZE);
+  const dealBatchLoadingRef = useRef(false);
+  const activeDealBatchTotalRef = useRef(0);
   const hasLoggedFirstDealsRef = useRef(false);
+  const sharedDealsHydratedRef = useRef(false);
+  const refreshSharedDealsInFlightRef = useRef<Promise<void> | null>(null);
   const [bulkImportJson, setBulkImportJson] = useState('');
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkImportMessage, setBulkImportMessage] = useState('');
@@ -4710,38 +4760,6 @@ export default function App() {
   }, [dropMode, selectedCategory, selectedFeedFilter]);
 
   useEffect(() => {
-    if (dropMode !== 'local' || selectedCategory === 'All') {
-      setSelectedLocalSubcategory('All');
-      return;
-    }
-
-    const availableSubcategories = LOCAL_SUBCATEGORY_OPTIONS[selectedCategory] ?? [];
-    if (!availableSubcategories.includes(selectedLocalSubcategory)) {
-      setSelectedLocalSubcategory('All');
-    }
-  }, [dropMode, selectedCategory, selectedLocalSubcategory]);
-
-  useEffect(() => {
-    if (dropMode !== 'online') {
-      setSelectedOnlineSubcategory('All');
-      return;
-    }
-
-    const availableSubcategories =
-      selectedCategory === 'Tech'
-        ? ONLINE_TECH_SUBCATEGORY_OPTIONS
-        : selectedCategory === 'Home'
-          ? ONLINE_HOME_SUBCATEGORY_OPTIONS
-          : selectedCategory === 'Fashion'
-            ? ONLINE_FASHION_SUBCATEGORY_OPTIONS
-            : (['All'] as const);
-
-    if (!(availableSubcategories as readonly string[]).includes(selectedOnlineSubcategory)) {
-      setSelectedOnlineSubcategory('All');
-    }
-  }, [dropMode, selectedCategory, selectedOnlineSubcategory]);
-
-  useEffect(() => {
     if (currentView === 'deal-detail' && selectedDetailDealId && !selectedDetailDeal) {
       setCurrentView('live-deals');
       setSelectedDetailDealId(null);
@@ -4803,6 +4821,93 @@ export default function App() {
       window.removeEventListener('resize', handleResize);
     };
   }, []);
+
+  useEffect(() => {
+    dealBatchVisibleCountRef.current = dealBatchVisibleCount;
+  }, [dealBatchVisibleCount]);
+
+  useEffect(() => {
+    dealBatchLoadingRef.current = dealBatchLoading;
+  }, [dealBatchLoading]);
+
+  useEffect(() => {
+    setDealBatchVisibleCount(DEAL_FEED_BATCH_SIZE);
+    dealBatchVisibleCountRef.current = DEAL_FEED_BATCH_SIZE;
+    setDealBatchRevealStartIndex(null);
+    setDealBatchLoading(false);
+    dealBatchLoadingRef.current = false;
+  }, [
+    dropMode,
+    selectedCategory,
+    selectedFeedFilter,
+    onlineDealPage,
+    onlineCategoryPage,
+    desktopSearchQuery,
+    renderAllDeals,
+    viewportWidth,
+    dealsLoading,
+    deals.length,
+  ]);
+
+  const triggerLoadNextDealBatch = useCallback(() => {
+    if (dealBatchLoadingRef.current) return;
+    const totalDeals = activeDealBatchTotalRef.current;
+    const currentVisible = dealBatchVisibleCountRef.current;
+    if (currentVisible >= totalDeals) return;
+
+    dealBatchLoadingRef.current = true;
+    setDealBatchLoading(true);
+
+    window.setTimeout(() => {
+      const safeTotal = activeDealBatchTotalRef.current;
+      const safeCurrent = dealBatchVisibleCountRef.current;
+      const nextVisible = Math.min(safeTotal, safeCurrent + DEAL_FEED_BATCH_SIZE);
+      if (nextVisible > safeCurrent) {
+        setDealBatchRevealStartIndex(safeCurrent);
+        setDealBatchVisibleCount(nextVisible);
+        dealBatchVisibleCountRef.current = nextVisible;
+      }
+      setDealBatchLoading(false);
+      dealBatchLoadingRef.current = false;
+    }, 110);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const maybeLoadNextBatch = () => {
+      if (dealBatchLoadingRef.current) return;
+      const totalDeals = activeDealBatchTotalRef.current;
+      const visibleDeals = dealBatchVisibleCountRef.current;
+      if (visibleDeals >= totalDeals) return;
+      const section = onlineDealsSectionRef.current;
+      if (!section) return;
+
+      const rect = section.getBoundingClientRect();
+      const nearSectionBottom = rect.bottom <= window.innerHeight + 280;
+      if (nearSectionBottom) {
+        triggerLoadNextDealBatch();
+      }
+    };
+
+    maybeLoadNextBatch();
+    window.addEventListener('scroll', maybeLoadNextBatch, { passive: true });
+    window.addEventListener('resize', maybeLoadNextBatch);
+
+    return () => {
+      window.removeEventListener('scroll', maybeLoadNextBatch);
+      window.removeEventListener('resize', maybeLoadNextBatch);
+    };
+  }, [triggerLoadNextDealBatch, dropMode, selectedCategory, selectedFeedFilter, onlineDealPage, onlineCategoryPage, viewportWidth, dealsLoading]);
+
+  useEffect(() => {
+    if (dealBatchRevealStartIndex === null) return;
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => {
+      setDealBatchRevealStartIndex(null);
+    }, 420);
+    return () => window.clearTimeout(timer);
+  }, [dealBatchRevealStartIndex, dealBatchVisibleCount]);
 
   useEffect(() => {
     if (!pendingPortalAutofill || !portalFieldSnapshot) {
@@ -4907,9 +5012,9 @@ export default function App() {
     setPageScanStatus('listening');
     const bookmarklet = buildPageScanBookmarklet(nonce);
     const copyResult = await copyTextToClipboard(bookmarklet);
-    if (!copyResult.success) {
+    if (copyResult !== 'success') {
       setPageScanStatus('error');
-      setPageScanError(copyResult.message || 'Unable to copy the LiveDrop scanner bookmarklet.');
+      setPageScanError('Unable to copy the LiveDrop scanner bookmarklet.');
       return;
     }
     setPageScanMessage('Scanner bookmarklet copied. Run it on the product page to send results back.');
@@ -5306,6 +5411,59 @@ export default function App() {
     );
   };
 
+  const stripMissingColumnsFromPayload = (
+    payload: DealPublishPayload,
+    missingColumns: string[],
+  ) => {
+    if (missingColumns.length === 0) {
+      return payload;
+    }
+
+    const nextPayload = { ...payload } as Record<string, unknown>;
+    let changed = false;
+    missingColumns.forEach((column) => {
+      if (Object.prototype.hasOwnProperty.call(nextPayload, column)) {
+        delete nextPayload[column];
+        changed = true;
+      }
+    });
+
+    return changed ? (nextPayload as DealPublishPayload) : payload;
+  };
+
+  const stripMissingColumnsFromPayloadList = (
+    payload: DealPublishPayload[],
+    missingColumns: string[],
+  ) => {
+    let changed = false;
+    const nextPayload = payload.map((entry) => {
+      const sanitizedEntry = stripMissingColumnsFromPayload(entry, missingColumns);
+      if (sanitizedEntry !== entry) {
+        changed = true;
+      }
+      return sanitizedEntry;
+    });
+
+    return changed ? nextPayload : payload;
+  };
+
+  const noteMissingSchemaColumnsInCache = (missingColumns: string[]) => {
+    if (missingColumns.length === 0) return;
+    const cachedSchema = dealsSchemaColumnsCacheRef.current;
+    if (!cachedSchema) return;
+
+    const missingSet = new Set(missingColumns);
+    const nextColumns = cachedSchema.columns.filter((column) => !missingSet.has(column));
+    if (nextColumns.length === cachedSchema.columns.length) {
+      return;
+    }
+
+    dealsSchemaColumnsCacheRef.current = {
+      columns: nextColumns,
+      fetchedAt: Date.now(),
+    };
+  };
+
   const dedupeAIFinderQueries = (queries: string[]) => {
     const seen = new Set<string>();
     return queries.filter((query) => {
@@ -5522,15 +5680,15 @@ export default function App() {
       ) {
         return cloneDealsForCache(cachedEntry.deals);
       }
+    }
 
-      const inFlightEntry = sharedDealsInFlightRef.current;
-      if (
-        inFlightEntry
-        && inFlightEntry.mode === fetchMode
-        && isCacheLimitCompatible(inFlightEntry.limit)
-      ) {
-        return inFlightEntry.promise;
-      }
+    const inFlightEntry = sharedDealsInFlightRef.current;
+    if (
+      inFlightEntry
+      && inFlightEntry.mode === fetchMode
+      && isCacheLimitCompatible(inFlightEntry.limit)
+    ) {
+      return inFlightEntry.promise;
     }
 
     const requestPromise = (async () => {
@@ -5618,10 +5776,16 @@ export default function App() {
         );
       };
 
+      const compatibilityAttemptLimit = Math.max(
+        includeAllStatuses ? 12 : (fastFirstPaint ? 8 : 12),
+        selectedColumns.length + 6,
+      );
       let attempt = 0;
       let data: unknown[] | null = null;
       let error: unknown = null;
-      const maxAttempts = fastFirstPaint ? 2 : (includeAllStatuses ? 12 : 6);
+      // Older projects can be missing many optional columns; allow enough
+      // compatibility retries to strip all unsupported fields instead of failing early.
+      const maxAttempts = compatibilityAttemptLimit;
 
       while (attempt < maxAttempts) {
         const result = await runSharedDealsQuery({
@@ -5698,18 +5862,77 @@ export default function App() {
       }
 
       if (error) {
+        const emergencyColumns = [
+          'id',
+          'business_type',
+          'status',
+          'business_name',
+          'merchant',
+          'image_url',
+          'title',
+          'description',
+          'offer_text',
+          'price',
+          'current_price',
+          'original_price',
+          'discount_percent',
+          'affiliate_url',
+          'website_url',
+          'product_link',
+          'created_at',
+          'category',
+          'claim_count',
+          'like_count',
+          'dislike_count',
+          'share_count',
+        ].join(',');
+        const emergencyLimit = typeof requestedLimit === 'number'
+          ? Math.min(requestedLimit, PUBLIC_DEALS_FIRST_PAINT_LIMIT)
+          : PUBLIC_DEALS_FIRST_PAINT_LIMIT;
+
+        try {
+          let emergencyQuery = getDealsTableClient().select(emergencyColumns);
+          if (!includeAllStatuses) {
+            emergencyQuery = emergencyQuery.eq('status', 'active');
+          }
+          emergencyQuery = emergencyQuery.limit(emergencyLimit);
+          const emergencyResult = await emergencyQuery;
+          if (!emergencyResult.error && (emergencyResult.data?.length ?? 0) > 0) {
+            if (import.meta.env.DEV) {
+              console.warn('[LiveDrop] Shared deals query recovered via emergency fallback', {
+                rows: emergencyResult.data?.length ?? 0,
+                emergencyLimit,
+              });
+            }
+            pushAdminLog('info', 'Shared deals query recovered via emergency fallback', buildSharedWriteLogDetail({
+              operation: 'select',
+              payloadKeys: [`rows:${emergencyResult.data?.length ?? 0}`, `limit:${emergencyLimit}`],
+              error,
+            }));
+            data = emergencyResult.data as unknown[];
+            error = null;
+          }
+        } catch (emergencyError) {
+          if (import.meta.env.DEV) {
+            console.warn('[LiveDrop] Shared deals emergency fallback failed', getSupabaseErrorContext(emergencyError));
+          }
+        }
+      }
+
+      if (error) {
+        const errorContext = getSupabaseErrorContext(error);
         console.error('[LiveDrop] Supabase deals query failed', {
           projectUrl: resolvedSupabaseUrl,
           schema: DEALS_SCHEMA,
           table: DEALS_TABLE,
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
+          code: errorContext.code,
+          message: errorContext.message,
+          details: errorContext.details,
+          hint: errorContext.hint,
+          missingColumns: errorContext.missingColumns,
         });
         if (import.meta.env.DEV) {
-          const context = getSupabaseErrorContext(error);
-          console.error('[LiveDrop] Shared deals error context', context);
+          console.error('[LiveDrop] Shared deals error context', errorContext);
         }
         pushAdminLog('error', 'Shared deals fetch failed', buildSharedWriteLogDetail({
           operation: 'select',
@@ -5741,6 +5964,15 @@ export default function App() {
       }));
 
       const mappedDeals = (data ?? []).map((row) => mapDealRowToDeal(row as Partial<DealRow>));
+      if (import.meta.env.DEV) {
+        const onlineCount = mappedDeals.filter((deal) => deal.businessType === 'online').length;
+        console.info('[LiveDrop] Shared deals mapped snapshot', {
+          mappedCount: mappedDeals.length,
+          onlineCount,
+          localCount: mappedDeals.length - onlineCount,
+          activeCount: mappedDeals.filter((deal) => (deal.status ?? 'active') === 'active').length,
+        });
+      }
       writeSharedDealsFastCache(mappedDeals);
       sharedDealsCacheRef.current = {
         mode: fetchMode,
@@ -5751,13 +5983,11 @@ export default function App() {
       return mappedDeals;
     })();
 
-    if (!force) {
-      sharedDealsInFlightRef.current = {
-        mode: fetchMode,
-        limit: requestedLimit,
-        promise: requestPromise,
-      };
-    }
+    sharedDealsInFlightRef.current = {
+      mode: fetchMode,
+      limit: requestedLimit,
+      promise: requestPromise,
+    };
 
     try {
       return await requestPromise;
@@ -5845,10 +6075,39 @@ export default function App() {
       missingColumns,
     }));
 
-    const { data, error } = await getDealsTableClient()
-      .insert(payload)
+    let effectivePayload = payload;
+    let { data, error } = await getDealsTableClient()
+      .insert(effectivePayload)
       .select()
       .single();
+
+    let retryAttempt = 0;
+    while (error && retryAttempt < 8) {
+      const retryMissingColumns = extractMissingDealColumns(error);
+      const retryPayload = stripMissingColumnsFromPayload(effectivePayload, retryMissingColumns);
+      if (retryPayload === effectivePayload) {
+        break;
+      }
+      noteMissingSchemaColumnsInCache(retryMissingColumns);
+      pushAdminLog('info', 'Retrying shared deal publish with schema-compat payload', buildSharedWriteLogDetail({
+        operation: 'insert',
+        payload: retryPayload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys: Object.keys(retryPayload),
+        missingColumns: retryMissingColumns,
+        error,
+      }));
+      const retryResult = await getDealsTableClient()
+        .insert(retryPayload)
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+      effectivePayload = retryPayload;
+      retryAttempt += 1;
+    }
 
     if (error) {
       logMissingDealColumns(error);
@@ -5856,7 +6115,7 @@ export default function App() {
         projectUrl: resolvedSupabaseUrl,
         schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
         code: error.code,
         message: error.message,
@@ -5865,11 +6124,11 @@ export default function App() {
       });
       pushAdminLog('error', 'Shared deal publish failed', buildSharedWriteLogDetail({
         operation: 'insert',
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
         schemaColumns,
         schemaSource,
-        payloadKeys,
+        payloadKeys: Object.keys(effectivePayload),
         missingColumns,
         error,
       }));
@@ -5926,9 +6185,37 @@ export default function App() {
       missingColumns,
     }));
 
-    const { data, error } = await getDealsTableClient()
-      .upsert(payload, { onConflict: 'id' })
+    let effectivePayload = payload;
+    let { data, error } = await getDealsTableClient()
+      .upsert(effectivePayload, { onConflict: 'id' })
       .select();
+
+    let bulkRetryAttempt = 0;
+    while (error && bulkRetryAttempt < 8) {
+      const retryMissingColumns = extractMissingDealColumns(error);
+      const retryPayload = stripMissingColumnsFromPayloadList(effectivePayload, retryMissingColumns);
+      if (retryPayload === effectivePayload) {
+        break;
+      }
+      noteMissingSchemaColumnsInCache(retryMissingColumns);
+      pushAdminLog('info', 'Retrying bulk shared deal publish with schema-compat payload', buildSharedWriteLogDetail({
+        operation: 'bulk-upsert',
+        payload: retryPayload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys: Object.keys(retryPayload[0] ?? {}),
+        missingColumns: retryMissingColumns,
+        error,
+      }));
+      const retryResult = await getDealsTableClient()
+        .upsert(retryPayload, { onConflict: 'id' })
+        .select();
+      data = retryResult.data;
+      error = retryResult.error;
+      effectivePayload = retryPayload;
+      bulkRetryAttempt += 1;
+    }
 
     if (error) {
       logMissingDealColumns(error);
@@ -5936,8 +6223,8 @@ export default function App() {
         projectUrl: resolvedSupabaseUrl,
         schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
-        payloadCount: payload.length,
-        payload,
+        payloadCount: effectivePayload.length,
+        payload: effectivePayload,
         extraFieldsRemoved,
         code: error.code,
         message: error.message,
@@ -5946,11 +6233,11 @@ export default function App() {
       });
       pushAdminLog('error', 'Bulk shared deal import failed', buildSharedWriteLogDetail({
         operation: 'bulk-upsert',
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
         schemaColumns,
         schemaSource,
-        payloadKeys,
+        payloadKeys: Object.keys(effectivePayload[0] ?? {}),
         missingColumns,
         error,
       }));
@@ -6003,32 +6290,63 @@ export default function App() {
       missingColumns,
     }));
 
-    const { data, error } = await getDealsTableClient()
-      .update(payload)
+    let effectivePayload = payload;
+    let { data, error } = await getDealsTableClient()
+      .update(effectivePayload)
       .eq('id', ensureUuid(deal.id))
       .select()
       .single();
 
+    let updateRetryAttempt = 0;
+    while (error && updateRetryAttempt < 8) {
+      const retryMissingColumns = extractMissingDealColumns(error);
+      const retryPayload = stripMissingColumnsFromPayload(effectivePayload, retryMissingColumns);
+      if (retryPayload === effectivePayload) {
+        break;
+      }
+      noteMissingSchemaColumnsInCache(retryMissingColumns);
+      pushAdminLog('info', 'Retrying shared deal update with schema-compat payload', buildSharedWriteLogDetail({
+        operation: 'update',
+        payload: retryPayload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys: Object.keys(retryPayload),
+        missingColumns: retryMissingColumns,
+        error,
+      }));
+      const retryResult = await getDealsTableClient()
+        .update(retryPayload)
+        .eq('id', ensureUuid(deal.id))
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+      effectivePayload = retryPayload;
+      updateRetryAttempt += 1;
+    }
+
     if (error) {
       logMissingDealColumns(error);
+      const errorContext = getSupabaseErrorContext(error);
       console.error('[LiveDrop] Supabase deal update failed', {
         projectUrl: resolvedSupabaseUrl,
         schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
+        code: errorContext.code,
+        message: errorContext.message,
+        details: errorContext.details,
+        hint: errorContext.hint,
       });
       pushAdminLog('error', 'Shared deal update failed', buildSharedWriteLogDetail({
         operation: 'update',
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
         schemaColumns,
         schemaSource,
-        payloadKeys,
+        payloadKeys: Object.keys(effectivePayload),
         missingColumns,
         error,
       }));
@@ -6076,31 +6394,61 @@ export default function App() {
       missingColumns,
     }));
 
-    const { data, error } = await getDealsTableClient()
-      .upsert(payload, { onConflict: 'id' })
+    let effectivePayload = payload;
+    let { data, error } = await getDealsTableClient()
+      .upsert(effectivePayload, { onConflict: 'id' })
       .select()
       .single();
 
+    let upsertRetryAttempt = 0;
+    while (error && upsertRetryAttempt < 8) {
+      const retryMissingColumns = extractMissingDealColumns(error);
+      const retryPayload = stripMissingColumnsFromPayload(effectivePayload, retryMissingColumns);
+      if (retryPayload === effectivePayload) {
+        break;
+      }
+      noteMissingSchemaColumnsInCache(retryMissingColumns);
+      pushAdminLog('info', 'Retrying shared deal upsert with schema-compat payload', buildSharedWriteLogDetail({
+        operation: 'upsert',
+        payload: retryPayload,
+        extraFieldsRemoved,
+        schemaColumns,
+        schemaSource,
+        payloadKeys: Object.keys(retryPayload),
+        missingColumns: retryMissingColumns,
+        error,
+      }));
+      const retryResult = await getDealsTableClient()
+        .upsert(retryPayload, { onConflict: 'id' })
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+      effectivePayload = retryPayload;
+      upsertRetryAttempt += 1;
+    }
+
     if (error) {
       logMissingDealColumns(error);
+      const errorContext = getSupabaseErrorContext(error);
       console.error('[LiveDrop] Supabase deal upsert failed', {
         projectUrl: resolvedSupabaseUrl,
         schema: DEALS_SCHEMA,
         table: DEALS_TABLE,
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
+        code: errorContext.code,
+        message: errorContext.message,
+        details: errorContext.details,
+        hint: errorContext.hint,
       });
       pushAdminLog('error', 'Shared deal update failed', buildSharedWriteLogDetail({
         operation: 'upsert',
-        payload,
+        payload: effectivePayload,
         extraFieldsRemoved,
         schemaColumns,
         schemaSource,
-        payloadKeys,
+        payloadKeys: Object.keys(effectivePayload),
         missingColumns,
         error,
       }));
@@ -7109,7 +7457,7 @@ const deleteDealFromBackend = async (
     setNotifications(mergedState.notifications);
     setRadius(mergedState.preferences.radius ?? radius);
     setSelectedCategory(mergedState.preferences.selectedCategory ?? 'All');
-    setSelectedFeedFilter(mergedState.preferences.selectedFeedFilter ?? 'all');
+    setSelectedFeedFilter(normalizeFeedFilterId(mergedState.preferences.selectedFeedFilter));
     setRole((profile?.role as UserRole | undefined) ?? mergedState.preferences.role ?? 'customer');
     setSubscriptionStatus((profile?.subscription_status as SubscriptionStatus | undefined) ?? 'inactive');
     setSubscriptionPlan(profile?.subscription_plan ?? null);
@@ -7220,15 +7568,20 @@ const deleteDealFromBackend = async (
   useEffect(() => {
     setOnlineDealPage(0);
     setLoadingMoreOnlineDeals(false);
-  }, [dropMode, selectedCategory, selectedFeedFilter, selectedOnlineSubcategory, discountFilterEnabled, discountFilterValue]);
+  }, [dropMode, selectedCategory, selectedFeedFilter]);
 
 
   // Load shared deals from the backend with bundled fallback data
   useEffect(() => {
+    if (sharedDealsHydratedRef.current) {
+      return;
+    }
+    sharedDealsHydratedRef.current = true;
     let cancelled = false;
 
     const savedDeals = readStoredDeals();
     const cachedSharedDeals = readSharedDealsFastCache();
+    const hasWarmSharedDealsCache = cachedSharedDeals.length > 0;
     const fallbackSourceDeals = [...savedDeals, ...cachedSharedDeals];
     if (savedDeals.length > 0) {
       safeSetLocalStorageItem(DEALS_STORAGE_BACKUP_KEY, JSON.stringify(buildDealsStorageSnapshot(savedDeals)));
@@ -7275,12 +7628,24 @@ const deleteDealFromBackend = async (
         return;
       }
 
+      if (hasWarmSharedDealsCache && !isAdminRoute) {
+        if (import.meta.env.DEV) {
+          console.info('[LiveDrop] Skipping network fetch on hydrate because warm shared cache is available', {
+            cachedDeals: cachedSharedDeals.length,
+          });
+        }
+        if (!cancelled) {
+          setDealsLoading(false);
+        }
+        return;
+      }
+
       try {
         const perfStart = import.meta.env.DEV ? performance.now() : 0;
         if (import.meta.env.DEV) {
           console.info('[LiveDrop] Deals hydrate fetch start', {
-            phase: 'first-paint',
-            limit: PUBLIC_DEALS_FIRST_PAINT_LIMIT,
+            phase: 'initial',
+            limit: PUBLIC_DEALS_FETCH_LIMIT,
           });
         }
 
@@ -7309,52 +7674,58 @@ const deleteDealFromBackend = async (
           const filteredDeals = nextDeals.filter(
             (deal) => !hiddenDealIdsRef.current.has(deal.id) && !isDealHiddenByIdentityKeys(deal, hiddenDealKeysRef.current),
           );
+          const visibleOnlineDeals = filteredDeals.filter((deal) => deal.businessType === 'online').length;
+          const totalOnlineDeals = nextDeals.filter((deal) => deal.businessType === 'online').length;
+          const shouldAutoRestoreHiddenOnline =
+            totalOnlineDeals > 0
+            && visibleOnlineDeals === 0
+            && filteredDeals.length < nextDeals.length;
           if (
             !autoRestoredHiddenDealsRef.current
-            && nextDeals.length > 0
-            && filteredDeals.length === 0
+            && (
+              (nextDeals.length > 0 && filteredDeals.length === 0)
+              || shouldAutoRestoreHiddenOnline
+            )
             && (hiddenDealIdsRef.current.size > 0 || hiddenDealKeysRef.current.size > 0)
           ) {
             autoRestoredHiddenDealsRef.current = true;
-            setHiddenDealIds(() => {
-              const next = new Set<string>();
-              hiddenDealIdsRef.current = next;
-              if (typeof window !== 'undefined') {
-                safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify([]));
-              }
-              return next;
-            });
-            setHiddenDealKeys(() => {
-              const next = new Set<string>();
-              hiddenDealKeysRef.current = next;
-              if (typeof window !== 'undefined') {
-                safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify([]));
-              }
-              return next;
-            });
+            const clearedHiddenIds = new Set<string>();
+            const clearedHiddenKeys = new Set<string>();
+            // Update refs immediately so this same render pass can publish visible deals.
+            hiddenDealIdsRef.current = clearedHiddenIds;
+            hiddenDealKeysRef.current = clearedHiddenKeys;
+            setHiddenDealIds(clearedHiddenIds);
+            setHiddenDealKeys(clearedHiddenKeys);
+            if (typeof window !== 'undefined') {
+              safeSetLocalStorageItem(HIDDEN_DEALS_STORAGE_KEY, JSON.stringify([]));
+              safeSetLocalStorageItem(HIDDEN_DEAL_KEYS_STORAGE_KEY, JSON.stringify([]));
+            }
           }
           if (import.meta.env.DEV) {
             console.info('[LiveDrop] Deals hydrate counts', {
               phase,
+              fetchedRawCount: remoteDeals.length,
               mergedCount: mergedHydratedDeals.length,
               finalCount: nextDeals.length,
               visibleAfterHidden: filteredDeals.length,
+              onlineVisibleCount: filteredDeals.filter((deal) => deal.businessType === 'online').length,
+              localVisibleCount: filteredDeals.filter((deal) => deal.businessType !== 'online').length,
               hiddenIds: hiddenDealIdsRef.current.size,
               hiddenKeys: hiddenDealKeysRef.current.size,
               processingMs: Math.round(performance.now() - processingStart),
             });
           }
           applyDealsState(nextDeals);
-          setDealsError(remoteDeals.length > 0 ? '' : 'Shared feed is empty.');
+          setDealsError(nextDeals.length > 0 ? '' : 'Shared feed is empty.');
         };
 
-        const firstPaintDeals = await fetchSharedDeals({ limit: PUBLIC_DEALS_FIRST_PAINT_LIMIT });
+        const firstPaintDeals = await fetchSharedDeals({ limit: PUBLIC_DEALS_FETCH_LIMIT });
         if (cancelled) return;
 
         if (import.meta.env.DEV) {
           const fetchEnd = performance.now();
           console.info('[LiveDrop] Deals hydrate fetch end', {
-            phase: 'first-paint',
+            phase: 'initial',
             rows: firstPaintDeals.length,
             fetchMs: Math.round(fetchEnd - perfStart),
           });
@@ -7362,42 +7733,6 @@ const deleteDealFromBackend = async (
 
         applyRemoteDeals(firstPaintDeals, 'first-paint');
         setDealsLoading(false);
-
-        void (async () => {
-          if (import.meta.env.DEV) {
-            console.info('[LiveDrop] Deals hydrate fetch start', {
-              phase: 'background-full',
-              limit: PUBLIC_DEALS_FETCH_LIMIT,
-            });
-          }
-          const backgroundStart = import.meta.env.DEV ? performance.now() : 0;
-          try {
-            const fullRemoteDeals = await fetchSharedDeals({ force: true, limit: PUBLIC_DEALS_FETCH_LIMIT });
-            if (cancelled) return;
-            const hasMeaningfulDifference =
-              fullRemoteDeals.length !== firstPaintDeals.length
-              || fullRemoteDeals.some((deal, index) => {
-                const firstDeal = firstPaintDeals[index];
-                return !firstDeal || firstDeal.id !== deal.id || firstDeal.createdAt !== deal.createdAt;
-              });
-            if (!hasMeaningfulDifference) return;
-
-            if (import.meta.env.DEV) {
-              console.info('[LiveDrop] Deals hydrate fetch end', {
-                phase: 'background-full',
-                rows: fullRemoteDeals.length,
-                fetchMs: Math.round(performance.now() - backgroundStart),
-              });
-            }
-
-            applyRemoteDeals(fullRemoteDeals, 'background-full');
-          } catch (backgroundError) {
-            if (import.meta.env.DEV) {
-              const context = getSupabaseErrorContext(backgroundError);
-              console.warn('[LiveDrop] Background full shared deals hydrate failed', context);
-            }
-          }
-        })();
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to load shared deals:', error);
@@ -7469,7 +7804,6 @@ const deleteDealFromBackend = async (
     if (dealsLoading || hasBootstrappedOnlineFilters.current) return;
     setSelectedCategory('All');
     setSelectedFeedFilter('all');
-    setSelectedOnlineSubcategory('All');
     hasBootstrappedOnlineFilters.current = true;
   }, [dropMode, dealsLoading]);
 
@@ -7491,7 +7825,6 @@ const deleteDealFromBackend = async (
     if (hasCategoryMatch) return;
     setSelectedCategory('All');
     setSelectedFeedFilter('all');
-    setSelectedOnlineSubcategory('All');
     setOnlineDealPage(0);
     hasRecoveredOnlineEmptyState.current = true;
   }, [dropMode, dealsLoading, deals, selectedCategory]);
@@ -7975,31 +8308,6 @@ const deleteDealFromBackend = async (
     if (!isAdminRoute || !hasAdminAccess) return;
     void refreshSharedDeals();
   }, [hasAdminAccess, isAdminRoute]);
-
-  useEffect(() => {
-    if (isAdminRoute) return;
-    if (dropMode !== 'online') return;
-    if (!supabase || !hasSupabaseConfig) return;
-
-    let cancelled = false;
-    const runSilentRefresh = async () => {
-      if (cancelled || dealsLoading) return;
-      await refreshSharedDeals({ force: true, silent: true });
-    };
-
-    const warmupId = window.setTimeout(() => {
-      void runSilentRefresh();
-    }, 15_000);
-    const intervalId = window.setInterval(() => {
-      void runSilentRefresh();
-    }, 60_000);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(warmupId);
-      window.clearInterval(intervalId);
-    };
-  }, [dealsLoading, dropMode, hasSupabaseConfig, isAdminRoute]);
 
   useEffect(() => {
     const normalizedEmail = authUser?.email?.toLowerCase();
@@ -8918,7 +9226,7 @@ const deleteDealFromBackend = async (
       expiresAt: deal.expiresAt > now ? deal.expiresAt : now + 30 * 60 * 1000,
     }));
 
-    let persistedDeals = publishableDeals;
+    let persistedDeals: Deal[] = publishableDeals;
     let sharedWriteSucceeded = false;
 
     if (supabase && hasSupabaseConfig) {
@@ -8945,7 +9253,7 @@ const deleteDealFromBackend = async (
   const handleBulkExpireSelected = async (selectedDeals: Deal[]) => {
     if (selectedDeals.length === 0) return;
     const expiredDeals = selectedDeals.map((deal) => ({ ...deal, status: 'expired' as const }));
-    let persistedDeals = expiredDeals;
+    let persistedDeals: Deal[] = expiredDeals;
 
     if (supabase && hasSupabaseConfig) {
       try {
@@ -9160,57 +9468,85 @@ const deleteDealFromBackend = async (
   };
 
   const refreshSharedDeals = async (options?: { force?: boolean; silent?: boolean }) => {
-    const force = Boolean(options?.force);
-    const silent = Boolean(options?.silent);
-    if (!force) {
-      const cachedEntry = sharedDealsCacheRef.current;
-      if (
-        cachedEntry
-        && Date.now() - cachedEntry.fetchedAt < SHARED_DEALS_CACHE_TTL_MS
-        && (cachedEntry.limit === null || cachedEntry.limit >= PUBLIC_DEALS_FETCH_LIMIT)
-      ) {
-        return;
+    if (refreshSharedDealsInFlightRef.current) {
+      return refreshSharedDealsInFlightRef.current;
+    }
+
+    const refreshTask = (async () => {
+      const force = Boolean(options?.force);
+      const silent = Boolean(options?.silent);
+      if (!force) {
+        const cachedEntry = sharedDealsCacheRef.current;
+        if (
+          cachedEntry
+          && Date.now() - cachedEntry.fetchedAt < SHARED_DEALS_CACHE_TTL_MS
+          && (cachedEntry.limit === null || cachedEntry.limit >= PUBLIC_DEALS_FETCH_LIMIT)
+        ) {
+          return;
+        }
       }
-    }
-    if (!silent) {
-      setDealsLoading(true);
-    }
-    try {
+      if (!silent) {
+        setDealsLoading(true);
+      }
       try {
-        await syncPendingDeletesWithBackend();
-      } catch (pendingDeleteSyncError) {
-        console.warn('[LiveDrop] Pending delete sync skipped during refresh', pendingDeleteSyncError);
-      }
-      const sharedDeals = await fetchSharedDeals({ force });
-      const storedDeals = readStoredDeals();
+        try {
+          await syncPendingDeletesWithBackend();
+        } catch (pendingDeleteSyncError) {
+          console.warn('[LiveDrop] Pending delete sync skipped during refresh', pendingDeleteSyncError);
+        }
+        const sharedDeals = await fetchSharedDeals({ force });
+        const storedDeals = readStoredDeals();
         const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(sharedDeals, storedDeals, {
           allowLocalFallbackWhenRemoteEmpty: true,
         });
-      const nextDeals = composeDealsWithLocationContext(
-        mergedHydratedDeals,
-        latestUserLocationRef.current,
-        latestHasPreciseLocationRef.current,
-        { includeManagedOnlinePipeline: false },
-      );
-      applyDealsState(nextDeals);
-      if (!silent) {
-        setDealsError(sharedDeals.length > 0 ? '' : 'Shared feed is empty.');
-      } else if (sharedDeals.length > 0) {
-        setDealsError('');
+        const nextDeals = composeDealsWithLocationContext(
+          mergedHydratedDeals,
+          latestUserLocationRef.current,
+          latestHasPreciseLocationRef.current,
+          { includeManagedOnlinePipeline: false },
+        );
+        applyDealsState(nextDeals);
+        if (import.meta.env.DEV) {
+          const onlineCount = nextDeals.filter((deal) => deal.businessType === 'online').length;
+          console.info('[LiveDrop] Shared deals refresh snapshot', {
+            rawFetchedCount: sharedDeals.length,
+            renderedCount: nextDeals.length,
+            onlineCount,
+            localCount: nextDeals.length - onlineCount,
+            selectedMode: dropMode,
+            selectedCategory,
+            selectedFeedFilter,
+            dealsLoading,
+          });
+        }
+        if (!silent) {
+          setDealsError(nextDeals.length > 0 ? '' : 'Shared feed is empty.');
+        } else if (sharedDeals.length > 0) {
+          setDealsError('');
+        }
+        if (!silent) {
+          pushAdminLog('info', force ? 'Force refreshed shared deals' : 'Refreshed shared deals');
+        }
+      } catch (error) {
+        console.error('[LiveDrop] Shared refresh failed', error);
+        if (!silent) {
+          const hasExistingDeals = latestDealsRef.current.length > 0;
+          setDealsError(hasExistingDeals ? '' : 'Could not load shared deals. Keeping the last synced view.');
+          pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
+        }
+      } finally {
+        if (!silent) {
+          setDealsLoading(false);
+        }
       }
-      if (!silent) {
-        pushAdminLog('info', force ? 'Force refreshed shared deals' : 'Refreshed shared deals');
-      }
-    } catch (error) {
-      console.error('[LiveDrop] Shared refresh failed', error);
-      if (!silent) {
-        const hasExistingDeals = latestDealsRef.current.length > 0;
-        setDealsError(hasExistingDeals ? '' : 'Could not load shared deals. Keeping the last synced view.');
-        pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
-      }
+    })();
+
+    refreshSharedDealsInFlightRef.current = refreshTask;
+    try {
+      await refreshTask;
     } finally {
-      if (!silent) {
-        setDealsLoading(false);
+      if (refreshSharedDealsInFlightRef.current === refreshTask) {
+        refreshSharedDealsInFlightRef.current = null;
       }
     }
   };
@@ -10140,7 +10476,6 @@ const deleteDealFromBackend = async (
     setDropModeEnabled(false);
     setDropMode('local');
     setSelectedCategory('All');
-    setSelectedLocalSubcategory('All');
     setSelectedFeedFilter('all');
   };
 
@@ -10155,11 +10490,7 @@ const deleteDealFromBackend = async (
   };
 
   const deferredSelectedCategory = useDeferredValue(selectedCategory);
-  const deferredSelectedLocalSubcategory = useDeferredValue(selectedLocalSubcategory);
-  const deferredSelectedOnlineSubcategory = useDeferredValue(selectedOnlineSubcategory);
   const deferredSelectedFeedFilter = useDeferredValue(selectedFeedFilter);
-  const deferredDiscountFilterValue = useDeferredValue(discountFilterValue);
-  const deferredDiscountFilterEnabled = useDeferredValue(discountFilterEnabled);
   const deferredDesktopSearchQuery = useDeferredValue(desktopSearchQuery);
 
   const memoizedLocalDeals = useMemo(() => {
@@ -10195,70 +10526,11 @@ const deleteDealFromBackend = async (
     })
   ), [memoizedLocalDeals, userLocation, hasPreciseUserLocation]);
 
-  useEffect(() => {
-    if (dropMode !== 'online' || dealsLoading) {
-      hasRecoveredDiscountEmptyState.current = false;
-      return;
-    }
-    if (!discountFilterEnabled) {
-      hasRecoveredDiscountEmptyState.current = false;
-      return;
-    }
-    if (hasRecoveredDiscountEmptyState.current) return;
-    if (memoizedOnlineDealsWithSubcategory.length === 0) return;
-
-    const matchesSelectedCategory = (deal: Deal) =>
-      selectedCategory === 'All' || deal.category === selectedCategory;
-    const matchesSelectedSubcategory = (deal: Deal) =>
-      selectedOnlineSubcategory === 'All' || deal.onlineSubcategory === selectedOnlineSubcategory;
-
-    const hasAnyMatchWithoutDiscount = memoizedOnlineDealsWithSubcategory.some(
-      (deal) => matchesSelectedCategory(deal) && matchesSelectedSubcategory(deal),
-    );
-    if (!hasAnyMatchWithoutDiscount) return;
-
-    const hasAnyMatchWithDiscount = memoizedOnlineDealsWithSubcategory.some((deal) => {
-      if (!matchesSelectedCategory(deal) || !matchesSelectedSubcategory(deal)) return false;
-      const discountValue = getDealDiscountPercentValue(deal);
-      return discountValue !== null && discountValue >= discountFilterValue;
-    });
-
-    if (!hasAnyMatchWithDiscount) {
-      setDiscountFilterEnabled(false);
-      setSelectedFeedFilter('all');
-      setOnlineDealPage(0);
-      hasRecoveredDiscountEmptyState.current = true;
-    }
-  }, [
-    dropMode,
-    dealsLoading,
-    discountFilterEnabled,
-    discountFilterValue,
-    memoizedOnlineDealsWithSubcategory,
-    selectedCategory,
-    selectedOnlineSubcategory,
-  ]);
-
   const renderLiveDeals = () => {
     const now = Date.now();
     const isOnlineMode = dropMode === 'online';
-    const isDropModeActive = isOnlineMode && dropModeEnabled;
     const onlineDealsWithSubcategory = memoizedOnlineDealsWithSubcategory;
     const dealsWithDistance = memoizedDealsWithDistance;
-    const localSubcategoryOptions = isOnlineMode ? [] : (LOCAL_SUBCATEGORY_OPTIONS[deferredSelectedCategory] ?? []);
-    const shouldShowLocalSubcategories =
-      dropMode === 'local' && deferredSelectedCategory !== 'All' && localSubcategoryOptions.length > 0;
-    const shouldShowOnlineSubcategories =
-      dropMode === 'online' && (deferredSelectedCategory === 'Tech' || deferredSelectedCategory === 'Home' || deferredSelectedCategory === 'Fashion');
-    const onlineSubcategoryOptions = shouldShowOnlineSubcategories
-      ? (
-        deferredSelectedCategory === 'Tech'
-          ? ONLINE_TECH_SUBCATEGORY_OPTIONS
-          : deferredSelectedCategory === 'Home'
-            ? ONLINE_HOME_SUBCATEGORY_OPTIONS
-            : ONLINE_FASHION_SUBCATEGORY_OPTIONS
-      ).filter((subcategory) => subcategory !== 'All')
-      : [];
     const normalizedDesktopSearch = deferredDesktopSearchQuery.trim().toLowerCase();
     const matchesDesktopSearch = (deal: Deal) => {
       if (!normalizedDesktopSearch) return true;
@@ -10280,11 +10552,6 @@ const deleteDealFromBackend = async (
         !isExpiredDeal(d, now) &&
         d.computedDistanceValue <= radius &&
         (deferredSelectedCategory === 'All' || d.category === deferredSelectedCategory) &&
-        (
-          deferredSelectedCategory === 'All'
-          || deferredSelectedLocalSubcategory === 'All'
-          || d.localSubcategory === deferredSelectedLocalSubcategory
-        ) &&
         matchesDesktopSearch(d)
       )
       .sort((a, b) => a.computedDistanceValue - b.computedDistanceValue);
@@ -10313,79 +10580,22 @@ const deleteDealFromBackend = async (
       return null;
     };
 
-    const filteredActiveLocalDeals = activeLocalDeals.filter((deal) => {
-      const dealTag = getDealFeedTag(deal.id);
-      if (deferredSelectedFeedFilter === 'trending') return dealTag === 'Trending';
-      if (deferredSelectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
-      if (deferredSelectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
-      return true;
-    });
-
-    const matchesDiscountFilter = (deal: Deal) => {
-      if (!deferredDiscountFilterEnabled) return true;
-      const discountPercentValue = getDealDiscountPercentValue(deal);
-      if (discountPercentValue === null) return false;
-      return discountPercentValue >= deferredDiscountFilterValue;
-    };
-
-    const hasOnlineSubcategory =
-      deferredSelectedCategory === 'Tech' || deferredSelectedCategory === 'Home' || deferredSelectedCategory === 'Fashion';
+    const filteredActiveLocalDeals = activeLocalDeals.filter((deal) =>
+      dealMatchesStatusFilter(deal, deferredSelectedFeedFilter, now),
+    );
 
     const activeOnlineDeals = onlineDealsWithSubcategory.filter(
       (deal) =>
         !isExpiredDeal(deal, now) &&
         (deferredSelectedCategory === 'All' || deal.category === deferredSelectedCategory) &&
-        (
-          !hasOnlineSubcategory ||
-          deferredSelectedOnlineSubcategory === 'All' ||
-          deal.onlineSubcategory === deferredSelectedOnlineSubcategory
-        ) &&
-        matchesDesktopSearch(deal) &&
-        matchesDiscountFilter(deal),
+        matchesDesktopSearch(deal),
     );
 
-    const rankedDropModeDeals = [...activeOnlineDeals]
-      .filter((deal) => isDropModeEligible(deal))
-      .sort((a, b) => {
-        const scoreDelta = getDropModePriorityScore(b, dropModeShuffleSeed, now) - getDropModePriorityScore(a, dropModeShuffleSeed, now);
-        if (scoreDelta !== 0) return scoreDelta;
-        return b.createdAt - a.createdAt;
-      });
+    const filteredOnlineDeals = [...activeOnlineDeals].sort((a, b) => b.createdAt - a.createdAt);
 
-    const filteredOnlineDeals = isDropModeActive
-      ? rankedDropModeDeals.slice(0, Math.min(8, rankedDropModeDeals.length))
-      : [...activeOnlineDeals].sort((a, b) => b.createdAt - a.createdAt);
-
-    const trendingOnlineDeals = [...filteredOnlineDeals]
-      .sort((a, b) => (b.claimCount ?? b.currentClaims) - (a.claimCount ?? a.currentClaims))
-      .slice(0, 5);
-
-    const endingSoonOnlineDeals = filteredOnlineDeals
-      .filter((deal) => deal.hasTimer !== false && deal.expiresAt - Date.now() <= 10 * 60 * 1000)
-      .sort((a, b) => a.expiresAt - b.expiresAt);
-
-    const justDroppedOnlineDeals = filteredOnlineDeals
-      .filter((deal) => now - deal.createdAt <= 60 * 60 * 1000)
-      .sort((a, b) => b.createdAt - a.createdAt);
-
-    const trendingOnlineIds = new Set(trendingOnlineDeals.map((deal) => deal.id));
-    const endingSoonOnlineIds = new Set(endingSoonOnlineDeals.map((deal) => deal.id));
-    const justDroppedOnlineIds = new Set(justDroppedOnlineDeals.map((deal) => deal.id));
-
-    const getOnlineDropTag = (dealId: string): 'Trending' | 'Ending Soon' | 'Just Dropped' | null => {
-      if (trendingOnlineIds.has(dealId)) return 'Trending';
-      if (endingSoonOnlineIds.has(dealId)) return 'Ending Soon';
-      if (justDroppedOnlineIds.has(dealId)) return 'Just Dropped';
-      return null;
-    };
-
-    const filteredOnlineDealsByTab = filteredOnlineDeals.filter((deal) => {
-      const dealTag = getOnlineDropTag(deal.id);
-      if (deferredSelectedFeedFilter === 'trending') return dealTag === 'Trending';
-      if (deferredSelectedFeedFilter === 'ending-soon') return dealTag === 'Ending Soon';
-      if (deferredSelectedFeedFilter === 'just-dropped') return dealTag === 'Just Dropped';
-      return true;
-    });
+    const filteredOnlineDealsByTab = filteredOnlineDeals.filter((deal) =>
+      dealMatchesStatusFilter(deal, deferredSelectedFeedFilter, now),
+    );
     const isDesktopDealGrid = viewportWidth >= 1024;
     const initialDealRenderCount = 40;
     const cardImageWidth = isDesktopDealGrid ? 640 : viewportWidth >= 520 ? 520 : 420;
@@ -10396,9 +10606,7 @@ const deleteDealFromBackend = async (
       ? filteredActiveLocalDeals
       : filteredActiveLocalDeals.slice(0, initialDealRenderCount);
     const isOnlineCategoryView = isOnlineMode && deferredSelectedCategory !== 'All';
-    const sortedOnlineDealsByTab = isDropModeActive
-      ? filteredOnlineDealsByTab
-      : [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
+    const sortedOnlineDealsByTab = [...filteredOnlineDealsByTab].sort((a, b) => b.createdAt - a.createdAt);
     const onlinePageSize = 40;
     const realDealsPerPage = onlinePageSize - 1;
     const onlineDealPages = chunkItems(sortedOnlineDealsByTab, realDealsPerPage);
@@ -10417,41 +10625,89 @@ const deleteDealFromBackend = async (
       renderAllDeals ? (categoryOnlineDealPages[safeOnlineCategoryPage]?.length ?? 0) : initialDealRenderCount,
     );
     const hasMoreCategoryPages = safeOnlineCategoryPage < totalCategoryOnlinePages - 1;
-    const onlineHeadline = deferredSelectedCategory === 'All' ? 'All' : getCategoryLabel(deferredSelectedCategory);
-    const onlineCategoryDescription = isDropModeActive
-      ? deferredSelectedCategory === 'All'
-        ? 'Urgent picks, newest first.'
-        : `Urgent ${getCategoryLabel(deferredSelectedCategory).toLowerCase()} picks, newest first.`
-      : deferredSelectedCategory === 'All'
-        ? 'Fresh online deals, newest first.'
-        : `Fresh ${getCategoryLabel(deferredSelectedCategory).toLowerCase()} deals, newest first.`;
-    const onlineHeroIconName = deferredSelectedCategory === 'All' ? 'online' : getCategoryIconName(deferredSelectedCategory);
-    const discountSteps = [10, 20, 30, 40, 50, 70, 90];
-    const discountFilterLabel = discountFilterEnabled ? `${discountFilterValue}%+` : '10%+';
-    const discountSliderIndex = discountFilterEnabled
-      ? Math.max(0, discountSteps.indexOf(discountFilterValue))
-      : 0;
-    const discountSliderProgress = (discountSliderIndex / (discountSteps.length - 1)) * 100;
-    const discountThumbSize = 22;
+    const isMobileViewport = viewportWidth < 640;
+    const onlineCategoryLoadMoreRemainderColumns = viewportWidth >= 520 ? 2 : 1;
+    const shouldShowCategoryLoadMoreCard =
+      hasMoreCategoryPages
+      && visibleCategoryOnlineDeals.length % onlineCategoryLoadMoreRemainderColumns === 1;
+    const categoryOnlineGridItems = [
+      ...visibleCategoryOnlineDeals.map((deal) => ({ type: 'deal' as const, deal })),
+      ...(shouldShowCategoryLoadMoreCard ? [{ type: 'load-more' as const }] : []),
+    ];
+    const onlineByTabGridItems = [
+      ...visibleOnlineDealsByTab.map((deal) => ({ type: 'deal' as const, deal })),
+      ...(shouldShowLoadMoreCard ? [{ type: 'load-more' as const }] : []),
+    ];
+    const mobileOnlineDeals = isOnlineCategoryView ? visibleCategoryOnlineDeals : visibleOnlineDealsByTab;
+
+    const localBatchCount = Math.min(visibleLocalDeals.length, dealBatchVisibleCount);
+    const mobileOnlineBatchCount = Math.min(mobileOnlineDeals.length, dealBatchVisibleCount);
+    const categoryOnlineBatchCount = Math.min(categoryOnlineGridItems.length, dealBatchVisibleCount);
+    const onlineByTabBatchCount = Math.min(onlineByTabGridItems.length, dealBatchVisibleCount);
+
+    const localBatchDeals = visibleLocalDeals.slice(0, localBatchCount);
+    const mobileOnlineBatchDeals = mobileOnlineDeals.slice(0, mobileOnlineBatchCount);
+    const categoryOnlineBatchItems = categoryOnlineGridItems.slice(0, categoryOnlineBatchCount);
+    const onlineByTabBatchItems = onlineByTabGridItems.slice(0, onlineByTabBatchCount);
+
+    const activeBatchTotal = isMobileViewport
+      ? (dropMode === 'local' ? visibleLocalDeals.length : mobileOnlineDeals.length)
+      : (dropMode === 'local' ? visibleLocalDeals.length : (isOnlineCategoryView ? categoryOnlineGridItems.length : onlineByTabGridItems.length));
+    activeDealBatchTotalRef.current = activeBatchTotal;
+    const hasMoreBatchDeals = dealBatchVisibleCount < activeBatchTotal;
+
+    const renderBatchDividerRow = (label: string) => (
+      <div style={{ gridColumn: '1 / -1' }} className="py-2.5">
+        <button
+          type="button"
+          onClick={triggerLoadNextDealBatch}
+          disabled={dealBatchLoading || !hasMoreBatchDeals}
+          className={`mx-auto flex w-full max-w-[560px] items-center gap-2 rounded-full border px-2.5 py-1.5 transition-all ${
+            dealBatchLoading || !hasMoreBatchDeals
+              ? 'cursor-default border-indigo-100/70 bg-white/85'
+              : 'border-indigo-200/80 bg-white hover:border-indigo-300 hover:bg-indigo-50/35'
+          }`}
+        >
+          <span className="h-px flex-1 bg-gradient-to-r from-transparent via-indigo-200/80 to-indigo-100/65" />
+          <span className="inline-flex items-center gap-1 rounded-full border border-indigo-100/80 bg-white/95 px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-indigo-500 shadow-[0_4px_10px_rgba(165,180,252,0.16)]">
+            <AppIcon name="live" size={9} className="text-indigo-400" />
+            {dealBatchLoading ? 'Loading More Deals' : label}
+          </span>
+          <span className="h-px flex-1 bg-gradient-to-r from-indigo-100/65 via-indigo-200/80 to-transparent" />
+        </button>
+      </div>
+    );
+
+    const getBatchItemClassName = (index: number) =>
+      dealBatchRevealStartIndex !== null && index >= dealBatchRevealStartIndex
+        ? 'livedrop-batch-rise'
+        : '';
 
     if (import.meta.env.DEV && isOnlineMode) {
+      const rawOnlineDeals = deals.filter((deal) => deal.businessType === 'online');
       const debugSignature = [
+        `mode:${dropMode}`,
         deferredSelectedCategory,
         deferredSelectedFeedFilter,
-        discountFilterEnabled ? `disc:${discountFilterValue}` : 'disc:off',
+        `loading:${dealsLoading ? '1' : '0'}`,
+        `raw:${rawOnlineDeals.length}`,
         `online:${memoizedOnlineDeals.length}`,
         `filtered:${filteredOnlineDeals.length}`,
         `tab:${filteredOnlineDealsByTab.length}`,
+        `visible:${(isOnlineCategoryView ? categoryOnlineBatchItems.length : onlineByTabBatchItems.length)}`,
       ].join('|');
       if (onlineDebugSignatureRef.current !== debugSignature) {
         console.info('[LiveDrop] Online filter snapshot', {
+          selectedMode: dropMode,
           selectedCategory: deferredSelectedCategory,
           selectedFeedFilter: deferredSelectedFeedFilter,
-          discountFilterEnabled,
-          discountFilterValue,
+          loading: dealsLoading,
+          rawFetchedDealsCount: deals.length,
+          rawOnlineDealsCount: rawOnlineDeals.length,
           onlineCount: memoizedOnlineDeals.length,
           filteredCount: filteredOnlineDeals.length,
           tabCount: filteredOnlineDealsByTab.length,
+          visibleBatchCount: isOnlineCategoryView ? categoryOnlineBatchItems.length : onlineByTabBatchItems.length,
         });
         onlineDebugSignatureRef.current = debugSignature;
       }
@@ -10483,30 +10739,20 @@ const deleteDealFromBackend = async (
     const controlRadiusClass = 'rounded-[0.95rem]';
     const controlPaddingClass = 'px-3';
     const controlTextClass = 'text-[9px] font-black uppercase tracking-[0.1em]';
+    const selectedStatusLabel = getDealStatusFilterLabel(selectedFeedFilter).toLowerCase();
+    const featuredSourceDeals = isOnlineMode
+      ? (isOnlineCategoryView ? pagedCategoryOnlineDeals : sortedOnlineDealsByTab)
+      : filteredActiveLocalDeals;
+    const featuredStripDeals = featuredSourceDeals.slice(0, 3);
+    const totalVisibleOnlineDeals = isOnlineCategoryView
+      ? pagedCategoryOnlineDeals.length
+      : sortedOnlineDealsByTab.length;
     const localEmptyStateMessage =
-      selectedLocalSubcategory !== 'All' && selectedFeedFilter !== 'all'
-        ? `No ${selectedFeedFilter.replace('-', ' ')} ${selectedLocalSubcategory.toLowerCase()} deals within ${radius} miles.`
-        : selectedLocalSubcategory !== 'All'
-          ? `No ${selectedLocalSubcategory.toLowerCase()} deals within ${radius} miles.`
-          : selectedFeedFilter === 'all'
-            ? `No live deals within ${radius} miles.`
-            : `No ${selectedFeedFilter.replace('-', ' ')} deals within ${radius} miles.`;
+      selectedFeedFilter === 'all'
+        ? `No live deals within ${radius} miles.`
+        : `No ${selectedStatusLabel} deals within ${radius} miles.`;
     const handleSelectActiveCategory = (category: string) => {
-      if (dropMode === 'local') {
-        setSelectedLocalSubcategory('All');
-      }
       setSelectedCategory(category);
-    };
-    const handleDropModeToggle = () => {
-      const nextDropModeState = !dropModeEnabled;
-      setDropModeEnabled(nextDropModeState);
-      if (nextDropModeState) {
-        setDropModeShuffleSeed(Date.now());
-        pushToast("Drop Mode is on. You're now seeing the sharpest limited-time drops.", 'share');
-        return;
-      }
-
-      pushToast('Drop Mode is off. Back to the full online feed.', 'share');
     };
 
     const partnerEntries = [
@@ -10514,6 +10760,92 @@ const deleteDealFromBackend = async (
       { name: 'ABC Wigs', logoUrl: '/partners/abc-wigs.png' },
       { name: 'Amazon', logoUrl: '/partners/amazon.png' },
     ];
+    const getFeaturedDealStatusLabel = (deal: Deal) => {
+      const tags = getDealStatusTags(deal, now);
+      if (tags.includes('best-deals')) return 'Best Deal';
+      if (tags.includes('popular')) return 'Popular';
+      if (tags.includes('leaving-soon')) return 'Leaving Soon';
+      if (tags.includes('new-deals')) return 'New Deal';
+      return 'Featured';
+    };
+    const renderFeaturedDropCard = (deal: Deal) => {
+      const primaryActionUrl = getDealPrimaryActionUrl(deal);
+      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
+      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
+      const displayOfferText = deal.offerText?.trim() || 'Live Deal';
+      const priceSnapshot = getDealPriceSnapshot(deal);
+      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
+      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
+      const statusLabel = getFeaturedDealStatusLabel(deal);
+
+      return (
+        <article
+          key={`featured-${deal.id}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => handleOpenDealDetail(deal)}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleOpenDealDetail(deal);
+            }
+          }}
+          className="group relative overflow-hidden rounded-[1.4rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_55%,rgba(238,244,255,0.94)_100%)] p-3.5 shadow-[0_10px_24px_rgba(99,102,241,0.14)] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(99,102,241,0.2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
+        >
+          <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-white/80 px-2 py-1 text-[8px] font-black uppercase tracking-[0.13em] text-indigo-600">
+            {statusLabel}
+          </span>
+          <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] items-center gap-2.5">
+            <div className="min-w-0 space-y-2">
+              <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">
+                {displayBusinessName}
+              </p>
+              <h3 className="line-clamp-2 text-[1.02rem] font-black leading-[1.15] tracking-[-0.02em] text-slate-900">
+                {displayTitle}
+              </h3>
+              <div className="flex items-center gap-2">
+                {originalPriceLabel ? (
+                  <span className="text-[11px] font-semibold text-slate-400 line-through">{originalPriceLabel}</span>
+                ) : null}
+                {currentPriceLabel ? (
+                  <span className="text-[1.02rem] font-black text-indigo-700">{currentPriceLabel}</span>
+                ) : (
+                  <span className="text-[11px] font-semibold text-indigo-600">{displayOfferText}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openExternalDealLink(deal);
+                }}
+                disabled={!primaryActionUrl}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-[0.9rem] px-3 text-[9px] font-black uppercase tracking-[0.1em] text-white transition-all ${
+                  primaryActionUrl
+                    ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 shadow-[0_10px_18px_rgba(99,102,241,0.24)] livedrop-primary-gloss'
+                    : 'cursor-not-allowed bg-slate-300'
+                }`}
+              >
+                <AppIcon name="check" size={12} />
+                Grab Deal
+              </button>
+            </div>
+            <div className="relative aspect-[4/3] overflow-hidden rounded-[1rem] border border-white/70 bg-white/80">
+              <DealArtwork
+                src={deal.imageUrl}
+                alt={displayTitle}
+                fit="contain"
+                iconSize={26}
+                preferredWidth={760}
+                sizes="(min-width: 1280px) 300px, (min-width: 768px) 34vw, 45vw"
+                imageClassName="p-2.5"
+              />
+            </div>
+          </div>
+        </article>
+      );
+    };
     const renderOnlineDealCard = (deal: Deal) => {
       const primaryActionUrl = getDealPrimaryActionUrl(deal);
       const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
@@ -10543,11 +10875,7 @@ const deleteDealFromBackend = async (
               handleOpenDealDetail(deal);
             }
           }}
-            className={`overflow-hidden rounded-[1.35rem] bg-white transition-all duration-200 ${
-              isDropModeActive
-                ? 'border border-indigo-100/80 shadow-[0_12px_26px_rgba(15,23,42,0.08)] ring-1 ring-indigo-100/40'
-                : 'border border-slate-100 shadow-[0_8px_20px_rgba(148,163,184,0.12)]'
-            } cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2`}
+            className="h-full overflow-hidden rounded-[1.35rem] border border-slate-100 bg-white shadow-[0_8px_20px_rgba(148,163,184,0.12)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 flex flex-col"
           >
           <div className="relative aspect-[4/3] overflow-hidden bg-slate-50">
             <DealArtwork
@@ -10565,7 +10893,7 @@ const deleteDealFromBackend = async (
               </span>
             </div>
           </div>
-          <div className="p-3 max-[359px]:p-2.5">
+          <div className="flex flex-1 flex-col p-3 max-[359px]:p-2.5">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{displayBusinessName}</p>
             <h3 className="mt-1 line-clamp-2 break-words text-[0.98rem] font-bold leading-[1.2] text-slate-900">{displayTitle}</h3>
             <div className="mt-2 flex items-center gap-2">
@@ -10629,7 +10957,7 @@ const deleteDealFromBackend = async (
                 Link: {primaryActionUrl ?? 'No link saved'}
               </p>
             ) : null}
-            <div className="mt-3 flex w-full flex-col gap-2 min-[390px]:flex-row">
+            <div className="mt-auto flex w-full flex-col gap-2 pt-2 min-[390px]:flex-row">
               <button
                 type="button"
                 onClick={(event) => {
@@ -10692,7 +11020,7 @@ const deleteDealFromBackend = async (
               handleOpenDealDetail(deal);
             }
           }}
-          className={`overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] max-[640px]:shadow-[0_6px_14px_rgba(148,163,184,0.12)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 ${
+          className={`h-full overflow-hidden rounded-[1.3rem] border border-slate-100 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.14)] max-[640px]:shadow-[0_6px_14px_rgba(148,163,184,0.12)] transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2 flex flex-col ${
             viewed ? 'opacity-90 border-slate-200 shadow-[0_6px_16px_rgba(148,163,184,0.12)]' : ''
           }`}
         >
@@ -10717,7 +11045,7 @@ const deleteDealFromBackend = async (
               </span>
             ) : null}
           </div>
-            <div className="space-y-2 p-3">
+            <div className="flex flex-1 flex-col space-y-2 p-3">
               <div className="space-y-1">
                 <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-400">{displayBusinessName}</p>
                 <h3 className="line-clamp-2 break-words text-[0.92rem] font-bold leading-[1.2] text-slate-900">{displayTitle}</h3>
@@ -10780,7 +11108,7 @@ const deleteDealFromBackend = async (
                 </button>
               </div>
             ) : null}
-            <div className="flex w-full flex-col gap-2 min-[360px]:flex-row">
+            <div className="mt-auto flex w-full flex-col gap-2 pt-1 min-[360px]:flex-row">
               <button
                 type="button"
                 onClick={(event) => {
@@ -10814,110 +11142,14 @@ const deleteDealFromBackend = async (
       );
     };
 
-    const renderMobileListDealRow = (deal: Deal) => {
-      const primaryActionUrl = getDealPrimaryActionUrl(deal);
-      const displayBusinessName = deal.businessName?.trim() || 'LiveDrop Partner';
-      const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
-      const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
-      const priceSnapshot = getDealPriceSnapshot(deal);
-      const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
-      const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
-      const hasPriceRow = Boolean(currentPriceLabel || originalPriceLabel);
-      const offerText = deal.offerText?.trim() || 'Live Deal';
-
-      return (
-        <div
-          key={`mobile-list-${deal.id}`}
-          className="flex gap-3 rounded-[1.2rem] border border-slate-100 bg-white p-3 shadow-sm shadow-slate-200/30"
-        >
-          <div className="relative h-24 w-24 flex-shrink-0 overflow-hidden rounded-[1rem] bg-slate-100">
-            <DealArtwork
-              src={deal.imageUrl}
-              alt={displayTitle}
-              fit="contain"
-              iconSize={20}
-              preferredWidth={Math.min(cardImageWidth, 360)}
-              sizes="96px"
-              imageClassName="p-2"
-            />
-            <div className="pointer-events-none absolute left-2 top-2">
-              <span className="deal-ribbon-badge inline-flex min-h-[22px] items-center rounded-[0.85rem] bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white shadow-[0_8px_16px_rgba(99,102,241,0.18)]">
-                {getOnlineDealHeroLabel(offerText)}
-              </span>
-            </div>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">{displayBusinessName}</p>
-            <h3 className="mt-1 line-clamp-2 text-[13px] font-extrabold leading-[1.25] text-slate-900">
-              {displayTitle}
-            </h3>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {hasPriceRow ? (
-                <>
-                  {originalPriceLabel ? (
-                    <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400 line-through">
-                      {originalPriceLabel}
-                    </span>
-                  ) : null}
-                  {currentPriceLabel ? (
-                    <span className="text-[12px] font-black text-slate-900">{currentPriceLabel}</span>
-                  ) : null}
-                </>
-              ) : (
-                <span className="text-[11px] font-semibold text-indigo-600">{offerText}</span>
-              )}
-            </div>
-            <p className="mt-1 line-clamp-2 text-[11px] text-slate-500">{displayDescription}</p>
-            <div className="mt-2">
-              <DealEngagementBar
-                deal={deal}
-                compact
-                pendingAction={dealEngagementPending[deal.id] ?? null}
-                onLike={handleLikeDeal}
-                onDislike={handleDislikeDeal}
-                onShare={handleShareDeal}
-              />
-            </div>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openDealProductDetails(deal, event);
-                }}
-                className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-[0.85rem] border border-slate-200 bg-white px-2.5 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
-              >
-                <AppIcon name="search" size={12} />
-                Details
-              </button>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openExternalDealLink(deal);
-                }}
-                disabled={!primaryActionUrl}
-                className={`inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-[0.85rem] px-2.5 text-[9px] font-black uppercase tracking-[0.12em] text-white transition-all ${
-                  primaryActionUrl
-                    ? 'bg-emerald-500 shadow-emerald-100/80 livedrop-deal-gloss'
-                    : 'cursor-not-allowed bg-slate-300'
-                }`}
-              >
-                <AppIcon name="check" size={12} />
-                Deal
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    };
-
     const renderOnlineGridFiller = (
       onClick: () => void,
       label = 'Load 40 More',
       state: 'ready' | 'loading' = 'ready',
+      elementKey = 'online-grid-filler',
     ) => (
       <button
+        key={elementKey}
         type="button"
         onClick={onClick}
         aria-label="Load more deals"
@@ -11300,11 +11532,11 @@ const deleteDealFromBackend = async (
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Total Deals</p>
-                  <p className="font-mono text-xs font-bold">{localDeals.length}</p>
+                  <p className="font-mono text-xs font-bold">{memoizedLocalDeals.length}</p>
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Active Deals</p>
-                  <p className="font-mono text-xs font-bold">{localDeals.filter(d => d.expiresAt > Date.now()).length}</p>
+                  <p className="font-mono text-xs font-bold">{memoizedLocalDeals.filter((d) => d.expiresAt > Date.now()).length}</p>
                 </div>
                 <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <p className="text-[8px] font-black uppercase text-white/40 mb-1">Visible (in {radius}mi)</p>
@@ -11381,198 +11613,7 @@ const deleteDealFromBackend = async (
           </div>
         ) : null}
 
-        {isOnlineMode ? (
-          <div className="relative mb-3 overflow-hidden rounded-[1.5rem] border border-indigo-100/80 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.96)_58%,rgba(239,244,255,0.92)_100%)] px-3 py-2 max-[639px]:py-2 max-[639px]:px-3 max-[359px]:px-3 max-[359px]:py-2 shadow-[0_10px_22px_rgba(148,163,184,0.12)]">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_38%),radial-gradient(circle_at_left_center,rgba(56,189,248,0.1),transparent_34%)]" />
-            <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-indigo-500/[0.06] rotate-[16deg] min-[360px]:right-4">
-              <AppIcon name={onlineHeroIconName} size={50} strokeWidth={1.35} className="min-[360px]:scale-[1.16]" />
-            </div>
-            <div className="relative z-10 flex flex-col gap-2 min-[1024px]:flex-row min-[1024px]:items-center min-[1024px]:justify-between">
-              <div className="flex flex-col gap-2 min-[1024px]:w-[340px] min-[1024px]:items-start min-[1024px]:justify-start">
-                <div className="min-[640px]:hidden space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setDiscountFilterEnabled(false)}
-                      className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
-                        discountFilterEnabled
-                          ? 'border-slate-200 bg-white text-slate-600'
-                          : 'border-indigo-200 bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_10px_20px_rgba(99,102,241,0.28)] livedrop-primary-gloss'
-                      }`}
-                    >
-                      All
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleDropModeToggle}
-                        aria-pressed={isDropModeActive}
-                        aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                        className={`group relative inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-[1rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 ${
-                          isDropModeActive
-                            ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.4)_0%,rgba(255,255,255,0.22)_58%,rgba(120,125,255,0.32)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_12px_22px_rgba(102,102,255,0.32)]'
-                            : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,1)_0%,rgba(245,247,255,0.96)_55%,rgba(236,241,255,0.92)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_20px_rgba(129,140,248,0.18)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,1),0_12px_22px_rgba(99,102,241,0.24)]'
-                        }`}
-                      >
-                        <div className="relative h-full w-full flex items-center justify-center">
-                          <span
-                            aria-hidden="true"
-                            className="pointer-events-none absolute inset-x-1.5 top-1.5 h-[40%] rounded-[0.85rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.45)_64%,rgba(255,255,255,0)_100%)]"
-                          />
-                          <img
-                            src={brandBoltLogo3d}
-                            alt=""
-                            className={`absolute h-[68px] w-[68px] object-contain transition-all duration-200 ${
-                              isDropModeActive
-                                ? 'opacity-0 scale-90'
-                                : 'opacity-100 scale-100 group-hover:brightness-110'
-                            }`}
-                          />
-                          <img
-                            src={brandBoltLogo3dActive}
-                            alt=""
-                            className={`absolute h-[68px] w-[68px] object-contain transition-all duration-200 ${
-                              isDropModeActive
-                                ? 'opacity-100 scale-112 drop-shadow-[0_0_28px_rgba(111,114,255,0.95)]'
-                                : 'opacity-0 scale-90'
-                            }`}
-                          />
-                        </div>
-                      </button>
-                      <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.1em] ${
-                        isDropModeActive
-                          ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-                          : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
-                      }`}>
-                        {sortedOnlineDealsByTab.length} Drops
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">Discounts</div>
-                </div>
-                <div className="discount-meter-wrap min-[640px]:items-center min-[640px]:justify-start min-[640px]:gap-3">
-                  <div
-                    className="discount-meter discount-meter--embedded h-[44px] px-2.5 py-1 min-[640px]:rounded-[1.05rem] min-[640px]:h-[58px] min-[640px]:px-3 min-[640px]:py-2 min-[640px]:pt-1 min-[640px]:pb-1.5"
-                    style={{
-                      '--discount-progress': `${discountSliderProgress}%`,
-                      '--discount-thumb-size': `${discountThumbSize}px`,
-                    } as React.CSSProperties}
-                  >
-                    <span className="discount-meter__label hidden min-[640px]:block min-[640px]:text-[10px] min-[640px]:tracking-[0.18em]">DISCOUNTS</span>
-                    <div className="discount-meter__track">
-                      <div className="discount-meter__track-fill" />
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={discountSteps.length - 1}
-                      step={1}
-                      value={discountSliderIndex}
-                      onChange={(event) => {
-                        const nextIndex = Number(event.target.value);
-                        const nextValue = discountSteps[Math.min(discountSteps.length - 1, Math.max(0, nextIndex))];
-                        setDiscountFilterValue(nextValue);
-                        setDiscountFilterEnabled(true);
-                      }}
-                      aria-label="Minimum discount percentage"
-                      className="discount-meter__range"
-                    />
-                    <div className="discount-meter__value">
-                      {discountFilterLabel}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setDiscountFilterEnabled(false)}
-                    className={`discount-meter__all-inline hidden min-[640px]:inline-flex ${
-                      discountFilterEnabled ? '' : 'discount-meter__all-inline--active'
-                    }`}
-                  >
-                    All
-                  </button>
-                </div>
-              </div>
-
-              <div className="hidden min-[1024px]:flex flex-1 items-center justify-center px-2">
-                <div className="flex items-center gap-3 flex-nowrap justify-center w-full">
-                  <div className="top-panel-category-bar flex items-center justify-center gap-2.5 rounded-[1.1rem] border border-white/50 bg-white/35 px-3.5 py-2.5">
-                    {['All', 'Tech', 'Fashion', 'Gaming', 'Digital', 'Home', 'Food'].map((category) => (
-                    <button
-                      key={category}
-                      type="button"
-                      aria-pressed={selectedCategory === category}
-                      onClick={() => handleSelectActiveCategory(category)}
-                      className={`top-panel-category-chip inline-flex h-8 items-center gap-2 rounded-[0.85rem] border px-3 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
-                        selectedCategory === category
-                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_8px_14px_rgba(99,102,241,0.18)] ring-2 ring-indigo-100/70'
-                          : 'border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-700'
-                        }`}
-                      >
-                        {category === 'All' ? (
-                          <AppIcon name="deal" size={12} />
-                        ) : (
-                          <AppIcon name={getCategoryIconName(category)} size={12} />
-                        )}
-                        {category}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="hidden min-[1024px]:flex items-center justify-end gap-4 min-[1024px]:min-w-[200px]">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">
-                    Drop Mode
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleDropModeToggle}
-                    aria-pressed={isDropModeActive}
-                    aria-label={isDropModeActive ? 'Turn Drop Mode off' : 'Turn Drop Mode on'}
-                    className={`group relative inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-[0.9rem] border p-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/80 shrink-0 ${
-                      isDropModeActive
-                        ? 'border-indigo-300/90 bg-[linear-gradient(160deg,rgba(121,98,255,0.26)_0%,rgba(255,255,255,0.18)_58%,rgba(120,125,255,0.22)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_9px_18px_rgba(102,102,255,0.24)]'
-                        : 'border-indigo-200/85 bg-[linear-gradient(160deg,rgba(255,255,255,0.98)_0%,rgba(245,247,255,0.95)_55%,rgba(236,241,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_8px_16px_rgba(129,140,248,0.14)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.98),0_10px_18px_rgba(99,102,241,0.2)]'
-                    }`}
-                  >
-                    <div className="relative h-full w-full flex items-center justify-center">
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-x-1 top-1 h-[42%] rounded-[0.7rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(255,255,255,0.35)_64%,rgba(255,255,255,0)_100%)]"
-                      />
-                      <img
-                        src={brandBoltLogo3d}
-                        alt=""
-                        className={`absolute h-[74px] w-[74px] object-contain transition-all duration-200 ${
-                          isDropModeActive
-                            ? 'opacity-0 scale-90'
-                            : 'opacity-100 scale-100 group-hover:brightness-110'
-                        }`}
-                      />
-                      <img
-                        src={brandBoltLogo3dActive}
-                        alt=""
-                        className={`absolute h-[74px] w-[74px] object-contain transition-all duration-200 ${
-                          isDropModeActive
-                            ? 'opacity-100 scale-112 drop-shadow-[0_0_26px_rgba(111,114,255,0.85)]'
-                            : 'opacity-0 scale-90'
-                        }`}
-                      />
-                    </div>
-                  </button>
-                </div>
-                <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[9px] min-[360px]:px-2.5 min-[360px]:text-[10px] font-black uppercase tracking-[0.1em] ${
-                  isDropModeActive
-                    ? 'border-transparent bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 text-white shadow-[0_10px_24px_rgba(99,102,241,0.24)]'
-                    : 'border-indigo-100 bg-white/85 text-indigo-600 shadow-sm shadow-indigo-100/70'
-                }`}>
-                  {sortedOnlineDealsByTab.length} Drops
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : (
+        {isOnlineMode ? null : (
           <div className="flex items-center justify-between mb-0.5">
             <div>
               <h2 className="text-[1.45rem] font-black tracking-[-0.035em] text-slate-900">Live Near You</h2>
@@ -11583,131 +11624,42 @@ const deleteDealFromBackend = async (
           </div>
         )}
 
-        <div className="space-y-1.5 min-[1024px]:rounded-[1.2rem] min-[1024px]:border min-[1024px]:border-slate-100 min-[1024px]:bg-white min-[1024px]:p-3 min-[1024px]:shadow-sm min-[1024px]:shadow-slate-200/35">
-          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:hidden">
-            <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2 min-[1024px]:px-0">
-              {activeCategoryOptions.filter(category => category !== 'All').map(category => (
+        <div className="space-y-2 rounded-[1.25rem] border border-slate-100 bg-white/95 p-2.5 shadow-sm shadow-slate-200/35 min-[1024px]:p-3">
+          <div className="overflow-x-auto pb-1 -mx-0.5">
+            <div className="flex min-w-max items-center gap-2 px-1 min-[1024px]:mx-auto min-[1024px]:min-w-0 min-[1024px]:justify-center min-[1024px]:gap-3 min-[1024px]:px-0">
+              {activeCategoryOptions.map(category => (
                 <button
                   key={category}
                   type="button"
                   aria-pressed={selectedCategory === category}
                   onClick={() => handleSelectActiveCategory(category)}
-                  className={`inline-flex shrink-0 h-10 items-center rounded-[1rem] border px-3.5 text-[9px] font-black uppercase tracking-[0.12em] whitespace-nowrap transition-all duration-200 ${
-                    selectedCategory === category
-                      ? 'border-indigo-100 bg-white text-indigo-600 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_10px_18px_rgba(99,102,241,0.2)] ring-2 ring-indigo-100/70'
-                      : 'border-white/60 bg-white/70 text-slate-500 shadow-[inset_0_1px_1px_rgba(255,255,255,0.75)] hover:bg-white hover:text-slate-700'
-                  }`}
+                  className={`livedrop-category-tile ${selectedCategory === category ? 'is-active' : ''}`}
                 >
-                  <span className="inline-flex items-center gap-1.5">
-                    {category === 'All' ? <AppIcon name="deal" size={12} /> : <AppIcon name={getCategoryIconName(category)} size={12} />}
-                    {category === 'All' ? category : getCategoryLabel(category)}
+                  <span className="livedrop-category-tile__icon">
+                    <AppIcon name={getCategoryIconName(category)} size={16.5} strokeWidth={1.75} />
+                  </span>
+                  <span className="livedrop-category-tile__label">
+                    {getCategoryLabel(category)}
                   </span>
                 </button>
               ))}
             </div>
           </div>
 
-          {dropMode === 'local' ? (
-            <div
-              aria-hidden={!shouldShowLocalSubcategories}
-              className={`overflow-hidden transition-all duration-200 ease-out ${
-                shouldShowLocalSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
-              }`}
-            >
-              <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
-                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
-                  <button
-                    type="button"
-                    aria-pressed={selectedLocalSubcategory === 'All'}
-                    onClick={() => setSelectedLocalSubcategory('All')}
-                    className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                      selectedLocalSubcategory === 'All'
-                        ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
-                        : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                    }`}
-                  >
-                    All {getCategoryLabel(selectedCategory)}
-                  </button>
-                  {localSubcategoryOptions.map((subcategory) => (
-                    <button
-                      key={subcategory}
-                      type="button"
-                      aria-pressed={selectedLocalSubcategory === subcategory}
-                      onClick={() => setSelectedLocalSubcategory(subcategory)}
-                      className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                        selectedLocalSubcategory === subcategory
-                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
-                          : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                      }`}
-                    >
-                      {subcategory}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {dropMode === 'online' && shouldShowOnlineSubcategories ? (
-            <div
-              aria-hidden={!shouldShowOnlineSubcategories}
-              className={`overflow-hidden transition-all duration-200 ease-out ${
-                shouldShowOnlineSubcategories ? 'max-h-16 opacity-100 pb-1' : 'max-h-0 opacity-0'
-              }`}
-            >
-              <div className="overflow-x-auto -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0">
-                <div className="flex min-w-max items-center gap-1.5 px-1 pt-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
-                  <button
-                    type="button"
-                    aria-pressed={selectedOnlineSubcategory === 'All'}
-                    onClick={() => setSelectedOnlineSubcategory('All')}
-                    className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                      selectedOnlineSubcategory === 'All'
-                        ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
-                        : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                    }`}
-                  >
-                    All {getCategoryLabel(selectedCategory)}
-                  </button>
-                  {onlineSubcategoryOptions.map((subcategory) => (
-                    <button
-                      key={subcategory}
-                      type="button"
-                      aria-pressed={selectedOnlineSubcategory === subcategory}
-                      onClick={() => setSelectedOnlineSubcategory(subcategory)}
-                      className={`inline-flex h-8 shrink-0 items-center rounded-[0.95rem] border px-2.5 text-[9px] font-black uppercase tracking-[0.1em] whitespace-nowrap transition-all ${
-                        selectedOnlineSubcategory === subcategory
-                          ? 'border-indigo-100 bg-white text-indigo-600 shadow-sm shadow-slate-200/35 ring-2 ring-indigo-100/60'
-                          : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
-                      }`}
-                    >
-                      {subcategory}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-                <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
+          <div className="overflow-x-auto pb-1 -mx-0.5 min-[1024px]:overflow-visible min-[1024px]:mx-0 min-[1024px]:pb-0">
             <div className="flex min-w-max items-center gap-1.5 px-1 min-[1024px]:min-w-0 min-[1024px]:flex-wrap min-[1024px]:justify-center min-[1024px]:gap-2.5 min-[1024px]:px-0">
-              {[
-                { id: 'all', label: 'All' },
-                { id: 'trending', label: 'Trending' },
-                { id: 'ending-soon', label: 'Ending Soon' },
-                { id: 'just-dropped', label: 'Just Dropped' },
-              ].map(filter => (
+              {DEAL_STATUS_FILTER_OPTIONS.filter((option) => option.id !== 'all').map((filter) => (
                 <button
                   key={filter.id}
-                  onClick={() => setSelectedFeedFilter(filter.id as typeof selectedFeedFilter)}
-                  className={`inline-flex h-9 min-[640px]:${controlHeightClass} items-center px-3 min-[640px]:${controlPaddingClass} rounded-[0.95rem] min-[640px]:${controlRadiusClass} border text-[9px] min-[640px]:${controlTextClass} whitespace-nowrap transition-all ${
+                  onClick={() => setSelectedFeedFilter((current) => (current === filter.id ? 'all' : filter.id))}
+                  className={`inline-flex h-9 min-[640px]:${controlHeightClass} items-center px-3 min-[640px]:${controlPaddingClass} rounded-[0.9rem] min-[640px]:${controlRadiusClass} border text-[9px] min-[640px]:${controlTextClass} whitespace-nowrap transition-all ${
                     selectedFeedFilter === filter.id
-                      ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-100/80'
-                      : 'border-transparent bg-slate-50 text-slate-500 hover:bg-slate-100/80 hover:text-slate-700'
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 shadow-sm shadow-indigo-100/80'
+                      : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600'
                   }`}
-                >
+                  >
                   <span className="inline-flex items-center gap-1.5">
-                    <AppIcon name={getFeedFilterIconName(filter.id as typeof selectedFeedFilter)} size={12} />
+                    <AppIcon name={getFeedFilterIconName(filter.id)} size={12} />
                     {filter.label}
                   </span>
                 </button>
@@ -11717,57 +11669,87 @@ const deleteDealFromBackend = async (
         </div>
 
         <section ref={onlineDealsSectionRef} className="space-y-2.5">
-          {(() => {
-            const isMobileViewport = viewportWidth < 640;
-            const isSubcategoryActive = dropMode === 'local'
-              ? selectedLocalSubcategory !== 'All'
-              : selectedOnlineSubcategory !== 'All';
-
-            if (dropMode === 'local' && isMobileViewport && filteredActiveLocalDeals.length > 0) {
-              return isSubcategoryActive ? (
-                <div className="space-y-2.5">
-                  {filteredActiveLocalDeals.map((deal) => renderMobileListDealRow(deal))}
+          {isOnlineMode && featuredStripDeals.length > 0 ? (
+            <div className="rounded-[1.45rem] border border-slate-100 bg-white p-2.5 shadow-sm shadow-slate-200/35">
+              <div className="mb-2.5 flex items-center justify-between px-1">
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-[0.14em] text-indigo-500">Featured Drops</p>
+                  <p className="text-[11px] font-semibold text-slate-500">
+                    {selectedCategory === 'All'
+                      ? 'Top curated picks across LiveDrop'
+                      : `Top ${getCategoryLabel(selectedCategory).toLowerCase()} picks right now`}
+                  </p>
                 </div>
-              ) : (
+                <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-indigo-600">
+                  {featuredStripDeals.length} Highlights
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 min-[820px]:grid-cols-2 xl:grid-cols-3">
+                {featuredStripDeals.map((deal) => renderFeaturedDropCard(deal))}
+              </div>
+            </div>
+          ) : null}
+
+          {isOnlineMode ? (
+            <div className="flex items-center justify-between rounded-[1.2rem] border border-slate-100 bg-white px-3.5 py-2.5 shadow-sm shadow-slate-200/30">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Deal Feed</p>
+                <p className="text-[12px] font-semibold text-slate-600">
+                  {selectedCategory === 'All'
+                    ? 'Fresh drops across all categories'
+                    : `${getCategoryLabel(selectedCategory)} deals`}
+                </p>
+              </div>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                {totalVisibleOnlineDeals} Live Deals
+              </span>
+            </div>
+          ) : null}
+
+          {(() => {
+            if (dropMode === 'local' && isMobileViewport && filteredActiveLocalDeals.length > 0) {
+              return (
                 <div className="grid grid-cols-2 gap-2">
-                  {visibleLocalDeals.map((deal) => (
-                    <DealCard
-                      key={deal.id}
-                      compact
-                      deal={deal}
-                      onClaim={handleClaimDeal}
-                      isClaimed={claims.some(c => c.dealId === deal.id)}
-                      isViewed={viewedDealIds.has(deal.id)}
-                      computedDistance={deal.computedDistanceLabel}
-                      onSaveToCatalog={handleSaveToCatalog}
-                      canSaveToCatalog={canSaveDealToCatalog(deal)}
-                      isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
-                      saveFeedback={catalogSaveFeedback[deal.id]}
-                      badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
-                      pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
-                      onLike={handleLikeDeal}
-                      onDislike={handleDislikeDeal}
-                      onShare={handleShareDeal}
-                      showAdminActions={hasAdminAccess}
-                      onEditDeal={handleEditDeal}
-                      onDeleteDeal={handleAdminDeleteDeal}
-                      isDeleting={deletingDealIds.has(deal.id)}
-                    />
+                  {localBatchDeals.map((deal, index) => (
+                    <div key={deal.id} className={getBatchItemClassName(index)}>
+                      <DealCard
+                        compact
+                        deal={deal}
+                        onClaim={handleClaimDeal}
+                        isClaimed={claims.some(c => c.dealId === deal.id)}
+                        isViewed={viewedDealIds.has(deal.id)}
+                        computedDistance={deal.computedDistanceLabel}
+                        onSaveToCatalog={handleSaveToCatalog}
+                        canSaveToCatalog={canSaveDealToCatalog(deal)}
+                        isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
+                        saveFeedback={catalogSaveFeedback[deal.id]}
+                        badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
+                        pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
+                        onLike={handleLikeDeal}
+                        onDislike={handleDislikeDeal}
+                        onShare={handleShareDeal}
+                        showAdminActions={hasAdminAccess}
+                        onEditDeal={handleEditDeal}
+                        onDeleteDeal={handleAdminDeleteDeal}
+                        isDeleting={deletingDealIds.has(deal.id)}
+                      />
+                    </div>
                   ))}
+                  {hasMoreBatchDeals ? renderBatchDividerRow('More Drops') : null}
                 </div>
               );
             }
 
             if (dropMode === 'online' && isMobileViewport) {
-              const mobileOnlineDeals = isOnlineCategoryView ? visibleCategoryOnlineDeals : visibleOnlineDealsByTab;
               if (mobileOnlineDeals.length === 0) return null;
-              return isSubcategoryActive ? (
-                <div className="space-y-2.5">
-                  {mobileOnlineDeals.map((deal) => renderMobileListDealRow(deal))}
-                </div>
-              ) : (
+              return (
                 <div className="grid grid-cols-2 gap-2">
-                  {mobileOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
+                  {mobileOnlineBatchDeals.map((deal, index) => (
+                    <div key={deal.id} className={getBatchItemClassName(index)}>
+                      {renderCompactCategoryOnlineDealCard(deal)}
+                    </div>
+                  ))}
+                  {hasMoreBatchDeals ? renderBatchDividerRow('More Drops') : null}
                 </div>
               );
             }
@@ -11777,29 +11759,31 @@ const deleteDealFromBackend = async (
           {viewportWidth < 640 ? null : dropMode === 'local' ? (
             filteredActiveLocalDeals.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                {visibleLocalDeals.map(deal => (
-                  <DealCard 
-                    key={deal.id} 
-                    deal={deal} 
-                    onClaim={handleClaimDeal} 
-                    isClaimed={claims.some(c => c.dealId === deal.id)}
-                    isViewed={viewedDealIds.has(deal.id)}
-                    computedDistance={deal.computedDistanceLabel}
-                    onSaveToCatalog={handleSaveToCatalog}
-                    canSaveToCatalog={canSaveDealToCatalog(deal)}
-                    isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
-                    saveFeedback={catalogSaveFeedback[deal.id]}
-                  badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
-                  pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
-                  onLike={handleLikeDeal}
-                  onDislike={handleDislikeDeal}
-                  onShare={handleShareDeal}
-                  showAdminActions={hasAdminAccess}
-                  onEditDeal={handleEditDeal}
-                  onDeleteDeal={handleAdminDeleteDeal}
-                  isDeleting={deletingDealIds.has(deal.id)}
-                />
+                {localBatchDeals.map((deal, index) => (
+                  <div key={deal.id} className={getBatchItemClassName(index)}>
+                    <DealCard 
+                      deal={deal} 
+                      onClaim={handleClaimDeal} 
+                      isClaimed={claims.some(c => c.dealId === deal.id)}
+                      isViewed={viewedDealIds.has(deal.id)}
+                      computedDistance={deal.computedDistanceLabel}
+                      onSaveToCatalog={handleSaveToCatalog}
+                      canSaveToCatalog={canSaveDealToCatalog(deal)}
+                      isSavedToCatalog={catalogCoupons.some(c => c.dealId === deal.id && c.status === 'active')}
+                      saveFeedback={catalogSaveFeedback[deal.id]}
+                    badges={getDealFeedTag(deal.id) ? [getDealFeedTag(deal.id)!] : []}
+                    pendingEngagementAction={dealEngagementPending[deal.id] ?? null}
+                    onLike={handleLikeDeal}
+                    onDislike={handleDislikeDeal}
+                    onShare={handleShareDeal}
+                    showAdminActions={hasAdminAccess}
+                    onEditDeal={handleEditDeal}
+                    onDeleteDeal={handleAdminDeleteDeal}
+                    isDeleting={deletingDealIds.has(deal.id)}
+                  />
+                  </div>
                 ))}
+                {hasMoreBatchDeals ? renderBatchDividerRow('More Deals') : null}
               </div>
             ) : (
               <div className="rounded-[1.7rem] border border-dashed border-slate-200 bg-white px-4 py-10 text-center shadow-sm shadow-slate-200/30">
@@ -11835,15 +11819,24 @@ const deleteDealFromBackend = async (
               ) : pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/55 p-2.5 shadow-sm shadow-slate-200/20 transition-all duration-200">
-                    <div className="grid grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-                      {visibleCategoryOnlineDeals.map((deal) => renderCompactCategoryOnlineDealCard(deal))}
-                      {hasMoreCategoryPages && visibleCategoryOnlineDeals.length % (viewportWidth >= 520 ? 2 : 1) === 1
-                        ? renderOnlineGridFiller(() => {
+                    <div className="grid auto-rows-fr grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+                      {categoryOnlineBatchItems.map((item, index) => (
+                        item.type === 'deal' ? (
+                          <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                            {renderCompactCategoryOnlineDealCard(item.deal)}
+                          </div>
+                        ) : renderOnlineGridFiller(
+                          () => {
                             setIsMoreDealsAnimating(true);
                             setOnlineCategoryPage((current) => Math.min(totalCategoryOnlinePages - 1, current + 1));
                             window.setTimeout(() => setIsMoreDealsAnimating(false), 220);
-                          })
-                        : null}
+                          },
+                          'Load 40 More',
+                          'ready',
+                          `category-load-more-${safeOnlineCategoryPage}-${index}`,
+                        )
+                      ))}
+                      {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
                     </div>
                   </div>
                   {totalCategoryOnlinePages > 1 ? (
@@ -11899,7 +11892,7 @@ const deleteDealFromBackend = async (
                   subtitle={
                     selectedFeedFilter === 'all'
                       ? 'Try another category or check back soon for fresh LiveDrop deals.'
-                      : `No ${selectedFeedFilter.replace('-', ' ')} drops yet. Try another filter.`
+                      : `No ${selectedStatusLabel} drops yet. Try another filter.`
                   }
                 />
               )
@@ -11912,31 +11905,40 @@ const deleteDealFromBackend = async (
                 />
               ) : sortedOnlineDealsByTab.length > 0 ? (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                    {visibleOnlineDealsByTab.map((deal) => renderOnlineDealCard(deal))}
-                    {shouldShowLoadMoreCard ? renderOnlineGridFiller(
-                      () => {
-                        if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;
-                        setLoadingMoreOnlineDeals(true);
-                        setOnlineDealPage((prev) => (prev + 1) % onlineDealPages.length);
-                        window.setTimeout(() => {
-                          setLoadingMoreOnlineDeals(false);
-                          onlineDealsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }, 250);
-                      },
-                      'Load 40 More',
-                      loadingMoreOnlineDeals ? 'loading' : 'ready',
-                    ) : null}
+                  <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    {onlineByTabBatchItems.map((item, index) => (
+                      item.type === 'deal'
+                        ? (
+                          <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                            {renderOnlineDealCard(item.deal)}
+                          </div>
+                        )
+                        : renderOnlineGridFiller(
+                            () => {
+                              if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;
+                              setLoadingMoreOnlineDeals(true);
+                              setOnlineDealPage((prev) => (prev + 1) % onlineDealPages.length);
+                              window.setTimeout(() => {
+                                setLoadingMoreOnlineDeals(false);
+                                onlineDealsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 250);
+                            },
+                            'Load 40 More',
+                            loadingMoreOnlineDeals ? 'loading' : 'ready',
+                            `online-load-more-${safeOnlineDealPage}-${index}`,
+                          )
+                    ))}
+                    {hasMoreBatchDeals ? renderBatchDividerRow('Next Batch') : null}
                   </div>
                 </div>
               ) : (
                 <DealEmptyState
                   variant="empty"
-                  title={isDropModeActive ? 'Drop Mode is quiet' : 'No drops here yet'}
+                  title="No drops here yet"
                   subtitle={
                     selectedFeedFilter === 'all'
-                      ? (isDropModeActive ? 'Drop Mode picks are cooling down. Try another category.' : 'Try another category or check back soon.')
-                      : `No ${selectedFeedFilter.replace('-', ' ')} drops yet. Try another filter.`
+                      ? 'Try another category or check back soon.'
+                      : `No ${selectedStatusLabel} drops yet. Try another filter.`
                   }
                 />
               )
@@ -12813,7 +12815,14 @@ const deleteDealFromBackend = async (
                       <div className="flex gap-3 p-3">
                         <div className="h-24 w-24 shrink-0 overflow-hidden rounded-[1.1rem] bg-slate-100">
                           {deal.imageUrl ? (
-                            <img src={deal.imageUrl} alt={deal.title} className="h-full w-full object-cover" />
+                            <img
+                              src={getOptimizedDealImageUrl(deal.imageUrl, { width: 420, fit: 'cover' })}
+                              srcSet={getOptimizedDealImageSrcSet(deal.imageUrl, { width: 420, fit: 'cover' })}
+                              alt={deal.title}
+                              loading="lazy"
+                              decoding="async"
+                              className="h-full w-full object-cover"
+                            />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center text-slate-300">
                               <AppIcon name="deal" size={24} />
@@ -13333,7 +13342,14 @@ const deleteDealFromBackend = async (
                 <div className="flex min-w-0 items-start gap-4">
                   <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white shadow-sm sm:h-24 sm:w-24">
                     {previewDeal?.imageUrl ? (
-                      <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
+                      <img
+                        src={getOptimizedDealImageUrl(previewDeal.imageUrl, { width: 520, fit: 'cover' })}
+                        srcSet={getOptimizedDealImageSrcSet(previewDeal.imageUrl, { width: 520, fit: 'cover' })}
+                        alt={previewDeal.title}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
                         <AppIcon name="spark" size={22} />
@@ -13895,7 +13911,14 @@ const deleteDealFromBackend = async (
                     <div className="flex min-w-0 gap-4">
                       <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-[1rem] border border-slate-200 bg-white sm:h-24 sm:w-24">
                         {candidate.imageUrl ? (
-                          <img src={candidate.imageUrl} alt={candidate.title} className="h-full w-full object-cover" />
+                          <img
+                            src={getOptimizedDealImageUrl(candidate.imageUrl, { width: 420, fit: 'cover' })}
+                            srcSet={getOptimizedDealImageSrcSet(candidate.imageUrl, { width: 420, fit: 'cover' })}
+                            alt={candidate.title}
+                            loading="lazy"
+                            decoding="async"
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
                             <AppIcon name="spark" size={20} />
@@ -14172,7 +14195,14 @@ const deleteDealFromBackend = async (
                         <div className="min-w-0 flex-1">
                           {candidate.imageUrl ? (
                             <div className="mb-3 h-28 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                              <img src={candidate.imageUrl} alt={candidate.title} className="h-full w-full object-cover" />
+                              <img
+                                src={getOptimizedDealImageUrl(candidate.imageUrl, { width: 560, fit: 'cover' })}
+                                srcSet={getOptimizedDealImageSrcSet(candidate.imageUrl, { width: 560, fit: 'cover' })}
+                                alt={candidate.title}
+                                loading="lazy"
+                                decoding="async"
+                                className="h-full w-full object-cover"
+                              />
                             </div>
                           ) : null}
                           <div className="flex flex-wrap items-center gap-2">
@@ -14383,7 +14413,14 @@ const deleteDealFromBackend = async (
               <div className="flex min-w-0 items-start gap-4">
                 <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white shadow-sm sm:h-24 sm:w-24">
                   {previewDeal?.imageUrl ? (
-                    <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
+                    <img
+                      src={getOptimizedDealImageUrl(previewDeal.imageUrl, { width: 520, fit: 'cover' })}
+                      srcSet={getOptimizedDealImageSrcSet(previewDeal.imageUrl, { width: 520, fit: 'cover' })}
+                      alt={previewDeal.title}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-indigo-100 text-indigo-500">
                       <AppIcon name="spark" size={22} />

@@ -8,11 +8,12 @@ export const DEFAULT_LOCATION: UserLocation = {
 
 export const CATEGORY_OPTIONS = [
   'All',
-  'Fast Food',
-  'Coffee',
-  'Fitness',
-  'Pet',
-  'Home'
+  'Tech',
+  'Fashion',
+  'Gaming',
+  'Digital',
+  'Home',
+  'Food',
 ] as const;
 
 export const ONLINE_CATEGORY_OPTIONS = [

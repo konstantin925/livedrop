@@ -62,13 +62,13 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
     },
   ];
 
-  const buttonHeight = compact ? 'h-8' : 'h-9.5';
-  const buttonText = compact ? 'text-[7.5px]' : 'text-[8.5px]';
-  const padding = compact ? 'px-2' : 'px-2';
+  const buttonHeight = compact ? 'h-8' : 'h-9';
+  const buttonText = compact ? 'text-[7px]' : 'text-[8px]';
+  const padding = compact ? 'px-1.5' : 'px-2';
   const iconSize = compact ? 10 : 12;
 
   return (
-    <div className={`grid grid-cols-3 gap-1 max-[359px]:gap-1 ${compact ? 'mt-2' : 'mt-2.5'}`}>
+    <div className={`grid grid-cols-3 gap-1 ${compact ? 'mt-1.5' : 'mt-2'}`}>
       {actions.map((action) => {
         const isPending = pendingAction === action.id;
         return (
@@ -84,7 +84,7 @@ export const DealEngagementBar: React.FC<DealEngagementBarProps> = ({
             }}
             disabled={isPending}
             aria-label={`${action.label} deal`}
-            className={`inline-flex ${buttonHeight} min-w-0 w-full items-center justify-center gap-0.5 rounded-[0.95rem] border border-slate-200/90 bg-white/92 ${padding} ${buttonText} font-black uppercase tracking-[0.06em] text-slate-500 shadow-sm shadow-slate-200/25 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${action.tone} ${isPending ? 'border-indigo-200 bg-indigo-50 text-indigo-600 shadow-indigo-100/60' : ''}`}
+            className={`inline-flex ${buttonHeight} min-w-0 w-full items-center justify-center gap-0.5 rounded-[0.85rem] border border-slate-200 bg-white ${padding} ${buttonText} font-black uppercase tracking-[0.06em] text-slate-500 shadow-sm shadow-slate-200/20 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${action.tone} ${isPending ? 'border-indigo-200 bg-indigo-50 text-indigo-600 shadow-indigo-100/50' : ''}`}
           >
             <AppIcon name={action.icon} size={iconSize} />
             <span className={`shrink-0 tabular-nums ${compact ? 'text-slate-400/90' : 'text-slate-400'}`}>{formatCount(action.count)}</span>

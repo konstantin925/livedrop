@@ -1,6 +1,7 @@
 import { CATEGORY_OPTIONS, ONLINE_CATEGORY_OPTIONS } from '../constants';
 
 export type CategoryIconName =
+  | 'grid'
   | 'deal'
   | 'coffee'
   | 'fitness'
@@ -19,87 +20,12 @@ export type BusinessCategoryMode = 'local' | 'online';
 const LOCAL_CATEGORY_OPTIONS = CATEGORY_OPTIONS.filter((category) => category !== 'All');
 const REMOTE_CATEGORY_OPTIONS = ONLINE_CATEGORY_OPTIONS.filter((category) => category !== 'All');
 
-const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
-  'Fast Food': ['Burgers', 'Tacos', 'Sandwiches', 'Sweets'],
-  Coffee: ['Hot Coffee', 'Iced Coffee', 'Espresso', 'Bakery'],
-  Fitness: ['Gyms', 'Protein', 'Supplements', 'Activewear'],
-  Pet: ['Grooming', 'Treats', 'Toys', 'Wellness'],
-  Home: ['Cleaning', 'Books', 'Furniture', 'Services'],
-};
+const LOCAL_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {};
 
-const ONLINE_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {
-  Tech: [
-    'Phones',
-    'Laptops',
-    'Tablets',
-    'Smartwatches',
-    'Headphones',
-    'Earbuds',
-    'Speakers',
-    'Gaming',
-    'PC Accessories',
-    'Keyboards',
-    'Mice',
-    'Monitors',
-    'TVs',
-    'Cameras',
-    'Drones',
-  ],
-  Fashion: [
-    "Men's Clothing",
-    "Women's Clothing",
-    'Shoes',
-    'Sneakers',
-    'Boots',
-    'Sandals',
-    'Jackets',
-    'Hoodies',
-    'T-Shirts',
-    'Jeans',
-    'Dresses',
-    'Activewear',
-    'Loungewear',
-    'Bags',
-    'Wallets',
-    'Wigs',
-  ],
-  Gaming: [
-    'Consoles',
-    'Games',
-    'Controllers',
-    'Headsets',
-    'Keyboards',
-    'Mice',
-    'Monitors',
-    'Gaming Chairs',
-  ],
-  Digital: [
-    'Software',
-    'Subscriptions',
-    'Courses',
-    'Ebooks',
-    'Templates',
-    'Design Assets',
-    'AI Tools',
-  ],
-  Home: [
-    'Furniture',
-    'Home Decor',
-    'Kitchen',
-    'Bedding',
-    'Bath',
-    'Storage',
-    'Cleaning',
-    'Appliances',
-    'Smart Home',
-    'Lighting',
-    'Outdoor',
-    'Patio',
-  ],
-  Food: ['Snacks', 'Meal Kits', 'Groceries', 'Drinks', 'Supplements'],
-};
+const ONLINE_SUBCATEGORY_OPTIONS: Record<string, readonly string[]> = {};
 
 const CATEGORY_ICONS: Record<string, CategoryIconName> = {
+  All: 'grid',
   'Fast Food': 'deal',
   Coffee: 'coffee',
   Fitness: 'fitness',
@@ -115,27 +41,29 @@ const CATEGORY_ICONS: Record<string, CategoryIconName> = {
 };
 
 const CATEGORY_ALIASES: Record<string, string> = {
-  restaurant: 'Fast Food',
-  restaurants: 'Fast Food',
+  'fast food': 'Food',
+  fastfood: 'Food',
+  restaurant: 'Food',
+  restaurants: 'Food',
   food: 'Food',
-  dining: 'Fast Food',
-  burgers: 'Fast Food',
-  burger: 'Fast Food',
-  tacos: 'Fast Food',
-  taco: 'Fast Food',
-  cafe: 'Coffee',
-  cafes: 'Coffee',
-  espresso: 'Coffee',
-  coffee: 'Coffee',
-  gym: 'Fitness',
-  fitness: 'Fitness',
-  workout: 'Fitness',
-  pets: 'Pet',
-  pet: 'Pet',
-  dog: 'Pet',
-  dogs: 'Pet',
-  cat: 'Pet',
-  cats: 'Pet',
+  dining: 'Food',
+  burgers: 'Food',
+  burger: 'Food',
+  tacos: 'Food',
+  taco: 'Food',
+  cafe: 'Food',
+  cafes: 'Food',
+  espresso: 'Food',
+  coffee: 'Food',
+  gym: 'Home',
+  fitness: 'Home',
+  workout: 'Home',
+  pets: 'Home',
+  pet: 'Home',
+  dog: 'Home',
+  dogs: 'Home',
+  cat: 'Home',
+  cats: 'Home',
   furniture: 'Home',
   household: 'Home',
   kitchen: 'Home',
@@ -188,11 +116,12 @@ const ONLINE_CATEGORY_KEYWORDS: Record<string, string[]> = {
 };
 
 const LOCAL_CATEGORY_KEYWORDS: Record<string, string[]> = {
-  'Fast Food': ['burger', 'taco', 'fries', 'sandwich', 'pizza', 'burrito', 'combo', 'meal'],
-  Coffee: ['coffee', 'latte', 'espresso', 'cold brew', 'cappuccino', 'mocha', 'bagel', 'pastry'],
-  Fitness: ['gym', 'fitness', 'workout', 'protein', 'smoothie', 'yoga', 'training'],
-  Pet: ['pet', 'dog', 'cat', 'grooming', 'treat', 'toy', 'vet'],
-  Home: ['wash', 'clean', 'book', 'furniture', 'repair', 'service', 'delivery'],
+  Tech: ['laptop', 'monitor', 'headphone', 'charger', 'phone', 'camera', 'router', 'usb', 'keyboard', 'mouse'],
+  Fashion: ['shirt', 'hoodie', 'shoe', 'dress', 'sneaker', 'bag', 'jacket', 'wig', 'wigs', 'weave'],
+  Gaming: ['gaming', 'xbox', 'playstation', 'steam', 'controller', 'console'],
+  Digital: ['software', 'subscription', 'course', 'ebook', 'download', 'template'],
+  Home: ['wash', 'clean', 'book', 'furniture', 'repair', 'service', 'delivery', 'pet', 'dog', 'cat', 'fitness', 'gym'],
+  Food: ['burger', 'taco', 'fries', 'sandwich', 'pizza', 'burrito', 'combo', 'meal', 'coffee', 'latte', 'espresso', 'snack'],
 };
 
 const canonicalCategoryMap = new Map<string, string>(
@@ -220,7 +149,7 @@ export const getCategoryOptionsForMode = (mode: BusinessCategoryMode) =>
   mode === 'online' ? [...REMOTE_CATEGORY_OPTIONS] : [...LOCAL_CATEGORY_OPTIONS];
 
 export const getDefaultCategoryForMode = (mode: BusinessCategoryMode) =>
-  mode === 'online' ? 'Tech' : 'Fast Food';
+  mode === 'online' ? 'Tech' : 'Food';
 
 export const getSubcategoryOptionsForCategory = (
   mode: BusinessCategoryMode,

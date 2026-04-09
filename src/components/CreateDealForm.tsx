@@ -5,10 +5,14 @@ import {
   getCategoryLabel,
   getDefaultCategoryForMode,
   getCategoryOptionsForMode,
-  getSubcategoryOptionsForCategory,
   normalizeCategoryValue,
-  normalizeSubcategoryValue,
 } from '../utils/categories';
+import {
+  DEAL_STATUS_FILTER_OPTIONS,
+  getDealStatusFilterLabel,
+  sanitizeDealStatusTags,
+} from '../utils/dealStatus';
+import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
 
@@ -48,6 +52,8 @@ const BUSINESS_DEFAULTS_KEY = 'livedrop_business_defaults';
 
 type OfferType = 'percentage' | 'fixed' | 'custom';
 type BusinessMode = 'local' | 'online';
+type DealStatusTag = Exclude<(typeof DEAL_STATUS_FILTER_OPTIONS)[number]['id'], 'all'>;
+const DEAL_STATUS_TAG_OPTIONS = DEAL_STATUS_FILTER_OPTIONS.filter((option) => option.id !== 'all');
 
 const normalizeTextValue = (value: string | null | undefined) => (typeof value === 'string' ? value : '');
 const normalizePriceInput = (value: string | null | undefined) => {
@@ -221,9 +227,6 @@ const getInitialFormData = (
       initialData.businessName,
       initialData.offerText,
     ]);
-    const savedSubcategory = businessMode === 'online'
-      ? initialData.onlineSubcategory
-      : initialData.localSubcategory;
     const normalizedOriginalPrice = typeof initialData.originalPrice === 'number'
       ? initialData.originalPrice
       : null;
@@ -247,7 +250,8 @@ const getInitialFormData = (
       title: normalizeTextValue(initialData.title),
       description: normalizeTextValue(initialData.description),
       category: normalizedCategory,
-      subcategory: normalizeSubcategoryValue(savedSubcategory, businessMode, normalizedCategory),
+      subcategory: '',
+      statusTags: sanitizeDealStatusTags(initialData.statusTags),
       offerType: inferredOfferType,
       discountValue: inferredDiscountValue,
       customOfferText: inferredOfferType === 'custom' ? normalizeTextValue(initialData.offerText) : '',
@@ -276,6 +280,7 @@ const getInitialFormData = (
     description: '',
     category: defaultCategory,
     subcategory: '',
+    statusTags: [] as DealStatusTag[],
     offerType: 'percentage' as OfferType,
     discountValue: '30',
     customOfferText: '',
@@ -362,7 +367,8 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
         nextState.businessName,
         nextState.customOfferText,
       ]);
-      nextState.subcategory = normalizeSubcategoryValue('', 'online', normalizedCategory);
+      nextState.subcategory = '';
+      nextState.statusTags = nextState.statusTags?.length ? nextState.statusTags : ['new-deals'];
 
       console.info('[LiveDrop] CreateDealForm applied autofill request', {
         autofillRequest,
@@ -399,13 +405,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     () => getCategoryOptionsForMode(formData.businessMode),
     [formData.businessMode],
   );
-  const availableSubcategoryOptions = useMemo(
-    () => getSubcategoryOptionsForCategory(formData.businessMode, normalizedCategory),
-    [formData.businessMode, normalizedCategory],
-  );
-  const normalizedSubcategory = useMemo(
-    () => normalizeSubcategoryValue(formData.subcategory, formData.businessMode, normalizedCategory),
-    [formData.businessMode, formData.subcategory, normalizedCategory],
+  const normalizedStatusTags = useMemo(
+    () => sanitizeDealStatusTags(formData.statusTags),
+    [formData.statusTags],
   );
   const normalizedOriginalPrice = useMemo(
     () => normalizePriceInput(formData.originalPrice),
@@ -477,8 +479,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
       category: normalizedCategory,
-      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
-      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
+      statusTags: normalizedStatusTags,
     };
   }, [
     durationMinutes,
@@ -490,7 +491,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.durationPreset,
     formData.imageUrl,
     formData.quantity,
-    formData.subcategory,
+    formData.statusTags,
     formData.title,
     initialData?.affiliateUrl,
     initialData?.id,
@@ -501,7 +502,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     normalizedDiscountPercent,
     normalizedOriginalPrice,
     normalizedCategory,
-    normalizedSubcategory,
+    normalizedStatusTags,
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
     normalizedLinkState.websiteUrl,
@@ -541,8 +542,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Math.max(Number(formData.currentClaims || 0), 0),
       claimCount: Math.max(Number(formData.currentClaims || 0), 0),
       category: normalizedCategory,
-      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
-      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
+      statusTags: normalizedStatusTags,
       currentPrice: normalizedCurrentPrice,
       originalPrice: normalizedOriginalPrice,
       discountPercent: normalizedDiscountPercent,
@@ -557,12 +557,12 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.durationPreset,
     formData.imageUrl,
     formData.quantity,
-    formData.subcategory,
+    formData.statusTags,
     formData.title,
     normalizedCategory,
     normalizedCurrentPrice,
     normalizedDiscountPercent,
-    normalizedSubcategory,
+    normalizedStatusTags,
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
     normalizedLinkState.websiteUrl,
@@ -583,7 +583,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title).trim(),
       description: normalizeTextValue(formData.description).trim(),
       category: normalizedCategory,
-      subcategory: normalizedSubcategory,
+      statusTags: normalizedStatusTags,
       offerType: formData.offerType,
       discountValue: normalizeTextValue(formData.discountValue).trim(),
       customOfferText: normalizeTextValue(formData.customOfferText).trim(),
@@ -654,8 +654,9 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentClaims: Number(formData.currentClaims),
       claimCount: Number(formData.currentClaims),
       category: normalizedCategory,
-      localSubcategory: isOnline ? undefined : normalizedSubcategory || undefined,
-      onlineSubcategory: isOnline ? normalizedSubcategory || undefined : undefined,
+      statusTags: normalizedStatusTags,
+      localSubcategory: undefined,
+      onlineSubcategory: undefined,
       logoUrl: undefined,
     } as Omit<Deal, 'id' | 'createdAt'>;
   };
@@ -678,9 +679,6 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
     if (!normalizedCategory.trim()) {
       return 'Please choose a category.';
-    }
-    if (availableSubcategoryOptions.length > 0 && !normalizedSubcategory.trim()) {
-      return 'Please choose a subcategory.';
     }
 
     if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
@@ -734,7 +732,6 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   };
 
   const publishValidationError = useMemo(() => getPublishValidationError(), [
-    availableSubcategoryOptions.length,
     durationMinutes,
     formData.affiliateUrl,
     formData.businessMode,
@@ -750,7 +747,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     formData.quantity,
     formData.originalPrice,
     formData.currentPrice,
-    formData.subcategory,
+    formData.statusTags,
     formData.title,
     formData.websiteUrl,
     hasPreciseUserLocation,
@@ -758,7 +755,6 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     normalizedLinkState.affiliateUrl,
     normalizedLinkState.productUrl,
     normalizedLinkState.websiteUrl,
-    normalizedSubcategory,
     offerText,
   ]);
 
@@ -919,7 +915,14 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
           <div className="overflow-hidden rounded-[2rem] border border-slate-100 bg-white shadow-sm">
             <div className="aspect-[16/10] bg-slate-100 overflow-hidden">
               {previewDeal.imageUrl ? (
-                <img src={previewDeal.imageUrl} alt={previewDeal.title} className="h-full w-full object-cover" />
+                <img
+                  src={getOptimizedDealImageUrl(previewDeal.imageUrl, { width: 720, fit: 'cover' })}
+                  srcSet={getOptimizedDealImageSrcSet(previewDeal.imageUrl, { width: 720, fit: 'cover' })}
+                  alt={previewDeal.title}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover"
+                />
               ) : (
                 <div className="flex h-full items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100 text-slate-400">
                   <AppIcon name="image" size={32} />
@@ -1209,51 +1212,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
                 <option value="10">10 miles</option>
               </select>
             </div>
-          ) : (
-            <>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
-                <select
-                  required
-                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                  value={normalizedCategory}
-                  onChange={e => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
-                >
-                  <option value="">Select category</option>
-                  {availableCategoryOptions.map(option => (
-                    <option key={option} value={option}>
-                      {getCategoryLabel(option)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Subcategory</label>
-                {availableSubcategoryOptions.length > 0 ? (
-                  <select
-                    required
-                    className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                    value={normalizedSubcategory}
-                    onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
-                  >
-                    <option value="">Select subcategory</option>
-                    {availableSubcategoryOptions.map(option => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    disabled
-                    value="No subcategories available"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-slate-400 outline-none cursor-not-allowed"
-                  />
-                )}
-              </div>
-            </>
-          )}
+          ) : null}
         </div>
 
         <div className="space-y-1.5">
@@ -1297,51 +1256,60 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
           ) : null}
         </div>
 
-        {formData.businessMode === 'local' ? (
-          <>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
-              <select
-                required
-                className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                value={normalizedCategory}
-                onChange={e => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
-              >
-                <option value="">Select category</option>
-                {availableCategoryOptions.map(option => (
-                  <option key={option} value={option}>
-                    {getCategoryLabel(option)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Subcategory</label>
-              {availableSubcategoryOptions.length > 0 ? (
-                <select
-                  required
-                  className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-                  value={normalizedSubcategory}
-                  onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Category</label>
+          <select
+            required
+            className="w-full bg-white border border-slate-200 rounded-2xl py-4 px-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+            value={normalizedCategory}
+            onChange={e => setFormData({ ...formData, category: e.target.value, subcategory: '' })}
+          >
+            <option value="">Select category</option>
+            {availableCategoryOptions.map(option => (
+              <option key={option} value={option}>
+                {getCategoryLabel(option)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Deal Status Tags</label>
+          <div className="flex flex-wrap gap-2">
+            {DEAL_STATUS_TAG_OPTIONS.map((option) => {
+              const isActive = normalizedStatusTags.includes(option.id as DealStatusTag);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => {
+                    const nextTag = option.id as DealStatusTag;
+                    setFormData((previous) => {
+                      const currentTags = sanitizeDealStatusTags(previous.statusTags);
+                      const hasTag = currentTags.includes(nextTag);
+                      return {
+                        ...previous,
+                        statusTags: hasTag
+                          ? currentTags.filter((value) => value !== nextTag)
+                          : [...currentTags, nextTag],
+                      };
+                    });
+                  }}
+                  className={`inline-flex h-10 items-center rounded-xl border px-3 text-[10px] font-black uppercase tracking-[0.11em] transition-all ${
+                    isActive
+                      ? 'border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:text-indigo-600'
+                  }`}
                 >
-                  <option value="">Select subcategory</option>
-                  {availableSubcategoryOptions.map(option => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  disabled
-                  value="No subcategories available"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-4 text-slate-400 outline-none cursor-not-allowed"
-                />
-              )}
-            </div>
-          </>
-        ) : null}
+                  {getDealStatusFilterLabel(option.id)}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-slate-400">
+            Choose one or more tags. These power the universal filters: New Deals, Popular, Best Deals, Leaving Soon.
+          </p>
+        </div>
 
         <label className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
           <div>

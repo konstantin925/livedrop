@@ -1,4 +1,5 @@
 import { AppNotification, CatalogCoupon, Claim, UserRole } from '../types';
+import type { DealStatusFilterId } from './dealStatus';
 
 export interface CloudAppState {
   claims: Claim[];
@@ -7,7 +8,7 @@ export interface CloudAppState {
   preferences: {
     radius?: number;
     selectedCategory?: string;
-    selectedFeedFilter?: 'all' | 'trending' | 'ending-soon' | 'just-dropped';
+    selectedFeedFilter?: DealStatusFilterId;
     role?: UserRole;
   };
 }

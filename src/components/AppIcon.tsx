@@ -39,6 +39,7 @@ type IconName =
   | 'trending'
   | 'ending'
   | 'dropped'
+  | 'grid'
   | 'deal'
   | 'home'
   | 'coffee'
@@ -318,6 +319,15 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="M12 9V15" />
     </>
   ),
+  grid: (
+    <>
+      <rect x="4.9" y="4.9" width="6.1" height="6.1" rx="1.95" />
+      <rect x="13" y="4.9" width="6.1" height="6.1" rx="1.95" />
+      <rect x="4.9" y="13" width="6.1" height="6.1" rx="1.95" />
+      <rect x="13" y="13" width="6.1" height="6.1" rx="1.95" />
+      <circle cx="12" cy="12" r="0.95" fill="currentColor" stroke="none" />
+    </>
+  ),
   deal: (
     <>
       <path d="M7 7H14L18 11L14 15H7L5 13V9L7 7Z" />
@@ -326,9 +336,10 @@ const paths: Record<IconName, React.ReactNode> = {
   ),
   home: (
     <>
-      <path d="M6 11L12 6L18 11" />
-      <path d="M8 10.5V18H16V10.5" />
-      <path d="M10.5 18V13.5H13.5V18" />
+      <path d="M5.8 10.9L12 5.8L18.2 10.9" />
+      <path d="M7.4 10.6V18.4H16.6V10.6" />
+      <path d="M10.6 18.4V14.6C10.6 13.7 11.2 13.1 12 13.1C12.8 13.1 13.4 13.7 13.4 14.6V18.4" />
+      <path d="M9.4 9.3H14.6" />
     </>
   ),
   coffee: (
@@ -367,38 +378,45 @@ const paths: Record<IconName, React.ReactNode> = {
   ),
   tech: (
     <>
-      <rect x="6" y="6.5" width="12" height="9" rx="2" />
-      <path d="M10 18H14" />
-      <path d="M12 15.5V18" />
+      <rect x="5.8" y="6.1" width="12.4" height="8.8" rx="2.25" />
+      <path d="M10.1 18.5H13.9" />
+      <path d="M12 14.9V18.5" />
+      <path d="M8.7 8.9H15.3" />
+      <path d="M8.7 11.3H13.9" />
+      <path d="M18.2 9.3H19.3" />
+      <path d="M18.2 11.7H19.3" />
     </>
   ),
   fashion: (
     <>
-      <path d="M9 7L10.8 5.5H13.2L15 7L17 8.5L15.8 18.5H8.2L7 8.5L9 7Z" />
-      <path d="M10.5 8.5C10.7 9.3 11.3 9.8 12 9.8C12.7 9.8 13.3 9.3 13.5 8.5" />
+      <path d="M7 10.3H17V17.9C17 18.9 16.2 19.8 15.2 19.8H8.8C7.8 19.8 7 18.9 7 17.9V10.3Z" />
+      <path d="M9.3 10.3V8.8C9.3 7.2 10.5 5.9 12 5.9C13.5 5.9 14.7 7.2 14.7 8.8V10.3" />
+      <path d="M10.6 14.3H13.4" />
+      <path d="M12 12.9V15.7" />
     </>
   ),
   gaming: (
     <>
-      <path d="M8.5 9H15.5C17.7 9 19.2 11.2 18.5 13.3L17.7 15.8C17.2 17.2 15.6 17.8 14.4 17L12.8 15.9C12.3 15.6 11.7 15.6 11.2 15.9L9.6 17C8.4 17.8 6.8 17.2 6.3 15.8L5.5 13.3C4.8 11.2 6.3 9 8.5 9Z" />
-      <path d="M9.2 12H11.2" />
-      <path d="M10.2 11V13" />
-      <circle cx="14.8" cy="11.5" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="16.5" cy="13.2" r="0.8" fill="currentColor" stroke="none" />
+      <path d="M8 9.5H16C18 9.5 19.3 11.3 18.9 13.1L18.3 15.4C18 16.9 16.4 17.7 15.2 16.9L13.2 15.8C12.5 15.4 11.5 15.4 10.8 15.8L8.8 16.9C7.6 17.7 6 16.9 5.7 15.4L5.1 13.1C4.7 11.3 6 9.5 8 9.5Z" />
+      <path d="M9.1 12.4H11.7" />
+      <path d="M10.4 11.1V13.7" />
+      <circle cx="14.9" cy="11.8" r="0.85" fill="currentColor" stroke="none" />
+      <circle cx="16.5" cy="13.4" r="0.85" fill="currentColor" stroke="none" />
     </>
   ),
   digital: (
     <>
-      <path d="M12 4L14 8L18 10L14 12L12 16L10 12L6 10L10 8L12 4Z" />
-      <path d="M17 5L17.8 6.7L19.5 7.5L17.8 8.3L17 10L16.2 8.3L14.5 7.5L16.2 6.7L17 5Z" />
+      <path d="M12 4.7L13.8 8.5L17.6 10.3L13.8 12.1L12 15.9L10.2 12.1L6.4 10.3L10.2 8.5L12 4.7Z" />
+      <path d="M17.2 13.3L19.4 18.5L16.8 17.8L16 20.4L13.8 15.2L17.2 13.3Z" />
     </>
   ),
   food: (
     <>
-      <rect x="6.5" y="6.5" width="11" height="10.5" rx="2" />
-      <path d="M8.5 6.5V5.2C8.5 4.3 9.2 3.6 10.1 3.6H13.9C14.8 3.6 15.5 4.3 15.5 5.2V6.5" />
-      <path d="M9.5 10H14.5" />
-      <path d="M9.5 13H14.5" />
+      <path d="M7 9.9H17L16.3 18C16.2 18.9 15.5 19.6 14.6 19.6H9.4C8.5 19.6 7.8 18.9 7.7 18L7 9.9Z" />
+      <path d="M9.2 9.9V8C9.2 6.5 10.4 5.4 11.8 5.4H12.2C13.6 5.4 14.8 6.5 14.8 8V9.9" />
+      <path d="M10 13H14" />
+      <path d="M10.2 15.7H13.8" />
+      <circle cx="15.8" cy="8.5" r="0.9" fill="currentColor" stroke="none" />
     </>
   ),
   freebies: (
