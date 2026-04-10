@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppIcon } from './AppIcon';
 import type { IconName } from './AppIcon';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
@@ -14,21 +14,14 @@ interface DealArtworkProps {
   fallbackClassName?: string;
   iconName?: string | null;
   fallbackIconName?: IconName;
+  dealId?: string | null;
   preferredWidth?: number;
   sizes?: string;
   fetchPriority?: 'high' | 'low' | 'auto';
 }
 
-const failedImageSrcCache = new Set<string>();
-
-const findFirstLoadableCandidateIndex = (candidates: string[], startIndex = 0) => {
-  for (let index = Math.max(0, startIndex); index < candidates.length; index += 1) {
-    if (!failedImageSrcCache.has(candidates[index])) {
-      return index;
-    }
-  }
-  return -1;
-};
+const getCandidateIndex = (candidates: string[], startIndex = 0) =>
+  startIndex >= 0 && startIndex < candidates.length ? startIndex : -1;
 
 export const DealArtwork = React.memo(({
   src,
@@ -40,6 +33,7 @@ export const DealArtwork = React.memo(({
   fallbackClassName = '',
   iconName,
   fallbackIconName = 'deal',
+  dealId,
   preferredWidth,
   sizes,
   fetchPriority = 'low',
@@ -91,9 +85,10 @@ export const DealArtwork = React.memo(({
     return getOptimizedDealImageSrcSet(effectiveSrc, { width: preferredWidth, fit });
   }, [effectiveSrc, fit, preferredWidth]);
   const showImage = Boolean(effectiveSrc) && !imageFailed;
+  const debugSignatureRef = useRef('');
 
   useEffect(() => {
-    const nextIndex = findFirstLoadableCandidateIndex(imageCandidates);
+    const nextIndex = getCandidateIndex(imageCandidates, 0);
     if (nextIndex >= 0) {
       setImageCandidateIndex(nextIndex);
       setImageFailed(false);
@@ -113,24 +108,26 @@ export const DealArtwork = React.memo(({
       return;
     }
 
-    const didPreviouslyFail = failedImageSrcCache.has(effectiveSrc);
-    if (!didPreviouslyFail) {
-      setImageFailed(false);
-      setImageLoaded(false);
-      return;
-    }
-
-    const nextIndex = findFirstLoadableCandidateIndex(imageCandidates, imageCandidateIndex + 1);
-    if (nextIndex >= 0) {
-      setImageCandidateIndex(nextIndex);
-      setImageFailed(false);
-      setImageLoaded(false);
-      return;
-    }
-
-    setImageFailed(true);
+    setImageFailed(false);
     setImageLoaded(false);
   }, [effectiveSrc, imageCandidateIndex, imageCandidates]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!effectiveSrc && !normalizedIconName) return;
+
+    const signature = `${dealId ?? 'unknown'}|${normalizedIconName}|${effectiveSrc}|${imageFailed}`;
+    if (debugSignatureRef.current === signature) return;
+    debugSignatureRef.current = signature;
+
+    console.info('[LiveDrop] DealArtwork icon resolution', {
+      dealId: dealId ?? null,
+      iconName: normalizedIconName || null,
+      resolvedPath: effectiveSrc || null,
+      candidatePaths: imageCandidates,
+      imageFailed,
+    });
+  }, [dealId, effectiveSrc, imageCandidates, imageFailed, normalizedIconName]);
 
   return (
     <div className={`h-full w-full ${className}`}>
@@ -149,10 +146,7 @@ export const DealArtwork = React.memo(({
             fetchPriority={fetchPriority}
             onLoad={() => setImageLoaded(true)}
             onError={() => {
-              if (effectiveSrc) {
-                failedImageSrcCache.add(effectiveSrc);
-              }
-              const nextCandidateIndex = findFirstLoadableCandidateIndex(imageCandidates, imageCandidateIndex + 1);
+              const nextCandidateIndex = getCandidateIndex(imageCandidates, imageCandidateIndex + 1);
               if (nextCandidateIndex >= 0) {
                 setImageCandidateIndex(nextCandidateIndex);
                 setImageLoaded(false);

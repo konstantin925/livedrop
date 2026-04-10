@@ -4,29 +4,34 @@ const URL_ORIGIN_PREFIX_PATTERN = /^https?:\/\/[^/]+/i;
 const TRAILING_QUERY_HASH_PATTERN = /[?#].*$/;
 
 const KNOWN_DEAL_ICON_STEMS = [
-  'air-fryer',
-  'appliance',
-  'coffee-machine',
-  'digital-scale',
-  'digital-download',
-  'drone',
-  'female-clothing',
-  'gaming-chair',
-  'headphones',
-  'ice-maker',
-  'laptop',
-  'lawnmower',
-  'male-clothing',
   'monitor',
-  'mouse',
+  'laptop',
+  'gaming-chair',
+  'stand-mixer',
+  'coffee-machine',
+  'ice-maker',
+  'air-fryer',
+  'digital-scale',
+  'lawnmower',
   'robot-vacuum',
   'security-camera',
+  'smartphone',
+  'headphones',
+  'tablet',
+  'tv',
+  'drone',
   'smartwatch',
   'sneakers',
-  'smartphone',
-  'stand-mixer',
-  'tv',
-] as const;
+  'gaming-mouse',
+  'boots',
+  'graphics-card',
+  'guitar-amp',
+  'external-hdd',
+  'chair',
+  'chocolate-bar',
+ ] as const;
+
+const KNOWN_DEAL_ICON_STEM_SET = new Set<string>(KNOWN_DEAL_ICON_STEMS as readonly string[]);
 
 const decodeIconValue = (value: string) => {
   try {
@@ -59,67 +64,30 @@ const KNOWN_STEM_BY_LOOKUP_KEY = new Map(
 );
 
 const ICON_ALIAS_TO_STEM: Record<string, string> = {
-  'air-fryer': 'air-fryer',
-  'air-fryer-oven': 'air-fryer',
-  'airfryer': 'air-fryer',
+  // explicit required aliases
+  'lawn-mower': 'lawnmower',
+  'robot-vacume': 'robot-vacuum',
+  'robot-vaccum': 'robot-vacuum',
+  'security-cameras': 'security-camera',
+  'smart-watch': 'smartwatch',
+  'flat-screen-tv': 'tv',
+
+  // safe backward aliases from older values/typos to canonical list
   'air fryer': 'air-fryer',
+  airfryer: 'air-fryer',
+  coffeemaker: 'coffee-machine',
   'coffee-maker': 'coffee-machine',
-  'coffeemachine': 'coffee-machine',
-  'coffeemaker': 'coffee-machine',
-  'coffee-machine': 'coffee-machine',
+  icemaker: 'ice-maker',
+  'digital-scales': 'digital-scale',
   'bathroom-scale': 'digital-scale',
   'bathroom-scales': 'digital-scale',
-  'digital-scale': 'digital-scale',
-  'digital-scales': 'digital-scale',
-  'digital-download': 'digital-download',
-  'digital-downloads': 'digital-download',
-  'drone': 'drone',
-  'female-clothing': 'female-clothing',
-  'female-clothes': 'female-clothing',
-  'womens-clothing': 'female-clothing',
-  'women-clothing': 'female-clothing',
-  'womens-fashion': 'female-clothing',
-  'women-fashion': 'female-clothing',
-  'gaming-chair': 'gaming-chair',
-  'gaming-chairs': 'gaming-chair',
-  'headphones': 'headphones',
-  'ice-maker': 'ice-maker',
-  'icemaker': 'ice-maker',
-  'ice-maker-machine': 'ice-maker',
-  'laptop': 'laptop',
-  'lawnmower': 'lawnmower',
-  'lawn-mower': 'lawnmower',
-  'lawn-mover': 'lawnmower',
-  'male-clothing': 'male-clothing',
-  'male-clothes': 'male-clothing',
-  'mens-clothing': 'male-clothing',
-  'men-clothing': 'male-clothing',
-  'mens-fashion': 'male-clothing',
-  'men-fashion': 'male-clothing',
-  'monitor': 'monitor',
-  'mouse': 'mouse',
-  'computer-mouse': 'mouse',
-  'curved-monitor': 'monitor',
-  'robot-vacuum': 'robot-vacuum',
-  'robot-vacume': 'robot-vacuum',
-  'robot-vac': 'robot-vacuum',
-  'robot-vaccum': 'robot-vacuum',
-  'security-camera': 'security-camera',
   'security-cam': 'security-camera',
-  'security-cameras': 'security-camera',
-  'security-camera-system': 'security-camera',
-  'smartwatch': 'smartwatch',
-  'smart-watch': 'smartwatch',
+  television: 'tv',
+  'smart-phone': 'smartphone',
   'sneaker': 'sneakers',
-  'sneakers': 'sneakers',
-  'smartphone': 'smartphone',
-  'stand-mixer': 'stand-mixer',
-  'appliance': 'appliance',
-  'appliances': 'appliance',
-  'kitchenaid-stand-mixer': 'stand-mixer',
-  'tv': 'tv',
-  'flat-screen-tv': 'tv',
-  'television': 'tv',
+  'gaming-chairs': 'gaming-chair',
+  'computer-mouse': 'gaming-mouse',
+  'gutiar-amp': 'guitar-amp',
 };
 
 const getBasePathPrefix = () => {
@@ -184,7 +152,8 @@ export const normalizeDealIconName = (value?: string | null) => {
     }
   }
 
-  return toLookupKey(rawStem);
+  const normalizedStem = toLookupKey(rawStem);
+  return KNOWN_DEAL_ICON_STEM_SET.has(normalizedStem) ? normalizedStem : '';
 };
 
 export const buildDealIconPngPath = (iconName?: string | null) => {

@@ -127,6 +127,7 @@ export const DealCard = React.memo(({
           <DealArtwork
             src={cardArtworkSrc}
             iconName={normalizedIconName || undefined}
+            dealId={deal.id}
             fallbackIconName={fallbackCategoryIconName}
             alt={displayTitle}
             preferredWidth={360}
@@ -226,6 +227,7 @@ export const DealCard = React.memo(({
         <DealArtwork
           src={cardArtworkSrc}
           iconName={normalizedIconName || undefined}
+          dealId={deal.id}
           fallbackIconName={fallbackCategoryIconName}
           alt={displayTitle}
           preferredWidth={520}

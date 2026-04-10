@@ -75,6 +75,7 @@ const ROLE_STORAGE_KEY = 'livedrop_user_role';
 const HIDDEN_DEALS_STORAGE_KEY = 'livedrop_hidden_deals';
 const HIDDEN_DEAL_KEYS_STORAGE_KEY = 'livedrop_hidden_deal_keys';
 const PENDING_DELETE_DESCRIPTORS_STORAGE_KEY = 'livedrop_pending_delete_descriptors';
+const LOCAL_ONLY_DEAL_IDS_STORAGE_KEY = 'livedrop_local_only_deal_ids';
 const DISABLE_DEAL_EXPIRY = true;
 const SHARED_DEALS_CACHE_TTL_MS = 120_000;
 const SHARED_DEALS_FAST_CACHE_KEY = 'livedrop_shared_deals_cache';
@@ -1405,6 +1406,39 @@ const mergeRemoteDealsWithLocalFallback = (
   return sanitizeDealsCollection([...sanitizedRemote, ...localDrafts]);
 };
 
+const detectStaleSharedIconRecords = (
+  remoteDeals: Deal[],
+  localDeals: Deal[],
+): StaleSharedIconRecord[] => {
+  const sanitizedRemoteDeals = sanitizeDealsCollection(remoteDeals);
+  const localById = new Map(
+    sanitizeDealsCollection(localDeals).map((deal) => [deal.id, deal] as const),
+  );
+
+  return sanitizedRemoteDeals
+    .filter((deal) => deal.businessType === 'online')
+    .map((remoteDeal) => {
+      const normalizedRemoteIcon = normalizeDealIconName(remoteDeal.iconName);
+      if (normalizedRemoteIcon) {
+        return null;
+      }
+
+      const matchingLocalDeal = localById.get(remoteDeal.id);
+      const normalizedLocalIcon = normalizeDealIconName(matchingLocalDeal?.iconName);
+      if (!normalizedLocalIcon) {
+        return null;
+      }
+
+      return {
+        id: remoteDeal.id,
+        title: remoteDeal.title || matchingLocalDeal?.title || 'Untitled deal',
+        businessName: remoteDeal.businessName || matchingLocalDeal?.businessName || 'Unknown merchant',
+        localIconName: normalizedLocalIcon,
+      } satisfies StaleSharedIconRecord;
+    })
+    .filter((record): record is StaleSharedIconRecord => Boolean(record));
+};
+
 const deriveWebsiteOrigin = (value?: string | null) => {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!trimmed) return null;
@@ -1915,6 +1949,19 @@ const PORTAL_FIELD_FALLBACK_SOURCES: Record<keyof PortalAutofillPayload, string[
   originalPrice: ['originalPrice', 'price'],
   category: ['category'],
   offerText: ['couponText', 'offerText'],
+};
+
+const readLocalOnlyDealIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(LOCAL_ONLY_DEAL_IDS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))
+      : new Set();
+  } catch {
+    return new Set();
+  }
 };
 
 const ONLINE_CATEGORY_SUBCATEGORY_HINTS: Record<string, readonly string[]> = {
@@ -2981,6 +3028,13 @@ type SharedPublishFailure = {
   occurredAt: number;
 };
 
+type StaleSharedIconRecord = {
+  id: string;
+  title: string;
+  businessName: string;
+  localIconName: string;
+};
+
 type DealsSchemaPreflightResult = {
   schemaColumns: string[];
   schemaSource: 'rpc' | 'local-fallback' | 'row-probe';
@@ -3303,6 +3357,7 @@ const getDefaultDealExpiry = (createdAt: number, businessType: Deal['businessTyp
 
 const getDealDataPresenceScore = (deal: Deal) => {
   let score = 0;
+  if (normalizeDealIconName(trimDealTextValue(deal.iconName))) score += 3;
   const cardImageSource = getDealCardImageSource(deal);
   const detailImageSource = getDealDetailImageSource(deal);
   if (cardImageSource) score += 2;
@@ -3315,19 +3370,61 @@ const getDealDataPresenceScore = (deal: Deal) => {
   return score;
 };
 
+const mergeDealVisualFallbacks = (preferredDeal: Deal, alternateDeal: Deal): Deal => {
+  const preferredIconName = normalizeDealIconName(trimDealTextValue(preferredDeal.iconName));
+  const alternateIconName = normalizeDealIconName(trimDealTextValue(alternateDeal.iconName));
+  const preferredCardImage = trimDealTextValue(preferredDeal.cardImageUrl)
+    || trimDealTextValue(preferredDeal.cardImage)
+    || trimDealTextValue(preferredDeal.imageUrl);
+  const alternateCardImage = trimDealTextValue(alternateDeal.cardImageUrl)
+    || trimDealTextValue(alternateDeal.cardImage)
+    || trimDealTextValue(alternateDeal.imageUrl);
+  const preferredDetailImage = trimDealTextValue(preferredDeal.detailImageUrl)
+    || trimDealTextValue(preferredDeal.detailImage);
+  const alternateDetailImage = trimDealTextValue(alternateDeal.detailImageUrl)
+    || trimDealTextValue(alternateDeal.detailImage)
+    || alternateCardImage;
+
+  if (
+    (preferredIconName || !alternateIconName)
+    && (preferredCardImage || !alternateCardImage)
+    && (preferredDetailImage || !alternateDetailImage)
+  ) {
+    return preferredDeal;
+  }
+
+  const mergedDeal = sanitizeDealRecord({
+    ...preferredDeal,
+    iconName: preferredIconName || alternateIconName || undefined,
+    cardImageUrl: preferredCardImage || alternateCardImage || undefined,
+    cardImage: preferredCardImage || alternateCardImage || undefined,
+    imageUrl: preferredCardImage || alternateCardImage || undefined,
+    detailImageUrl: preferredDetailImage || alternateDetailImage || undefined,
+    detailImage: preferredDetailImage || alternateDetailImage || undefined,
+  });
+
+  return mergedDeal ?? preferredDeal;
+};
+
 const choosePreferredDealRecord = (currentDeal: Deal, nextDeal: Deal) => {
   const currentScore = getDealDataPresenceScore(currentDeal);
   const nextScore = getDealDataPresenceScore(nextDeal);
 
   if (nextScore !== currentScore) {
-    return nextScore > currentScore ? nextDeal : currentDeal;
+    const preferredDeal = nextScore > currentScore ? nextDeal : currentDeal;
+    const alternateDeal = nextScore > currentScore ? currentDeal : nextDeal;
+    return mergeDealVisualFallbacks(preferredDeal, alternateDeal);
   }
 
   if ((currentDeal.status ?? 'active') !== (nextDeal.status ?? 'active')) {
-    return (nextDeal.status ?? 'active') === 'active' ? nextDeal : currentDeal;
+    const preferredDeal = (nextDeal.status ?? 'active') === 'active' ? nextDeal : currentDeal;
+    const alternateDeal = preferredDeal === nextDeal ? currentDeal : nextDeal;
+    return mergeDealVisualFallbacks(preferredDeal, alternateDeal);
   }
 
-  return nextDeal.createdAt >= currentDeal.createdAt ? nextDeal : currentDeal;
+  const preferredDeal = nextDeal.createdAt >= currentDeal.createdAt ? nextDeal : currentDeal;
+  const alternateDeal = preferredDeal === nextDeal ? currentDeal : nextDeal;
+  return mergeDealVisualFallbacks(preferredDeal, alternateDeal);
 };
 
 const getDealDedupKey = (deal: Deal) => {
@@ -4693,6 +4790,12 @@ export default function App() {
     return readHiddenDealKeys();
   });
   const hiddenDealKeysRef = useRef(hiddenDealKeys);
+  const [localOnlyDealIds, setLocalOnlyDealIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    return readLocalOnlyDealIds();
+  });
+  const localOnlyDealIdsRef = useRef(localOnlyDealIds);
+  const [staleSharedIconRecords, setStaleSharedIconRecords] = useState<StaleSharedIconRecord[]>([]);
   const [pendingDeleteDescriptors, setPendingDeleteDescriptors] = useState<DealDeleteDescriptor[]>(() => {
     if (typeof window === 'undefined') return [];
     return readPendingDeleteDescriptors();
@@ -4754,6 +4857,50 @@ export default function App() {
       return sanitizedDeals.filter(
         (deal) => !hiddenDealIdsRef.current.has(deal.id) && !isDealHiddenByIdentityKeys(deal, hiddenDealKeysRef.current),
       );
+    });
+  };
+  const markDealAsLocalOnly = (dealId: string) => {
+    if (!dealId) return;
+    setLocalOnlyDealIds((previous) => {
+      if (previous.has(dealId)) return previous;
+      const next = new Set(previous);
+      next.add(dealId);
+      return next;
+    });
+  };
+  const clearDealLocalOnlyMarker = (dealId: string) => {
+    if (!dealId) return;
+    setLocalOnlyDealIds((previous) => {
+      if (!previous.has(dealId)) return previous;
+      const next = new Set(previous);
+      next.delete(dealId);
+      return next;
+    });
+  };
+  const markDealsAsLocalOnly = (dealIds: string[]) => {
+    if (dealIds.length === 0) return;
+    setLocalOnlyDealIds((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      dealIds.forEach((dealId) => {
+        if (!dealId || next.has(dealId)) return;
+        next.add(dealId);
+        changed = true;
+      });
+      return changed ? next : previous;
+    });
+  };
+  const clearDealsLocalOnlyMarkers = (dealIds: string[]) => {
+    if (dealIds.length === 0) return;
+    setLocalOnlyDealIds((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      dealIds.forEach((dealId) => {
+        if (!dealId || !next.has(dealId)) return;
+        next.delete(dealId);
+        changed = true;
+      });
+      return changed ? next : previous;
     });
   };
   const selectedDetailDeal = useMemo(
@@ -4879,6 +5026,34 @@ export default function App() {
       ),
     );
   }, [hiddenDealKeys]);
+  useEffect(() => {
+    localOnlyDealIdsRef.current = localOnlyDealIds;
+    if (typeof window === 'undefined') return;
+    if (localOnlyDealIds.size === 0) {
+      safeRemoveLocalStorageItem(LOCAL_ONLY_DEAL_IDS_STORAGE_KEY);
+      return;
+    }
+    safeSetLocalStorageItem(
+      LOCAL_ONLY_DEAL_IDS_STORAGE_KEY,
+      JSON.stringify(Array.from(localOnlyDealIds)),
+    );
+  }, [localOnlyDealIds]);
+  useEffect(() => {
+    setLocalOnlyDealIds((previous) => {
+      if (previous.size === 0 || deals.length === 0) return previous;
+      const validDealIds = new Set(deals.map((deal) => deal.id));
+      let changed = false;
+      const next = new Set<string>();
+      previous.forEach((dealId) => {
+        if (validDealIds.has(dealId)) {
+          next.add(dealId);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : previous;
+    });
+  }, [deals]);
   useEffect(() => {
     pendingDeleteDescriptorsRef.current = pendingDeleteDescriptors;
     if (typeof window === 'undefined') return;
@@ -8046,6 +8221,7 @@ const deleteDealFromBackend = async (
           const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(remoteDeals, fallbackSourceDeals, {
             allowLocalFallbackWhenRemoteEmpty: true,
           });
+          const staleIconRecords = detectStaleSharedIconRecords(remoteDeals, fallbackSourceDeals);
           const nextDeals = composeDealsWithLocationContext(
             mergedHydratedDeals,
             latestUserLocationRef.current,
@@ -8093,8 +8269,20 @@ const deleteDealFromBackend = async (
               localVisibleCount: filteredDeals.filter((deal) => deal.businessType !== 'online').length,
               hiddenIds: hiddenDealIdsRef.current.size,
               hiddenKeys: hiddenDealKeysRef.current.size,
+              staleSharedIconRows: staleIconRecords.length,
               processingMs: Math.round(performance.now() - processingStart),
             });
+          }
+          setStaleSharedIconRecords(staleIconRecords);
+          if (staleIconRecords.length > 0) {
+            pushAdminLog(
+              'warning',
+              `Shared rows missing icon_name for ${staleIconRecords.length} deal${staleIconRecords.length === 1 ? '' : 's'}`,
+              staleIconRecords
+                .slice(0, 6)
+                .map((record) => `${record.title} (${record.businessName}) -> local icon "${record.localIconName}"`)
+                .join('\n'),
+            );
           }
           applyDealsState(nextDeals);
           setDealsError(nextDeals.length > 0 ? '' : 'Shared feed is empty.');
@@ -8122,6 +8310,7 @@ const deleteDealFromBackend = async (
           console.error('[LiveDrop] Shared deals hydrate error context', context);
         }
         applyDealsState(fallbackDeals);
+        setStaleSharedIconRecords([]);
         setDealsError(fallbackDeals.length > 0 ? '' : 'Could not load shared deals. Showing fallback drops.');
       } finally {
         if (!cancelled) {
@@ -9029,6 +9218,7 @@ const deleteDealFromBackend = async (
 
     let publishedDeal = localDeal;
     const sharedWriteMode: SharedPublishFailure['mode'] = editingDealId ? 'update' : 'insert';
+    let usedLocalOnlyFallback = false;
     const requiresSharedPersistence = Boolean(
       supabase
       && hasSupabaseConfig
@@ -9045,6 +9235,7 @@ const deleteDealFromBackend = async (
           SHARED_WRITE_TIMEOUT_MS,
           editingDealId ? 'Deal update' : 'Deal publish',
         );
+        clearDealLocalOnlyMarker(publishedDeal.id);
         setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
@@ -9054,6 +9245,8 @@ const deleteDealFromBackend = async (
         pushAdminLog('error', `Using local fallback after shared ${sharedWriteMode} failure`, formatAdminLogDetail(failure));
         setDealsError(`Could not ${sharedWriteMode} to ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Showing your local copy for now.`);
         if (requiresSharedPersistence) {
+          usedLocalOnlyFallback = true;
+          markDealAsLocalOnly(localDeal.id);
           setPortalSuccessMessage('');
           pushToast('Save failed. Shared database was not updated.', 'error');
           // Keep the local copy so edits are not lost even when shared sync is slow.
@@ -9061,6 +9254,8 @@ const deleteDealFromBackend = async (
         }
       }
     } else if (shouldPublish) {
+      usedLocalOnlyFallback = true;
+      markDealAsLocalOnly(localDeal.id);
       setLastSharedPublishFailure(null);
       setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
     }
@@ -9100,11 +9295,17 @@ const deleteDealFromBackend = async (
       setSelectedFeedFilter('all');
     }
     const didRelaunchEdit = isEditingExistingDeal && !shouldPublish;
-    const successMessage = shouldPublish
-      ? 'Deal published'
-      : didRelaunchEdit
-        ? 'Deal updated and relaunched'
-        : 'Deal saved';
+    const successMessage = usedLocalOnlyFallback
+      ? shouldPublish
+        ? 'Deal saved locally (not published)'
+        : didRelaunchEdit
+          ? 'Deal updated locally (not published)'
+          : 'Deal saved locally'
+      : shouldPublish
+        ? 'Deal published'
+        : didRelaunchEdit
+          ? 'Deal updated and relaunched'
+          : 'Deal saved';
     setPortalSuccessMessage(successMessage);
     pushToast(successMessage, shouldPublish || didRelaunchEdit ? 'new_deal' : 'share');
     setIsCreating(false);
@@ -9133,6 +9334,7 @@ const deleteDealFromBackend = async (
         ? await updateDealInBackend(lastSharedPublishFailure.deal)
         : await publishDealToBackend(lastSharedPublishFailure.deal);
       setDeals((prev) => [publishedDeal, ...prev.filter((deal) => deal.id !== publishedDeal.id)]);
+      clearDealLocalOnlyMarker(publishedDeal.id);
       setLastSharedPublishFailure(null);
       setDealsError('');
       setPortalSuccessMessage('Your deal is live');
@@ -9145,6 +9347,7 @@ const deleteDealFromBackend = async (
       );
       console.error('[LiveDrop] Retry publish failed', failure);
       setLastSharedPublishFailure(failure);
+      markDealAsLocalOnly(failure.deal.id);
       setDealsError(`Retry failed for ${failure.schema}.${failure.table} in ${failure.projectUrl}. ${failure.reason}. Your local copy is still available.`);
       pushAdminLog('error', `Retry ${failure.mode} failed`, formatAdminLogDetail(failure));
       setPortalSuccessMessage('');
@@ -9642,13 +9845,17 @@ const deleteDealFromBackend = async (
       try {
         persistedDeals = await publishDealsToBackend(publishableDeals);
         sharedWriteSucceeded = true;
+        clearDealsLocalOnlyMarkers(persistedDeals.map((deal) => deal.id));
         setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
         const sampleFailure = createSharedPublishFailure(publishableDeals[0], 'insert', error);
         setLastSharedPublishFailure(sampleFailure);
+        markDealsAsLocalOnly(publishableDeals.map((deal) => deal.id));
         setDealsError(`Could not bulk publish deals to ${sampleFailure.schema}.${sampleFailure.table}. ${sampleFailure.reason}. Showing your local copies for now.`);
       }
+    } else {
+      markDealsAsLocalOnly(publishableDeals.map((deal) => deal.id));
     }
 
     mergeUpdatedDealsIntoState(persistedDeals);
@@ -9667,13 +9874,17 @@ const deleteDealFromBackend = async (
     if (supabase && hasSupabaseConfig) {
       try {
         persistedDeals = await publishDealsToBackend(expiredDeals);
+        clearDealsLocalOnlyMarkers(persistedDeals.map((deal) => deal.id));
         setLastSharedPublishFailure(null);
         setDealsError('');
       } catch (error) {
         const sampleFailure = createSharedPublishFailure(expiredDeals[0], 'insert', error);
         setLastSharedPublishFailure(sampleFailure);
+        markDealsAsLocalOnly(expiredDeals.map((deal) => deal.id));
         setDealsError(`Could not mark deals expired in ${sampleFailure.schema}.${sampleFailure.table}. ${sampleFailure.reason}. Showing your local copies for now.`);
       }
+    } else {
+      markDealsAsLocalOnly(expiredDeals.map((deal) => deal.id));
     }
 
     mergeUpdatedDealsIntoState(persistedDeals);
@@ -9918,6 +10129,7 @@ const deleteDealFromBackend = async (
         const mergedHydratedDeals = mergeRemoteDealsWithLocalFallback(sharedDeals, storedDeals, {
           allowLocalFallbackWhenRemoteEmpty: true,
         });
+        const staleIconRecords = detectStaleSharedIconRecords(sharedDeals, storedDeals);
         const nextDeals = composeDealsWithLocationContext(
           mergedHydratedDeals,
           latestUserLocationRef.current,
@@ -9925,6 +10137,7 @@ const deleteDealFromBackend = async (
           { includeManagedOnlinePipeline: false },
         );
         applyDealsState(nextDeals);
+        setStaleSharedIconRecords(staleIconRecords);
         if (import.meta.env.DEV) {
           const onlineCount = nextDeals.filter((deal) => deal.businessType === 'online').length;
           console.info('[LiveDrop] Shared deals refresh snapshot', {
@@ -9932,11 +10145,22 @@ const deleteDealFromBackend = async (
             renderedCount: nextDeals.length,
             onlineCount,
             localCount: nextDeals.length - onlineCount,
+            staleSharedIconRows: staleIconRecords.length,
             selectedMode: dropMode,
             selectedCategory,
             selectedFeedFilter,
             dealsLoading,
           });
+        }
+        if (staleIconRecords.length > 0) {
+          pushAdminLog(
+            'warning',
+            `Shared rows missing icon_name for ${staleIconRecords.length} deal${staleIconRecords.length === 1 ? '' : 's'}`,
+            staleIconRecords
+              .slice(0, 6)
+              .map((record) => `${record.title} (${record.businessName}) -> local icon "${record.localIconName}"`)
+              .join('\n'),
+          );
         }
         if (!silent) {
           setDealsError(nextDeals.length > 0 ? '' : 'Shared feed is empty.');
@@ -9953,6 +10177,7 @@ const deleteDealFromBackend = async (
           setDealsError(hasExistingDeals ? '' : 'Could not load shared deals. Keeping the last synced view.');
           pushAdminLog('error', force ? 'Force refresh failed' : 'Refresh failed', error instanceof Error ? error.message : 'Unknown error');
         }
+        setStaleSharedIconRecords([]);
       } finally {
         if (!silent) {
           setDealsLoading(false);
@@ -10107,10 +10332,12 @@ const deleteDealFromBackend = async (
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+      clearDealLocalOnlyMarker(updatedDeal.id);
     } catch (error) {
       const failure = createSharedPublishFailure(nextDeal, 'update', error);
       setDealsError(`Could not update deal status in ${failure.schema}.${failure.table}. ${failure.reason}`);
       setLastSharedPublishFailure(failure);
+      markDealAsLocalOnly(nextDeal.id);
     }
   };
 
@@ -10124,10 +10351,12 @@ const deleteDealFromBackend = async (
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+      clearDealLocalOnlyMarker(updatedDeal.id);
     } catch (error) {
       const failure = createSharedPublishFailure(nextDeal, 'update', error);
       setDealsError(`Could not update featured status in ${failure.schema}.${failure.table}. ${failure.reason}`);
       setLastSharedPublishFailure(failure);
+      markDealAsLocalOnly(nextDeal.id);
     }
   };
 
@@ -10140,10 +10369,12 @@ const deleteDealFromBackend = async (
     try {
       const updatedDeal = await updateDealInBackend(nextDeal);
       setDeals((prev) => [updatedDeal, ...prev.filter((item) => item.id !== updatedDeal.id)]);
+      clearDealLocalOnlyMarker(updatedDeal.id);
     } catch (error) {
       const failure = createSharedPublishFailure(nextDeal, 'update', error);
       setDealsError(`Could not update trending status in ${failure.schema}.${failure.table}. ${failure.reason}`);
       setLastSharedPublishFailure(failure);
+      markDealAsLocalOnly(nextDeal.id);
     }
   };
 
@@ -10177,12 +10408,34 @@ const deleteDealFromBackend = async (
     }
 
     const canRetryPublish = Boolean(lastSharedPublishFailure) && (hasAdminAccess || currentView === 'business-portal' || isAdminRoute);
+    const localOnlyCount = localOnlyDealIds.size;
+    const staleIconCount = staleSharedIconRecords.length;
+    const staleIconPreview = staleSharedIconRecords
+      .slice(0, 4)
+      .map((record) => record.title)
+      .filter((title, index, source) => source.indexOf(title) === index)
+      .join(', ');
 
     return (
       <div className="rounded-[1.45rem] border border-amber-100 bg-amber-50 px-4 py-3 shadow-sm shadow-amber-100/40">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <p className="text-sm font-semibold leading-6 text-amber-700">{dealsError}</p>
+            {localOnlyCount > 0 ? (
+              <p className="mt-2 text-xs font-semibold leading-5 text-amber-700/95">
+                {localOnlyCount} deal{localOnlyCount === 1 ? ' is' : 's are'} currently local-only and not published to shared backend yet.
+              </p>
+            ) : null}
+            {staleIconCount > 0 ? (
+              <p className="mt-1 text-xs font-medium leading-5 text-amber-700/90">
+                {staleIconCount} shared deal{staleIconCount === 1 ? '' : 's'} appear to be stale (missing persisted icon names).
+              </p>
+            ) : null}
+            {staleIconPreview ? (
+              <p className="mt-1 text-xs font-medium leading-5 text-amber-700/90">
+                Likely stale shared rows: {staleIconPreview}{staleIconCount > 4 ? ', …' : ''}.
+              </p>
+            ) : null}
             {lastSharedPublishFailure ? (
               <p className="mt-2 text-xs font-medium leading-5 text-amber-700/90">
                 Last backend error: {lastSharedPublishFailure.reason}
@@ -10664,6 +10917,7 @@ const deleteDealFromBackend = async (
             <DealArtwork
               src={getDealDetailImageSource(previewDeal)}
               alt={displayTitle}
+              dealId={previewDeal.id}
               fit="contain"
               iconSize={40}
               fallbackIconName={getCategoryIconName(previewDeal.category)}
@@ -10780,6 +11034,7 @@ const deleteDealFromBackend = async (
               <DealArtwork
                 src={getDealDetailImageSource(previewDeal)}
                 alt={displayTitle}
+                dealId={previewDeal.id}
                 fit="contain"
                 iconSize={44}
                 fallbackIconName={getCategoryIconName(previewDeal.category)}
@@ -11254,6 +11509,7 @@ const deleteDealFromBackend = async (
               <DealArtwork
                 src={featuredImageSrc}
                 alt={displayTitle}
+                dealId={deal.id}
                 fit="cover"
                 iconSize={26}
                 fallbackIconName={getCategoryIconName(deal.category)}
@@ -11303,6 +11559,7 @@ const deleteDealFromBackend = async (
               <DealArtwork
                 src={cardArtworkSrc}
                 alt={displayTitle}
+                dealId={deal.id}
                 fit="contain"
                 iconSize={78}
                 fallbackIconName={getCategoryIconName(deal.category)}
@@ -11484,6 +11741,7 @@ const deleteDealFromBackend = async (
             <DealArtwork
               src={cardArtworkSrc}
               alt={displayTitle}
+              dealId={deal.id}
               fit="contain"
               iconSize={24}
               fallbackIconName={getCategoryIconName(deal.category)}
@@ -11739,6 +11997,7 @@ const deleteDealFromBackend = async (
               <DealArtwork
                 src={getDealCardImageSource(deal)}
                 alt={displayTitle}
+                dealId={deal.id}
                 fit="contain"
                 iconSize={30}
                 fallbackIconName={getCategoryIconName(deal.category)}
@@ -12836,6 +13095,7 @@ const deleteDealFromBackend = async (
             <DealArtwork
               src={getDealDetailImageSource(selectedDetailDeal)}
               alt={selectedDetailDeal.title}
+              dealId={selectedDetailDeal.id}
               fit="contain"
               iconSize={52}
               fallbackIconName={getCategoryIconName(selectedDetailDeal.category)}
@@ -12992,6 +13252,7 @@ const deleteDealFromBackend = async (
                     <DealArtwork
                       src={getDealCardImageSource(deal)}
                       alt={deal.title}
+                      dealId={deal.id}
                       fit="contain"
                       iconSize={24}
                       fallbackIconName={getCategoryIconName(deal.category)}
@@ -16366,10 +16627,11 @@ const deleteDealFromBackend = async (
       setAdminSelectedDealIds(new Set());
     };
 
-    const renderAdminDealCard = (deal: Deal) => {
-      const isDeleting = deletingDealIds.has(deal.id);
-      const isSelected = adminSelectedDealIds.has(deal.id);
-      const isExpired = (deal.status ?? 'active') === 'expired' || isExpiredDeal(deal);
+  const renderAdminDealCard = (deal: Deal) => {
+    const isDeleting = deletingDealIds.has(deal.id);
+    const isSelected = adminSelectedDealIds.has(deal.id);
+    const isExpired = (deal.status ?? 'active') === 'expired' || isExpiredDeal(deal);
+    const isLocalOnly = localOnlyDealIds.has(deal.id);
 
       return (
       <div key={deal.id} className="rounded-[1.75rem] border border-slate-100 bg-white p-4 shadow-sm">
@@ -16397,6 +16659,11 @@ const deleteDealFromBackend = async (
             <span className={`inline-flex h-7 items-center justify-center rounded-full px-3 text-[9px] font-black uppercase tracking-[0.1em] ${deal.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
               {deal.status ?? 'active'}
             </span>
+            {isLocalOnly ? (
+              <span className="inline-flex h-7 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-amber-700">
+                Local only
+              </span>
+            ) : null}
             {deal.adminTag ? (
               <span className="inline-flex h-7 items-center justify-center rounded-full bg-indigo-50 px-3 text-[9px] font-black uppercase tracking-[0.1em] text-indigo-600">
                 {deal.adminTag}
