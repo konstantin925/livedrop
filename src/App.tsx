@@ -766,24 +766,6 @@ const isInlineDataUrl = (value?: string | null) =>
 const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
   if (!deal) return '';
 
-  const cardImageCandidate =
-    trimDealTextValue(deal.cardImageUrl)
-    || trimDealTextValue(deal.cardImage)
-    || trimDealTextValue(deal.imageUrl)
-    || '';
-
-  const detailImageCandidate =
-    trimDealTextValue(deal.detailImageUrl)
-    || trimDealTextValue(deal.detailImage)
-    || '';
-  const cardImageLooksLikeIcon = Boolean(cardImageCandidate) && /\/category-icons\//i.test(cardImageCandidate);
-  const hasDistinctCardPreviewAsset =
-    Boolean(cardImageCandidate) && (!detailImageCandidate || cardImageCandidate !== detailImageCandidate);
-
-  if (cardImageLooksLikeIcon || hasDistinctCardPreviewAsset) {
-    return cardImageCandidate;
-  }
-
   const rawIconNameInput = trimDealTextValue(deal.iconName);
   if (rawIconNameInput) {
     const normalizedIconName = normalizeDealIconName(rawIconNameInput);
@@ -793,8 +775,18 @@ const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
     }
   }
 
-  // Old records often reused the real product photo as card image; prefer icon/category fallback for feed cards.
-  return '';
+  const cardImageCandidate =
+    trimDealTextValue(deal.cardImageUrl)
+    || trimDealTextValue(deal.cardImage)
+    || trimDealTextValue(deal.imageUrl)
+    || '';
+  if (!cardImageCandidate) {
+    return '';
+  }
+
+  // Always fall back to stored card image when available so cards do not render blank
+  // if icon metadata is missing in a stale backend record.
+  return cardImageCandidate;
 };
 
 const getDealDetailImageSource = (deal?: Partial<Deal> | null) => {
@@ -9980,6 +9972,11 @@ const deleteDealFromBackend = async (
       return inputDeal;
     }
 
+    const exactMatch = deals.find((deal) => deal.id === inputDeal.id);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
     const sourceId = extractMockOnlineSourceId(inputDeal.id);
     const nonMockOnlineDeals = deals
       .filter((deal) => deal.businessType === 'online' && !isManagedMockOnlineDeal(deal))
@@ -9992,8 +9989,8 @@ const deleteDealFromBackend = async (
       }
     }
 
-    const likelyMatch = nonMockOnlineDeals.find((deal) => isLikelySameOnlineDeal(deal, inputDeal));
-    return likelyMatch ?? inputDeal;
+    // Keep edit scoped to the selected card to avoid writing changes to the wrong online deal.
+    return inputDeal;
   };
 
   const mergeRefreshedDealForEdit = (refreshedDeal: Deal, fallbackDeal: Partial<Deal> | null | undefined): Deal => {
