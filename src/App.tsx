@@ -45,6 +45,7 @@ import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { DealEngagementAction, DealEngagementBar } from './components/DealEngagementBar';
 import { DealArtwork } from './components/DealArtwork';
 import { DealEmptyState } from './components/DealEmptyState';
+import { CreateDealForm } from './components/CreateDealForm';
 import {
   getAuthRedirectUrl,
   hasSupabaseAnonKey,
@@ -60,10 +61,6 @@ import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from './utils/d
 import { AppIcon } from './components/AppIcon';
 import brandBoltLogo from './assets/logo-bolt.svg';
 import brandBoltLogo3d from './assets/bolt-3d.png';
-
-const CreateDealForm = React.lazy(() =>
-  import('./components/CreateDealForm').then((module) => ({ default: module.CreateDealForm })),
-);
 
 const DEALS_STORAGE_KEY = 'livedrop_deals';
 const DEALS_STORAGE_BACKUP_KEY = 'livedrop_deals_backup';
@@ -3831,15 +3828,19 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
   const iconName = normalizeDealIconName(trimDealTextValue(deal.iconName)) || null;
   const persistedIconPath = iconName ? buildDealIconPngPath(iconName) : null;
-  const cardImageUrl =
+  const rawCardImageUrl =
     trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
     || trimDealTextValue(deal.imageUrl)
-    || persistedIconPath
     || null;
+  const cardImageUrl =
+    // Persist the selected canonical icon path as the primary card image pointer.
+    // This keeps icon selection durable even when icon_name is absent in remote schema.
+    persistedIconPath || rawCardImageUrl || null;
   const detailImageUrl =
     trimDealTextValue(deal.detailImageUrl)
     || trimDealTextValue(deal.detailImage)
+    || rawCardImageUrl
     || cardImageUrl;
 
   return {
