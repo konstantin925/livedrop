@@ -769,16 +769,40 @@ const isInlineDataUrl = (value?: string | null) =>
 const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
   if (!deal) return '';
 
-  const normalizedIconName = normalizeDealIconName(trimDealTextValue(deal.iconName));
+  const rawIconNameInput = trimDealTextValue(deal.iconName);
+  const normalizedIconName = normalizeDealIconName(rawIconNameInput);
   const customIconPath = buildDealIconPngPath(normalizedIconName);
+  if (customIconPath) {
+    return customIconPath;
+  }
 
-  return (
-    customIconPath
-    || trimDealTextValue(deal.cardImageUrl)
+  const cardImageCandidate =
+    trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
     || trimDealTextValue(deal.imageUrl)
-    || ''
-  );
+    || '';
+  if (!cardImageCandidate) {
+    return '';
+  }
+
+  const detailImageCandidate =
+    trimDealTextValue(deal.detailImageUrl)
+    || trimDealTextValue(deal.detailImage)
+    || '';
+  const cardImageLooksLikeIcon = /\/category-icons\//i.test(cardImageCandidate);
+  const hasDistinctCardPreviewAsset = !detailImageCandidate || cardImageCandidate !== detailImageCandidate;
+
+  if (cardImageLooksLikeIcon || hasDistinctCardPreviewAsset) {
+    return cardImageCandidate;
+  }
+
+  // If iconName was supplied but doesn't resolve to a canonical icon, force fallback icon UI.
+  if (rawIconNameInput) {
+    return '';
+  }
+
+  // Old records often reused the real product photo as card image; prefer icon fallback for feed cards.
+  return '';
 };
 
 const getDealDetailImageSource = (deal?: Partial<Deal> | null) => {
@@ -5072,6 +5096,19 @@ export default function App() {
     if (!import.meta.env.DEV) return;
     if (deals.length === 0) return;
 
+    const missingIconRows = deals
+      .filter((deal) => deal.businessType === 'online')
+      .map((deal) => {
+        const rawIconName = trimDealTextValue(deal.iconName);
+        return {
+          dealId: deal.id,
+          title: trimDealTextValue(deal.title) || 'Untitled deal',
+          businessName: trimDealTextValue(deal.businessName) || 'Unknown merchant',
+          rawIconName,
+        };
+      })
+      .filter((entry) => !entry.rawIconName);
+
     const iconAuditRows = deals
       .map((deal) => {
         const rawIconName = trimDealTextValue(deal.iconName);
@@ -5106,8 +5143,15 @@ export default function App() {
         mismatches,
         knownIconNames: getKnownDealIconNames(),
       });
-      return;
     }
+
+    if (missingIconRows.length > 0) {
+      console.warn('[LiveDrop] deals missing iconName (online)', {
+        missingIconRows,
+      });
+    }
+
+    if (mismatches.length > 0 || missingIconRows.length > 0) return;
 
     console.info('[LiveDrop] deal iconName audit passed', {
       auditedDeals: iconAuditRows.length,
