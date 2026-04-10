@@ -766,39 +766,34 @@ const isInlineDataUrl = (value?: string | null) =>
 const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
   if (!deal) return '';
 
-  const rawIconNameInput = trimDealTextValue(deal.iconName);
-  const normalizedIconName = normalizeDealIconName(rawIconNameInput);
-  const customIconPath = buildDealIconPngPath(normalizedIconName);
-  if (customIconPath) {
-    return customIconPath;
-  }
-
   const cardImageCandidate =
     trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
     || trimDealTextValue(deal.imageUrl)
     || '';
-  if (!cardImageCandidate) {
-    return '';
-  }
 
   const detailImageCandidate =
     trimDealTextValue(deal.detailImageUrl)
     || trimDealTextValue(deal.detailImage)
     || '';
-  const cardImageLooksLikeIcon = /\/category-icons\//i.test(cardImageCandidate);
-  const hasDistinctCardPreviewAsset = !detailImageCandidate || cardImageCandidate !== detailImageCandidate;
+  const cardImageLooksLikeIcon = Boolean(cardImageCandidate) && /\/category-icons\//i.test(cardImageCandidate);
+  const hasDistinctCardPreviewAsset =
+    Boolean(cardImageCandidate) && (!detailImageCandidate || cardImageCandidate !== detailImageCandidate);
 
   if (cardImageLooksLikeIcon || hasDistinctCardPreviewAsset) {
     return cardImageCandidate;
   }
 
-  // If iconName was supplied but doesn't resolve to a canonical icon, force fallback icon UI.
+  const rawIconNameInput = trimDealTextValue(deal.iconName);
   if (rawIconNameInput) {
-    return '';
+    const normalizedIconName = normalizeDealIconName(rawIconNameInput);
+    const customIconPath = buildDealIconPngPath(normalizedIconName);
+    if (customIconPath) {
+      return customIconPath;
+    }
   }
 
-  // Old records often reused the real product photo as card image; prefer icon fallback for feed cards.
+  // Old records often reused the real product photo as card image; prefer icon/category fallback for feed cards.
   return '';
 };
 
@@ -3704,9 +3699,21 @@ const inferDealBusinessType = (row: Partial<DealRow>, fallback?: Deal['businessT
     return fallback;
   }
 
-  return row.website_url || row.product_link || row.product_url || row.affiliate_url || row.image_url || row.image
-    ? 'online'
-    : 'local';
+  const distanceSignal = trimDealTextValue(row.distance).toLowerCase();
+  if (distanceSignal === 'online') {
+    return 'online';
+  }
+
+  // Only explicit destination URLs should imply online mode.
+  // Image fields exist for both local and online deals and should not force online classification.
+  const hasOnlineUrlSignal = Boolean(
+    row.website_url
+    || row.product_link
+    || row.product_url
+    || row.affiliate_url,
+  );
+
+  return hasOnlineUrlSignal ? 'online' : 'local';
 };
 
 const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal => {
@@ -3724,9 +3731,20 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     || trimDealTextValue(fallback?.detailImageUrl)
     || cardImageUrl
     || undefined;
+  const iconFromImagePath = (() => {
+    const imageUrlValue = trimDealTextValue(row.image_url);
+    if (!/\/category-icons\//i.test(imageUrlValue)) return '';
+    const iconMatch = imageUrlValue.match(/\/category-icons\/([^/?#]+)\.(png|jpg|jpeg|webp|svg)$/i);
+    if (!iconMatch?.[1]) return '';
+    try {
+      return normalizeDealIconName(decodeURIComponent(iconMatch[1]));
+    } catch {
+      return normalizeDealIconName(iconMatch[1]);
+    }
+  })();
   const rowIconName = normalizeDealIconName(
     trimDealTextValue((row as Record<string, unknown>).icon_name)
-    || trimDealTextValue(row.image_url),
+    || iconFromImagePath,
   );
   const createdAt = parseDealTimestampOrFallback(
     row.created_at,
@@ -6602,7 +6620,7 @@ export default function App() {
     }
   };
 
-  const fetchSharedDealById = async (dealId: string) => {
+  const fetchSharedDealById = async (dealId: string, fallbackDeal?: Partial<Deal>) => {
     if (!supabase || !hasSupabaseConfig) {
       return null;
     }
@@ -6649,7 +6667,7 @@ export default function App() {
       throw error;
     }
 
-    return data ? mapDealRowToDeal(data as Partial<DealRow>) : null;
+    return data ? mapDealRowToDeal(data as Partial<DealRow>, fallbackDeal) : null;
   };
 
   const publishDealToBackend = async (deal: Deal) => {
@@ -8062,7 +8080,9 @@ const deleteDealFromBackend = async (
     setCatalogCoupons(refreshCatalogCoupons(mergedState.catalog_coupons).coupons);
     setNotifications(mergedState.notifications);
     setRadius(mergedState.preferences.radius ?? radius);
-    setSelectedCategory(mergedState.preferences.selectedCategory ?? 'All');
+    const normalizedSavedCategory = getCategoryLabel(mergedState.preferences.selectedCategory ?? 'All');
+    const allowedCategorySet = new Set<string>(['All', ...CATEGORY_OPTIONS, ...ONLINE_CATEGORY_OPTIONS]);
+    setSelectedCategory(allowedCategorySet.has(normalizedSavedCategory) ? normalizedSavedCategory : 'All');
     setSelectedFeedFilter(normalizeFeedFilterId(mergedState.preferences.selectedFeedFilter));
     setRole((profile?.role as UserRole | undefined) ?? mergedState.preferences.role ?? 'customer');
     setSubscriptionStatus((profile?.subscription_status as SubscriptionStatus | undefined) ?? 'inactive');
@@ -8416,6 +8436,14 @@ const deleteDealFromBackend = async (
     }
   }, [dealsLoading, deals.length]);
 
+  const doesDealMatchSelectedCategory = useCallback(
+    (dealCategory: string, selected: string) => {
+      if (selected === 'All') return true;
+      return getCategoryLabel(dealCategory) === getCategoryLabel(selected);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (dropMode !== 'online') {
       hasBootstrappedOnlineFilters.current = false;
@@ -8450,14 +8478,14 @@ const deleteDealFromBackend = async (
         deal.businessType === 'online'
         && (deal.status ?? 'active') !== 'draft'
         && !isExpiredDeal(deal, now)
-        && deal.category === selectedCategory,
+        && doesDealMatchSelectedCategory(deal.category, selectedCategory),
     );
     if (hasCategoryMatch) return;
     setSelectedCategory('All');
     setSelectedFeedFilter('all');
     setOnlineDealPage(0);
     hasRecoveredOnlineEmptyState.current = true;
-  }, [dropMode, dealsLoading, deals, selectedCategory]);
+  }, [dropMode, dealsLoading, deals, selectedCategory, doesDealMatchSelectedCategory]);
 
   useEffect(() => {
     if (!supabase || !hasSupabaseConfig) return;
@@ -9968,6 +9996,24 @@ const deleteDealFromBackend = async (
     return likelyMatch ?? inputDeal;
   };
 
+  const mergeRefreshedDealForEdit = (refreshedDeal: Deal, fallbackDeal: Partial<Deal> | null | undefined): Deal => {
+    const mergedCandidate: Partial<Deal> = {
+      ...(fallbackDeal ?? {}),
+      ...refreshedDeal,
+      // Keep locally-selected media/icon fields when shared schema is missing those columns.
+      iconName: trimDealTextValue(refreshedDeal.iconName) || trimDealTextValue(fallbackDeal?.iconName) || undefined,
+      cardImage: trimDealTextValue(refreshedDeal.cardImage) || trimDealTextValue(fallbackDeal?.cardImage) || undefined,
+      cardImageUrl: trimDealTextValue(refreshedDeal.cardImageUrl) || trimDealTextValue(fallbackDeal?.cardImageUrl) || undefined,
+      detailImage: trimDealTextValue(refreshedDeal.detailImage) || trimDealTextValue(fallbackDeal?.detailImage) || undefined,
+      detailImageUrl: trimDealTextValue(refreshedDeal.detailImageUrl) || trimDealTextValue(fallbackDeal?.detailImageUrl) || undefined,
+      imageUrl: trimDealTextValue(refreshedDeal.imageUrl) || trimDealTextValue(fallbackDeal?.imageUrl) || undefined,
+      businessType: refreshedDeal.businessType ?? fallbackDeal?.businessType ?? 'local',
+      category: refreshedDeal.category || fallbackDeal?.category || DEAL_CATEGORY_FALLBACK,
+    };
+
+    return sanitizeDealRecord(mergedCandidate) ?? refreshedDeal;
+  };
+
   const handleEditDeal = (deal: Deal) => {
     const resolvedDeal = resolveEditableDealFromCard(deal);
     const editingTargetId = resolvedDeal.id;
@@ -9992,14 +10038,26 @@ const deleteDealFromBackend = async (
     // Refresh from backend in the background without blocking the edit flow.
     void (async () => {
       try {
-        const latestPersistedDeal = await fetchSharedDealById(editingTargetId);
+        const latestPersistedDeal = await fetchSharedDealById(editingTargetId, resolvedDeal);
         if (!latestPersistedDeal || isTombstonedDeal(latestPersistedDeal)) {
           return;
         }
 
-        setDeals((prev) => [latestPersistedDeal, ...prev.filter((item) => item.id !== latestPersistedDeal.id)]);
-        setDealDraft((current) => (current?.id === editingTargetId ? latestPersistedDeal : current));
-        setPortalFieldSnapshot((current) => (current?.id === editingTargetId ? latestPersistedDeal : current));
+        setDeals((prev) => {
+          const existingDeal = prev.find((item) => item.id === editingTargetId) ?? resolvedDeal;
+          const mergedDeal = mergeRefreshedDealForEdit(latestPersistedDeal, existingDeal);
+          return [mergedDeal, ...prev.filter((item) => item.id !== mergedDeal.id)];
+        });
+        setDealDraft((current) => (
+          current?.id === editingTargetId
+            ? mergeRefreshedDealForEdit(latestPersistedDeal, current)
+            : current
+        ));
+        setPortalFieldSnapshot((current) => (
+          current?.id === editingTargetId
+            ? mergeRefreshedDealForEdit(latestPersistedDeal, current)
+            : current
+        ));
       } catch (error) {
         console.warn('[LiveDrop] Falling back to in-memory deal snapshot for edit', {
           dealId: editingTargetId,
@@ -11277,7 +11335,7 @@ const deleteDealFromBackend = async (
       .filter(d =>
         !isExpiredDeal(d, now) &&
         d.computedDistanceValue <= radius &&
-        (deferredSelectedCategory === 'All' || d.category === deferredSelectedCategory) &&
+        doesDealMatchSelectedCategory(d.category, deferredSelectedCategory) &&
         matchesDesktopSearch(d)
       )
       .sort((a, b) => a.computedDistanceValue - b.computedDistanceValue);
@@ -11313,7 +11371,7 @@ const deleteDealFromBackend = async (
     const activeOnlineDeals = onlineDealsWithSubcategory.filter(
       (deal) =>
         !isExpiredDeal(deal, now) &&
-        (deferredSelectedCategory === 'All' || deal.category === deferredSelectedCategory) &&
+        doesDealMatchSelectedCategory(deal.category, deferredSelectedCategory) &&
         matchesDesktopSearch(deal),
     );
 

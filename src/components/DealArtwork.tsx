@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
 import type { IconName } from './AppIcon';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
@@ -85,7 +85,6 @@ export const DealArtwork = React.memo(({
     return getOptimizedDealImageSrcSet(effectiveSrc, { width: preferredWidth, fit });
   }, [effectiveSrc, fit, preferredWidth]);
   const showImage = Boolean(effectiveSrc) && !imageFailed;
-  const debugSignatureRef = useRef('');
 
   useEffect(() => {
     const nextIndex = getCandidateIndex(imageCandidates, 0);
@@ -111,23 +110,6 @@ export const DealArtwork = React.memo(({
     setImageFailed(false);
     setImageLoaded(false);
   }, [effectiveSrc, imageCandidateIndex, imageCandidates]);
-
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    if (!effectiveSrc && !normalizedIconName) return;
-
-    const signature = `${dealId ?? 'unknown'}|${normalizedIconName}|${effectiveSrc}|${imageFailed}`;
-    if (debugSignatureRef.current === signature) return;
-    debugSignatureRef.current = signature;
-
-    console.info('[LiveDrop] DealArtwork icon resolution', {
-      dealId: dealId ?? null,
-      iconName: normalizedIconName || null,
-      resolvedPath: effectiveSrc || null,
-      candidatePaths: imageCandidates,
-      imageFailed,
-    });
-  }, [dealId, effectiveSrc, imageCandidates, imageFailed, normalizedIconName]);
 
   return (
     <div className={`h-full w-full ${className}`}>
