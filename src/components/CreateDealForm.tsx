@@ -12,7 +12,7 @@ import {
   getDealStatusFilterLabel,
   sanitizeDealStatusTags,
 } from '../utils/dealStatus';
-import { normalizeDealIconName } from '../utils/dealIcons';
+import { getKnownDealIconNames, normalizeDealIconName } from '../utils/dealIcons';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
@@ -71,6 +71,16 @@ const pickDetailImageValue = (deal?: Deal | null) =>
   || normalizeTextValue(deal?.cardImageUrl)
   || normalizeTextValue(deal?.cardImage)
   || normalizeTextValue(deal?.imageUrl);
+const CANONICAL_ICON_OPTIONS = getKnownDealIconNames();
+const formatIconOptionLabel = (value: string) =>
+  value
+    .split('-')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+const normalizeCanonicalIconSelection = (value: string | null | undefined) => {
+  const normalized = normalizeDealIconName(normalizeTextValue(value));
+  return CANONICAL_ICON_OPTIONS.includes(normalized) ? normalized : '';
+};
 
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -365,7 +375,10 @@ const getInitialFormData = (
       customDuration: durationFields.customDuration,
       radiusMiles: inferredRadiusMiles,
       boostDeal: false,
-      iconName: normalizeDealIconName(normalizeTextValue(initialData.iconName)),
+      iconName: normalizeCanonicalIconSelection(
+        normalizeTextValue(initialData.iconName)
+        || pickCardImageValue(initialData),
+      ),
       cardImageUrl: pickCardImageValue(initialData),
       detailImageUrl: pickDetailImageValue(initialData),
       originalPrice: formatPriceInput(normalizedOriginalPrice),
@@ -581,7 +594,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
-      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
+      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:
@@ -656,7 +669,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title) || (isOnline ? 'Your online drop title' : 'Your Deal Title'),
       description: normalizeTextValue(formData.description) || 'Your deal description will appear here in the preview.',
       offerText: offerText || 'SPECIAL OFFER',
-      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
+      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
       distance: isOnline ? 'Online' : `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi`,
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
@@ -735,7 +748,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       durationPreset: formData.durationPreset,
       customDuration: normalizeTextValue(formData.customDuration).trim(),
       radiusMiles: normalizeTextValue(formData.radiusMiles).trim(),
-      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)),
+      iconName: normalizeCanonicalIconSelection(formData.iconName),
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim(),
       detailImageUrl: normalizeTextValue(formData.detailImageUrl).trim(),
     });
@@ -784,7 +797,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentPrice: normalizedCurrentPrice,
       originalPrice: normalizedOriginalPrice,
       discountPercent: normalizedDiscountPercent,
-      iconName: normalizeDealIconName(normalizeTextValue(formData.iconName)) || undefined,
+      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:
@@ -833,6 +846,10 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
     if (!normalizedCategory.trim()) {
       return 'Please choose a category.';
+    }
+
+    if (!normalizeCanonicalIconSelection(formData.iconName)) {
+      return 'Please select a card icon name.';
     }
 
     if ((formData.offerType === 'percentage' || formData.offerType === 'fixed') && Number(formData.discountValue) <= 0) {
@@ -1291,20 +1308,26 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
 
         <div className="space-y-1.5">
           <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">
-            Card Icon Name (Optional)
+            Card Icon Name
           </label>
           <div className="relative">
             <AppIcon name="grid" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
-            <input
-              type="text"
-              placeholder="e.g. monitor, stand-mixer, gaming-chair"
-              className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
-              value={formData.iconName}
-              onChange={e => setFormData({ ...formData, iconName: e.target.value })}
-            />
+            <select
+              required
+              className="w-full appearance-none bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-10 text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all"
+              value={normalizeCanonicalIconSelection(formData.iconName)}
+              onChange={e => setFormData((previous) => ({ ...previous, iconName: normalizeCanonicalIconSelection(e.target.value) }))}
+            >
+              <option value="">Select card icon</option>
+              {CANONICAL_ICON_OPTIONS.map((iconName) => (
+                <option key={iconName} value={iconName}>
+                  {formatIconOptionLabel(iconName)}
+                </option>
+              ))}
+            </select>
           </div>
           <p className="px-1 text-xs leading-5 text-slate-400">
-            Uses <code>/category-icons/{'{iconName}'}.png</code> on feed cards.
+            Stored per deal and rendered from <code>/category-icons/{'{iconName}'}.png</code>.
           </p>
         </div>
 

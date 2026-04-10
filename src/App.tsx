@@ -3727,7 +3727,10 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     || trimDealTextValue(fallback?.detailImageUrl)
     || cardImageUrl
     || undefined;
-  const rowIconName = normalizeDealIconName(trimDealTextValue((row as Record<string, unknown>).icon_name));
+  const rowIconName = normalizeDealIconName(
+    trimDealTextValue((row as Record<string, unknown>).icon_name)
+    || trimDealTextValue(row.image_url),
+  );
   const createdAt = parseDealTimestampOrFallback(
     row.created_at,
     fallback?.createdAt ?? Date.now(),
@@ -3827,10 +3830,12 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const affiliateUrl = deal.affiliateUrl ?? null;
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
   const iconName = normalizeDealIconName(trimDealTextValue(deal.iconName)) || null;
+  const persistedIconPath = iconName ? buildDealIconPngPath(iconName) : null;
   const cardImageUrl =
     trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
     || trimDealTextValue(deal.imageUrl)
+    || persistedIconPath
     || null;
   const detailImageUrl =
     trimDealTextValue(deal.detailImageUrl)

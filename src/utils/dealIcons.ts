@@ -152,8 +152,9 @@ export const normalizeDealIconName = (value?: string | null) => {
     }
   }
 
-  const normalizedStem = toLookupKey(rawStem);
-  return KNOWN_DEAL_ICON_STEM_SET.has(normalizedStem) ? normalizedStem : '';
+  // Keep canonical mapping for known names, but allow custom per-deal icon stems too.
+  // This prevents valid newly-added files in /public/category-icons from being dropped.
+  return toLookupKey(rawStem);
 };
 
 export const buildDealIconPngPath = (iconName?: string | null) => {
