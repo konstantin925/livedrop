@@ -1,0 +1,58 @@
+export const DEAL_ICON_MANIFEST = [
+  'monitor',
+  'laptop',
+  'gaming-chair',
+  'stand-mixer',
+  'coffee-machine',
+  'ice-maker',
+  'air-fryer',
+  'digital-scale',
+  'lawnmower',
+  'robot-vacuum',
+  'security-camera',
+  'smartphone',
+  'headphones',
+  'tablet',
+  'tv',
+  'drone',
+  'smartwatch',
+  'sneakers',
+  'gaming-mouse',
+  'boots',
+  'graphics-card',
+  'guitar-amp',
+  'external-hdd',
+  'chair',
+  'chocolate-bar',
+] as const;
+
+export type CanonicalDealIconName = (typeof DEAL_ICON_MANIFEST)[number];
+
+export const DEAL_ICON_ALIASES: Record<string, CanonicalDealIconName> = {
+  'robot-vaccum': 'robot-vacuum',
+  'robot-vacume': 'robot-vacuum',
+  'security-cameras': 'security-camera',
+  'smart-watch': 'smartwatch',
+  'lawn-mower': 'lawnmower',
+  'flat-screen-tv': 'tv',
+
+  // Backward-compatible aliases from older values.
+  'air fryer': 'air-fryer',
+  airfryer: 'air-fryer',
+  'coffee-maker': 'coffee-machine',
+  coffeemaker: 'coffee-machine',
+  icemaker: 'ice-maker',
+  'digital-scales': 'digital-scale',
+  'bathroom-scale': 'digital-scale',
+  'bathroom-scales': 'digital-scale',
+  'security-cam': 'security-camera',
+  television: 'tv',
+  'smart-phone': 'smartphone',
+  sneaker: 'sneakers',
+  'gaming-chairs': 'gaming-chair',
+  mouse: 'gaming-mouse',
+  'computer-mouse': 'gaming-mouse',
+  'gutiar-amp': 'guitar-amp',
+  'lawn-mover': 'lawnmower',
+};
+

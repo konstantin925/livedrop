@@ -12,7 +12,12 @@ import {
   getDealStatusFilterLabel,
   sanitizeDealStatusTags,
 } from '../utils/dealStatus';
-import { getKnownDealIconNames, normalizeDealIconName } from '../utils/dealIcons';
+import {
+  getKnownDealIconNames,
+  inferDealIconNameFromDealSignals,
+  normalizeDealIconName,
+  resolveDealIcon,
+} from '../utils/dealIcons';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
 import { DealCard } from './DealCard';
 import { AppIcon } from './AppIcon';
@@ -377,6 +382,12 @@ const getInitialFormData = (
       boostDeal: false,
       iconName: normalizeCanonicalIconSelection(
         normalizeTextValue(initialData.iconName)
+        || inferDealIconNameFromDealSignals({
+          title: normalizeTextValue(initialData.title),
+          businessName: normalizeTextValue(initialData.businessName),
+          description: normalizeTextValue(initialData.description),
+          category: normalizedCategory,
+        })
         || pickCardImageValue(initialData),
       ),
       cardImageUrl: pickCardImageValue(initialData),
@@ -509,6 +520,42 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
     setSubmitError('');
   }, [autofillRequest]);
 
+  useEffect(() => {
+    if (normalizeCanonicalIconSelection(formData.iconName)) {
+      return;
+    }
+
+    const inferredIconName = normalizeCanonicalIconSelection(
+      inferDealIconNameFromDealSignals({
+        title: normalizeTextValue(formData.title),
+        businessName: normalizeTextValue(formData.businessName),
+        description: normalizeTextValue(formData.description),
+        category: normalizeTextValue(formData.category),
+      })
+      || normalizeTextValue(formData.cardImageUrl)
+      || normalizeTextValue(formData.detailImageUrl),
+    );
+
+    if (!inferredIconName) {
+      return;
+    }
+
+    setFormData((previous) => {
+      if (normalizeCanonicalIconSelection(previous.iconName)) {
+        return previous;
+      }
+      return { ...previous, iconName: inferredIconName };
+    });
+  }, [
+    formData.iconName,
+    formData.title,
+    formData.businessName,
+    formData.description,
+    formData.category,
+    formData.cardImageUrl,
+    formData.detailImageUrl,
+  ]);
+
   const durationMinutes = formData.durationPreset === 'custom'
     ? Number(formData.customDuration || 0)
     : formData.durationPreset === 'none'
@@ -532,6 +579,10 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   const availableCategoryOptions = useMemo(
     () => getCategoryOptionsForMode(formData.businessMode),
     [formData.businessMode],
+  );
+  const selectedIconPreview = useMemo(
+    () => resolveDealIcon(formData.iconName, normalizedCategory),
+    [formData.iconName, normalizedCategory],
   );
   const normalizedStatusTags = useMemo(
     () => sanitizeDealStatusTags(formData.statusTags),
@@ -594,7 +645,15 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       affiliateUrl: normalizedLinkState.affiliateUrl || undefined,
       reviewCount: initialData?.reviewCount ?? null,
       stockStatus: initialData?.stockStatus ?? null,
-      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
+      iconName: normalizeCanonicalIconSelection(
+        formData.iconName
+        || inferDealIconNameFromDealSignals({
+          title: normalizeTextValue(formData.title),
+          businessName: normalizeTextValue(formData.businessName),
+          description: normalizeTextValue(formData.description),
+          category: normalizedCategory,
+        }),
+      ) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:
@@ -669,7 +728,15 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       title: normalizeTextValue(formData.title) || (isOnline ? 'Your online drop title' : 'Your Deal Title'),
       description: normalizeTextValue(formData.description) || 'Your deal description will appear here in the preview.',
       offerText: offerText || 'SPECIAL OFFER',
-      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
+      iconName: normalizeCanonicalIconSelection(
+        formData.iconName
+        || inferDealIconNameFromDealSignals({
+          title: normalizeTextValue(formData.title),
+          businessName: normalizeTextValue(formData.businessName),
+          description: normalizeTextValue(formData.description),
+          category: normalizedCategory,
+        }),
+      ) || undefined,
       distance: isOnline ? 'Online' : `${safeRadius.toFixed(safeRadius >= 10 ? 0 : 1)} mi`,
       lat: isOnline ? 0 : safeLocalLocation.lat + latOffset / 4,
       lng: isOnline ? 0 : safeLocalLocation.lng,
@@ -797,7 +864,15 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       currentPrice: normalizedCurrentPrice,
       originalPrice: normalizedOriginalPrice,
       discountPercent: normalizedDiscountPercent,
-      iconName: normalizeCanonicalIconSelection(formData.iconName) || undefined,
+      iconName: normalizeCanonicalIconSelection(
+        formData.iconName
+        || inferDealIconNameFromDealSignals({
+          title: normalizeTextValue(formData.title),
+          businessName: normalizeTextValue(formData.businessName),
+          description: normalizeTextValue(formData.description),
+          category: normalizedCategory,
+        }),
+      ) || undefined,
       cardImageUrl: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       cardImage: normalizeTextValue(formData.cardImageUrl).trim() || undefined,
       detailImageUrl:
@@ -831,6 +906,15 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
   const getPublishValidationError = () => {
     const originalPriceValue = normalizePriceInput(formData.originalPrice);
     const currentPriceValue = normalizePriceInput(formData.currentPrice);
+    const normalizedSelectedIconName = normalizeCanonicalIconSelection(
+      formData.iconName
+      || inferDealIconNameFromDealSignals({
+        title: normalizeTextValue(formData.title),
+        businessName: normalizeTextValue(formData.businessName),
+        description: normalizeTextValue(formData.description),
+        category: normalizedCategory,
+      }),
+    );
 
     if (
       !normalizeTextValue(formData.businessName).trim() ||
@@ -848,7 +932,7 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
       return 'Please choose a category.';
     }
 
-    if (!normalizeCanonicalIconSelection(formData.iconName)) {
+    if (!normalizedSelectedIconName) {
       return 'Please select a card icon name.';
     }
 
@@ -1326,8 +1410,30 @@ export const CreateDealForm: React.FC<CreateDealFormProps> = ({
               ))}
             </select>
           </div>
+          {selectedIconPreview.normalizedIconName ? (
+            <div className="mt-2 flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+              <div className="h-10 w-10 overflow-hidden rounded-lg bg-white/95">
+                <picture>
+                  {selectedIconPreview.primarySrc ? (
+                    <source srcSet={selectedIconPreview.primarySrc} type="image/webp" />
+                  ) : null}
+                  <img
+                    src={selectedIconPreview.fallbackSrc || selectedIconPreview.primarySrc}
+                    alt={`${selectedIconPreview.normalizedIconName} icon preview`}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-contain p-1"
+                  />
+                </picture>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-indigo-500">Selected Icon</p>
+                <p className="truncate text-xs font-semibold text-slate-600">{formatIconOptionLabel(selectedIconPreview.normalizedIconName)}</p>
+              </div>
+            </div>
+          ) : null}
           <p className="px-1 text-xs leading-5 text-slate-400">
-            Stored per deal and rendered from <code>/category-icons/{'{iconName}'}.png</code>.
+            Stored per deal and resolved from the icon registry in <code>src/assets/category-icons</code> (prefers <code>.webp</code>, then <code>.png</code>).
           </p>
         </div>
 

@@ -6,7 +6,7 @@ import { getCategoryIconName, getCategoryLabel } from '../utils/categories';
 import { AppIcon } from './AppIcon';
 import { DealEngagementAction, DealEngagementBar } from './DealEngagementBar';
 import { DealArtwork } from './DealArtwork';
-import { buildDealIconPngPath, normalizeDealIconName } from '../utils/dealIcons';
+import { resolveDealCardIconSource } from '../utils/dealIcons';
 
 interface DealCardProps {
   deal: Deal;
@@ -67,22 +67,17 @@ export const DealCard = React.memo(({
   const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
   const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
   const displayOfferText = deal.offerText?.trim() || 'Live Deal';
-  const rawIconNameInput = typeof deal.iconName === 'string' ? deal.iconName.trim() : '';
-  const normalizedIconName = normalizeDealIconName(rawIconNameInput);
-  const customCardIconSrc = buildDealIconPngPath(normalizedIconName);
-  const cardImageCandidate =
-    (typeof deal.cardImageUrl === 'string' ? deal.cardImageUrl.trim() : '')
-    || (typeof deal.cardImage === 'string' ? deal.cardImage.trim() : '')
-    || (typeof deal.imageUrl === 'string' ? deal.imageUrl.trim() : '');
-  const detailImageCandidate =
-    (typeof deal.detailImageUrl === 'string' ? deal.detailImageUrl.trim() : '')
-    || (typeof deal.detailImage === 'string' ? deal.detailImage.trim() : '')
-    || '';
-  const cardImageLooksLikeIcon = /\/category-icons\//i.test(cardImageCandidate);
-  const hasDistinctCardPreviewAsset = !detailImageCandidate || cardImageCandidate !== detailImageCandidate;
-  const cardArtworkSrc = customCardIconSrc
-    || (cardImageLooksLikeIcon || hasDistinctCardPreviewAsset ? cardImageCandidate || undefined : undefined)
-    || undefined;
+  const iconSource = resolveDealCardIconSource({
+    iconName: deal.iconName,
+    category: deal.category,
+    cardImageUrl: deal.cardImageUrl,
+    cardImage: deal.cardImage,
+    imageUrl: deal.imageUrl,
+    detailImageUrl: deal.detailImageUrl,
+    detailImage: deal.detailImage,
+  });
+  const normalizedIconName = iconSource.normalizedIconName;
+  const cardArtworkSrc = iconSource.resolvedSrc || undefined;
   const fallbackCategoryIconName = getCategoryIconName(deal.category);
   const parseOfferPrices = () => {
     if (!displayOfferText) return { current: null, original: null };

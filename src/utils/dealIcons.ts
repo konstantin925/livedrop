@@ -1,37 +1,20 @@
+import { DEAL_ICON_ALIASES, DEAL_ICON_MANIFEST } from '../config/dealIcons';
+import {
+  getDealIconRegistryAsset,
+  getDealIconRegistryCandidates,
+  hasDealIconRegistryAsset,
+} from '../config/iconRegistry';
+import { getCategoryIconName } from './categories';
+
 const ICON_FILE_EXTENSION_PATTERN = /\.(png|jpg|jpeg|webp|svg)$/i;
-const CATEGORY_ICON_PREFIX_PATTERN = /^.*\/category-icons\//i;
 const URL_ORIGIN_PREFIX_PATTERN = /^https?:\/\/[^/]+/i;
 const TRAILING_QUERY_HASH_PATTERN = /[?#].*$/;
+const CATEGORY_ICON_ASSET_PATH_PATTERN = /\/category-icons\/([^/?#]+)\.(png|jpg|jpeg|webp|svg)$/i;
+const VITE_HASH_SUFFIX_PATTERN = /-[a-z0-9]{6,}$/i;
 
-const KNOWN_DEAL_ICON_STEMS = [
-  'monitor',
-  'laptop',
-  'gaming-chair',
-  'stand-mixer',
-  'coffee-machine',
-  'ice-maker',
-  'air-fryer',
-  'digital-scale',
-  'lawnmower',
-  'robot-vacuum',
-  'security-camera',
-  'smartphone',
-  'headphones',
-  'tablet',
-  'tv',
-  'drone',
-  'smartwatch',
-  'sneakers',
-  'gaming-mouse',
-  'boots',
-  'graphics-card',
-  'guitar-amp',
-  'external-hdd',
-  'chair',
-  'chocolate-bar',
- ] as const;
+type DealIconExtension = 'webp' | 'png';
 
-const KNOWN_DEAL_ICON_STEM_SET = new Set<string>(KNOWN_DEAL_ICON_STEMS as readonly string[]);
+const KNOWN_DEAL_ICON_STEM_SET = new Set<string>(DEAL_ICON_MANIFEST as readonly string[]);
 
 const decodeIconValue = (value: string) => {
   try {
@@ -41,14 +24,17 @@ const decodeIconValue = (value: string) => {
   }
 };
 
-const stripIconDecorators = (value: string) =>
-  decodeIconValue(value)
+const stripIconDecorators = (value: string) => {
+  const withoutQuery = decodeIconValue(value)
     .trim()
     .replace(TRAILING_QUERY_HASH_PATTERN, '')
     .replace(URL_ORIGIN_PREFIX_PATTERN, '')
-    .replace(CATEGORY_ICON_PREFIX_PATTERN, '')
-    .replace(ICON_FILE_EXTENSION_PATTERN, '')
     .trim();
+
+  const fileName = withoutQuery.split('/').filter(Boolean).pop() ?? withoutQuery;
+  const withoutExtension = fileName.replace(ICON_FILE_EXTENSION_PATTERN, '');
+  return withoutExtension.replace(VITE_HASH_SUFFIX_PATTERN, '').trim();
+};
 
 const toLookupKey = (value: string) =>
   stripIconDecorators(value)
@@ -60,49 +46,59 @@ const toLookupKey = (value: string) =>
     .replace(/^-|-$/g, '');
 
 const KNOWN_STEM_BY_LOOKUP_KEY = new Map(
-  KNOWN_DEAL_ICON_STEMS.map((stem) => [toLookupKey(stem), stem]),
+  [...DEAL_ICON_MANIFEST].map((stem) => [toLookupKey(stem), stem]),
 );
 
-const ICON_ALIAS_TO_STEM: Record<string, string> = {
-  // explicit required aliases
-  'lawn-mower': 'lawnmower',
-  'robot-vacume': 'robot-vacuum',
-  'robot-vaccum': 'robot-vacuum',
-  'security-cameras': 'security-camera',
-  'smart-watch': 'smartwatch',
-  'flat-screen-tv': 'tv',
+const ALIAS_STEM_BY_LOOKUP_KEY = new Map(
+  Object.entries(DEAL_ICON_ALIASES).map(([alias, target]) => [toLookupKey(alias), target]),
+);
 
-  // safe backward aliases from older values/typos to canonical list
-  'air fryer': 'air-fryer',
-  airfryer: 'air-fryer',
-  coffeemaker: 'coffee-machine',
-  'coffee-maker': 'coffee-machine',
-  icemaker: 'ice-maker',
-  'digital-scales': 'digital-scale',
-  'bathroom-scale': 'digital-scale',
-  'bathroom-scales': 'digital-scale',
-  'security-cam': 'security-camera',
-  television: 'tv',
-  'smart-phone': 'smartphone',
-  'sneaker': 'sneakers',
-  'gaming-chairs': 'gaming-chair',
-  'computer-mouse': 'gaming-mouse',
-  'gutiar-amp': 'guitar-amp',
+type DealIconInferenceInput = {
+  title?: string | null;
+  businessName?: string | null;
+  description?: string | null;
+  category?: string | null;
 };
 
-const getBasePathPrefix = () => {
-  const base = (import.meta.env.BASE_URL || '/').trim();
-  if (!base || base === '/') return '';
-  return base.endsWith('/') ? base.slice(0, -1) : base;
-};
+const DEAL_TITLE_ICON_HINTS: Array<{ iconName: string; checks: string[] }> = [
+  { iconName: 'gaming-mouse', checks: ['corsair', 'harpoon', 'gaming', 'mouse'] },
+  { iconName: 'smartwatch', checks: ['apple', 'watch', 'series'] },
+  { iconName: 'robot-vacuum', checks: ['robot', 'vacuum'] },
+  { iconName: 'sneakers', checks: ['air', 'max', 'shoes'] },
+  { iconName: 'monitor', checks: ['gaming', 'monitor'] },
+  { iconName: 'air-fryer', checks: ['air', 'fryer'] },
+];
 
-const buildPathFromStem = (iconStem: string) =>
-  `${getBasePathPrefix()}/category-icons/${encodeURIComponent(iconStem).replace(/%2F/gi, '')}.png`;
+const DEAL_KEYWORD_ICON_HINTS: Array<{ iconName: string; checks: string[] }> = [
+  { iconName: 'monitor', checks: ['monitor'] },
+  { iconName: 'laptop', checks: ['laptop'] },
+  { iconName: 'tablet', checks: ['tablet'] },
+  { iconName: 'smartphone', checks: ['smartphone'] },
+  { iconName: 'headphones', checks: ['headphones'] },
+  { iconName: 'gaming-chair', checks: ['gaming', 'chair'] },
+  { iconName: 'stand-mixer', checks: ['stand', 'mixer'] },
+  { iconName: 'coffee-machine', checks: ['coffee', 'machine'] },
+  { iconName: 'ice-maker', checks: ['ice', 'maker'] },
+  { iconName: 'air-fryer', checks: ['air', 'fryer'] },
+  { iconName: 'digital-scale', checks: ['scale'] },
+  { iconName: 'lawnmower', checks: ['lawn', 'mower'] },
+  { iconName: 'robot-vacuum', checks: ['robot', 'vacuum'] },
+  { iconName: 'security-camera', checks: ['security', 'camera'] },
+  { iconName: 'smartwatch', checks: ['watch'] },
+  { iconName: 'sneakers', checks: ['sneaker'] },
+  { iconName: 'boots', checks: ['boot'] },
+  { iconName: 'gaming-mouse', checks: ['mouse'] },
+  { iconName: 'tv', checks: ['tv'] },
+  { iconName: 'drone', checks: ['drone'] },
+];
 
-const getAliasStem = (lookupKey: string) => {
-  if (!lookupKey) return '';
-  return ICON_ALIAS_TO_STEM[lookupKey] || '';
-};
+const normalizeSignalText = (value?: string | null) =>
+  typeof value === 'string'
+    ? value.toLowerCase().replace(/\s+/g, ' ').trim()
+    : '';
+
+const hasAllChecks = (value: string, checks: string[]) =>
+  checks.every((check) => value.includes(check));
 
 const buildLookupCandidates = (value: string) => {
   const base = toLookupKey(value);
@@ -129,7 +125,7 @@ const buildLookupCandidates = (value: string) => {
 };
 
 const resolveKnownStemFromKey = (lookupKey: string) => {
-  const aliasStem = getAliasStem(lookupKey);
+  const aliasStem = ALIAS_STEM_BY_LOOKUP_KEY.get(lookupKey);
   if (aliasStem) return aliasStem;
 
   const knownStem = KNOWN_STEM_BY_LOOKUP_KEY.get(lookupKey);
@@ -152,27 +148,142 @@ export const normalizeDealIconName = (value?: string | null) => {
     }
   }
 
-  // Keep canonical mapping for known names, but allow custom per-deal icon stems too.
-  // This prevents valid newly-added files in /public/category-icons from being dropped.
   return toLookupKey(rawStem);
 };
 
-export const buildDealIconPngPath = (iconName?: string | null) => {
-  const iconStem = normalizeDealIconName(iconName);
-  if (!iconStem) return '';
-  return buildPathFromStem(iconStem);
+export const extractDealIconNameFromAssetPath = (value?: string | null) => {
+  if (typeof value !== 'string') return '';
+  const normalizedValue = value.trim();
+  if (!normalizedValue) return '';
+
+  const categoryPathMatch = normalizedValue.match(CATEGORY_ICON_ASSET_PATH_PATTERN);
+  if (categoryPathMatch?.[1]) {
+    return normalizeDealIconName(categoryPathMatch[1]);
+  }
+
+  const lowerValue = decodeIconValue(normalizedValue).toLowerCase();
+  for (const stem of DEAL_ICON_MANIFEST) {
+    if (
+      lowerValue.includes(`/${stem}.`)
+      || lowerValue.includes(`/${stem}-`)
+      || lowerValue.includes(`${stem}.`)
+      || lowerValue.includes(`${stem}-`)
+    ) {
+      return stem;
+    }
+  }
+
+  const stripped = stripIconDecorators(normalizedValue);
+  if (!stripped) return '';
+  return normalizeDealIconName(stripped);
 };
 
+export const buildDealIconAssetPath = (
+  iconName?: string | null,
+  extension: DealIconExtension = 'png',
+) => {
+  const iconStem = normalizeDealIconName(iconName);
+  if (!iconStem) return '';
+  return getDealIconRegistryAsset(iconStem, extension);
+};
+
+export const buildDealIconWebpPath = (iconName?: string | null) =>
+  buildDealIconAssetPath(iconName, 'webp');
+
+export const buildDealIconPngPath = (iconName?: string | null) =>
+  buildDealIconAssetPath(iconName, 'png');
+
 export const buildDealIconCandidatePaths = (iconName?: string | null) => {
-  const canonicalIconStem = normalizeDealIconName(iconName);
-  if (!canonicalIconStem) return [] as string[];
-  return [buildPathFromStem(canonicalIconStem)];
+  const iconStem = normalizeDealIconName(iconName);
+  if (!iconStem) return [] as string[];
+  return getDealIconRegistryCandidates(iconStem);
+};
+
+export const resolveDealIcon = (iconName?: string | null, category?: string | null) => {
+  const normalizedIconName = normalizeDealIconName(iconName);
+  const candidatePaths = buildDealIconCandidatePaths(normalizedIconName);
+  const categoryFallbackIconName = getCategoryIconName(typeof category === 'string' ? category : '');
+
+  return {
+    normalizedIconName,
+    primarySrc: candidatePaths[0] || '',
+    fallbackSrc: candidatePaths[1] || candidatePaths[0] || '',
+    candidatePaths,
+    categoryFallbackIconName,
+  };
+};
+
+type DealCardIconInput = {
+  iconName?: string | null;
+  category?: string | null;
+  cardImageUrl?: string | null;
+  cardImage?: string | null;
+  imageUrl?: string | null;
+  detailImageUrl?: string | null;
+  detailImage?: string | null;
+};
+
+export const resolveDealCardIconSource = (input?: DealCardIconInput | null) => {
+  const cardImageCandidate =
+    (typeof input?.cardImageUrl === 'string' ? input.cardImageUrl.trim() : '')
+    || (typeof input?.cardImage === 'string' ? input.cardImage.trim() : '')
+    || (typeof input?.imageUrl === 'string' ? input.imageUrl.trim() : '');
+  const detailImageCandidate =
+    (typeof input?.detailImageUrl === 'string' ? input.detailImageUrl.trim() : '')
+    || (typeof input?.detailImage === 'string' ? input.detailImage.trim() : '')
+    || '';
+
+  const inferredIconFromCardImage = extractDealIconNameFromAssetPath(cardImageCandidate);
+  const inferredIconFromDetailImage = extractDealIconNameFromAssetPath(detailImageCandidate);
+  const effectiveIconName = normalizeDealIconName(
+    input?.iconName || inferredIconFromCardImage || inferredIconFromDetailImage,
+  );
+  const iconResolution = resolveDealIcon(effectiveIconName, input?.category);
+
+  const cardImageLooksLikeIcon = Boolean(inferredIconFromCardImage);
+  const hasDistinctCardPreviewAsset = !detailImageCandidate || cardImageCandidate !== detailImageCandidate;
+
+  const resolvedSrc =
+    iconResolution.primarySrc
+    || ((cardImageLooksLikeIcon || hasDistinctCardPreviewAsset) ? cardImageCandidate : '')
+    || '';
+
+  return {
+    ...iconResolution,
+    cardImageCandidate,
+    detailImageCandidate,
+    resolvedSrc,
+  };
 };
 
 export const isKnownDealIconName = (iconName?: string | null) => {
   if (typeof iconName !== 'string') return false;
   const resolved = normalizeDealIconName(iconName);
-  return Boolean(resolved && KNOWN_DEAL_ICON_STEMS.includes(resolved as (typeof KNOWN_DEAL_ICON_STEMS)[number]));
+  return Boolean(resolved && KNOWN_DEAL_ICON_STEM_SET.has(resolved));
 };
 
-export const getKnownDealIconNames = () => [...KNOWN_DEAL_ICON_STEMS];
+export const getKnownDealIconNames = () => [...DEAL_ICON_MANIFEST];
+
+export const hasRegisteredDealIcon = (iconName?: string | null) =>
+  hasDealIconRegistryAsset(normalizeDealIconName(iconName));
+
+export const inferDealIconNameFromDealSignals = (input: DealIconInferenceInput) => {
+  const title = normalizeSignalText(input.title);
+  const businessName = normalizeSignalText(input.businessName);
+  const description = normalizeSignalText(input.description);
+  const category = normalizeSignalText(input.category);
+  const mergedSignal = [title, businessName, description, category].filter(Boolean).join(' ');
+  if (!mergedSignal) return '';
+
+  const exactMatch = DEAL_TITLE_ICON_HINTS.find((rule) => hasAllChecks(title, rule.checks));
+  if (exactMatch) {
+    return normalizeDealIconName(exactMatch.iconName);
+  }
+
+  const keywordMatch = DEAL_KEYWORD_ICON_HINTS.find((rule) => hasAllChecks(mergedSignal, rule.checks));
+  if (keywordMatch) {
+    return normalizeDealIconName(keywordMatch.iconName);
+  }
+
+  return '';
+};

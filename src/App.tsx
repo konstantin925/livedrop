@@ -31,9 +31,12 @@ import {
 } from './utils/dealStatus';
 import {
   buildDealIconPngPath,
+  extractDealIconNameFromAssetPath,
   getKnownDealIconNames,
+  inferDealIconNameFromDealSignals,
   isKnownDealIconName,
   normalizeDealIconName,
+  resolveDealCardIconSource,
 } from './utils/dealIcons';
 import { isManagedMockOnlineDeal, mergeDealsWithMockOnlinePipeline, MOCK_DEAL_REFRESH_INTERVAL_MS } from './utils/dealPipeline';
 import { canSaveDealToCatalog, createCatalogCouponFromDeal, refreshCatalogCoupons } from './utils/catalog';
@@ -765,28 +768,19 @@ const isInlineDataUrl = (value?: string | null) =>
 
 const getDealCardImageSource = (deal?: Partial<Deal> | null) => {
   if (!deal) return '';
-
-  const rawIconNameInput = trimDealTextValue(deal.iconName);
-  if (rawIconNameInput) {
-    const normalizedIconName = normalizeDealIconName(rawIconNameInput);
-    const customIconPath = buildDealIconPngPath(normalizedIconName);
-    if (customIconPath) {
-      return customIconPath;
-    }
-  }
-
-  const cardImageCandidate =
-    trimDealTextValue(deal.cardImageUrl)
-    || trimDealTextValue(deal.cardImage)
-    || trimDealTextValue(deal.imageUrl)
-    || '';
-  if (!cardImageCandidate) {
-    return '';
-  }
+  const iconSource = resolveDealCardIconSource({
+    iconName: trimDealTextValue(deal.iconName),
+    category: trimDealTextValue(deal.category),
+    cardImageUrl: trimDealTextValue(deal.cardImageUrl),
+    cardImage: trimDealTextValue(deal.cardImage),
+    imageUrl: trimDealTextValue(deal.imageUrl),
+    detailImageUrl: trimDealTextValue(deal.detailImageUrl),
+    detailImage: trimDealTextValue(deal.detailImage),
+  });
 
   // Always fall back to stored card image when available so cards do not render blank
   // if icon metadata is missing in a stale backend record.
-  return cardImageCandidate;
+  return iconSource.resolvedSrc;
 };
 
 const getDealDetailImageSource = (deal?: Partial<Deal> | null) => {
@@ -805,6 +799,7 @@ const getDealDetailImageSource = (deal?: Partial<Deal> | null) => {
 type StoredDealImageSnapshotEntry = {
   cardImageUrl?: string;
   detailImageUrl?: string;
+  iconName?: string;
 };
 
 const parseStoredDealImageSnapshot = (raw: string | null): Record<string, StoredDealImageSnapshotEntry> => {
@@ -830,13 +825,20 @@ const parseStoredDealImageSnapshot = (raw: string | null): Record<string, Stored
       const valueRecord = value as Record<string, unknown>;
       const cardImageUrl = trimDealTextValue(valueRecord.cardImageUrl);
       const detailImageUrl = trimDealTextValue(valueRecord.detailImageUrl);
-      if (!cardImageUrl && !detailImageUrl) {
+      const iconName = normalizeDealIconName(
+        trimDealTextValue(valueRecord.iconName)
+        || trimDealTextValue(valueRecord.icon_name)
+        || extractDealIconNameFromAssetPath(cardImageUrl)
+        || extractDealIconNameFromAssetPath(detailImageUrl),
+      );
+      if (!cardImageUrl && !detailImageUrl && !iconName) {
         return;
       }
 
       normalized[dealId] = {
         cardImageUrl: cardImageUrl || undefined,
         detailImageUrl: detailImageUrl || cardImageUrl || undefined,
+        iconName: iconName || undefined,
       };
     });
 
@@ -857,13 +859,15 @@ const buildDealImageSnapshot = (deals: Deal[]): Record<string, StoredDealImageSn
 
     const cardImageUrl = getDealCardImageSource(deal);
     const detailImageUrl = getDealDetailImageSource(deal);
-    if (!cardImageUrl && !detailImageUrl) {
+    const iconName = normalizeDealIconName(trimDealTextValue(deal.iconName));
+    if (!cardImageUrl && !detailImageUrl && !iconName) {
       return;
     }
 
     snapshot[dealId] = {
       cardImageUrl: cardImageUrl || undefined,
       detailImageUrl: detailImageUrl || cardImageUrl || undefined,
+      iconName: iconName || undefined,
     };
   });
 
@@ -888,9 +892,16 @@ const applyStoredDealImageSnapshot = (deals: Deal[]): Deal[] => {
     const cardImageUrl = trimDealTextValue(override.cardImageUrl) || getDealCardImageSource(deal) || undefined;
     const detailImageUrl =
       trimDealTextValue(override.detailImageUrl) || getDealDetailImageSource(deal) || cardImageUrl;
+    const iconName = normalizeDealIconName(
+      trimDealTextValue(override.iconName)
+      || trimDealTextValue(deal.iconName)
+      || extractDealIconNameFromAssetPath(cardImageUrl)
+      || extractDealIconNameFromAssetPath(detailImageUrl),
+    ) || undefined;
 
     return sanitizeDealRecord({
       ...deal,
+      iconName,
       cardImage: cardImageUrl,
       detailImage: detailImageUrl,
       cardImageUrl,
@@ -1018,7 +1029,7 @@ const readSharedDealsFastCache = (): Deal[] => {
     const cachedAt = typeof parsed.cachedAt === 'number' ? parsed.cachedAt : 0;
     if (!cachedAt || Date.now() - cachedAt > SHARED_DEALS_FAST_CACHE_TTL_MS) return [];
     const snapshot = parseStoredDealsPayload(JSON.stringify(parsed.deals ?? []));
-    return snapshot.ok ? snapshot.deals : [];
+    return snapshot.ok ? applyStoredDealImageSnapshot(snapshot.deals) : [];
   } catch {
     return [];
   }
@@ -3609,10 +3620,22 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     ? normalizeSubcategoryValue(input.onlineSubcategory, 'online', normalizedCategory) || undefined
     : undefined;
   const normalizedStatusTags = sanitizeDealStatusTags(input.statusTags);
-  const normalizedIconName = (
+  const inferredIconName = inferDealIconNameFromDealSignals({
+    title: trimDealTextValue(input.title),
+    businessName: normalizedBusinessName,
+    description: trimDealTextValue(input.description),
+    category: normalizedCategory,
+  });
+  const rawNormalizedIconName = normalizeDealIconName(
     trimDealTextValue(input.iconName)
     || trimDealTextValue((input as Record<string, unknown>).icon_name)
+    || extractDealIconNameFromAssetPath(normalizedCardImageUrl)
+    || extractDealIconNameFromAssetPath(normalizedDetailImageUrl)
+    || inferredIconName,
   );
+  const normalizedIconName = isKnownDealIconName(rawNormalizedIconName)
+    ? rawNormalizedIconName
+    : normalizeDealIconName(inferredIconName) || rawNormalizedIconName;
 
   return {
     id: trimDealTextValue(input.id) || createUuid(),
@@ -3622,7 +3645,7 @@ const sanitizeDealRecord = (input: Partial<Deal> | null | undefined): Deal | nul
     adminTag: input.adminTag === 'featured' || input.adminTag === 'trending' ? input.adminTag : null,
     businessName: normalizedBusinessName,
     logoUrl: trimDealTextValue(input.logoUrl) || undefined,
-    iconName: normalizeDealIconName(normalizedIconName) || undefined,
+    iconName: normalizedIconName || undefined,
     cardImage: normalizedCardImageUrl,
     detailImage: normalizedDetailImageUrl,
     cardImageUrl: normalizedCardImageUrl,
@@ -3723,21 +3746,21 @@ const mapDealRowToDeal = (row: Partial<DealRow>, fallback?: Partial<Deal>): Deal
     || trimDealTextValue(fallback?.detailImageUrl)
     || cardImageUrl
     || undefined;
-  const iconFromImagePath = (() => {
-    const imageUrlValue = trimDealTextValue(row.image_url);
-    if (!/\/category-icons\//i.test(imageUrlValue)) return '';
-    const iconMatch = imageUrlValue.match(/\/category-icons\/([^/?#]+)\.(png|jpg|jpeg|webp|svg)$/i);
-    if (!iconMatch?.[1]) return '';
-    try {
-      return normalizeDealIconName(decodeURIComponent(iconMatch[1]));
-    } catch {
-      return normalizeDealIconName(iconMatch[1]);
-    }
-  })();
-  const rowIconName = normalizeDealIconName(
+  const iconFromImagePath = extractDealIconNameFromAssetPath(trimDealTextValue(row.image_url));
+  const inferredRowIconName = inferDealIconNameFromDealSignals({
+    title: trimDealTextValue(row.title) || trimDealTextValue(fallback?.title),
+    businessName: trimDealTextValue(row.business_name) || trimDealTextValue(row.merchant) || trimDealTextValue(fallback?.businessName),
+    description: trimDealTextValue(row.description) || trimDealTextValue(fallback?.description),
+    category: trimDealTextValue(row.category) || trimDealTextValue(fallback?.category),
+  });
+  const rawRowIconName = normalizeDealIconName(
     trimDealTextValue((row as Record<string, unknown>).icon_name)
-    || iconFromImagePath,
+    || iconFromImagePath
+    || inferredRowIconName,
   );
+  const rowIconName = isKnownDealIconName(rawRowIconName)
+    ? rawRowIconName
+    : normalizeDealIconName(inferredRowIconName) || rawRowIconName;
   const createdAt = parseDealTimestampOrFallback(
     row.created_at,
     fallback?.createdAt ?? Date.now(),
@@ -3836,17 +3859,28 @@ const mapDealToDealRow = (deal: Deal, ownerId?: string | null): DealRow => {
   const sourceProductUrl = deal.productUrl ?? null;
   const affiliateUrl = deal.affiliateUrl ?? null;
   const normalizedOwnerId = normalizeUuidOrNull(ownerId);
-  const iconName = normalizeDealIconName(trimDealTextValue(deal.iconName)) || null;
-  const persistedIconPath = iconName ? buildDealIconPngPath(iconName) : null;
+  const inferredIconName = inferDealIconNameFromDealSignals({
+    title: trimDealTextValue(deal.title),
+    businessName: trimDealTextValue(deal.businessName),
+    description: trimDealTextValue(deal.description),
+    category: trimDealTextValue(deal.category),
+  });
+  const rawIconName = normalizeDealIconName(
+    trimDealTextValue(deal.iconName)
+    || inferredIconName,
+  );
+  const iconName = (
+    isKnownDealIconName(rawIconName)
+      ? rawIconName
+      : normalizeDealIconName(inferredIconName) || rawIconName
+  ) || null;
   const rawCardImageUrl =
     trimDealTextValue(deal.cardImageUrl)
     || trimDealTextValue(deal.cardImage)
     || trimDealTextValue(deal.imageUrl)
     || null;
   const cardImageUrl =
-    // Persist the selected canonical icon path as the primary card image pointer.
-    // This keeps icon selection durable even when icon_name is absent in remote schema.
-    persistedIconPath || rawCardImageUrl || null;
+    rawCardImageUrl || null;
   const detailImageUrl =
     trimDealTextValue(deal.detailImageUrl)
     || trimDealTextValue(deal.detailImage)
@@ -5014,6 +5048,7 @@ export default function App() {
   const hasRecoveredOnlineEmptyState = useRef(false);
   const onlineDebugSignatureRef = useRef('');
   const iconAuditSignatureRef = useRef('');
+  const desktopOnlineIconDebugSignatureRef = useRef('');
   const autoRestoredHiddenDealsRef = useRef(false);
   const [onlineDealPage, setOnlineDealPage] = useState(0);
   const [loadingMoreOnlineDeals, setLoadingMoreOnlineDeals] = useState(false);
@@ -5116,11 +5151,22 @@ export default function App() {
       .filter((deal) => deal.businessType === 'online')
       .map((deal) => {
         const rawIconName = trimDealTextValue(deal.iconName);
+        const iconResolution = resolveDealCardIconSource({
+          iconName: rawIconName,
+          category: trimDealTextValue(deal.category),
+          cardImageUrl: trimDealTextValue(deal.cardImageUrl),
+          cardImage: trimDealTextValue(deal.cardImage),
+          imageUrl: trimDealTextValue(deal.imageUrl),
+          detailImageUrl: trimDealTextValue(deal.detailImageUrl),
+          detailImage: trimDealTextValue(deal.detailImage),
+        });
         return {
           dealId: deal.id,
           title: trimDealTextValue(deal.title) || 'Untitled deal',
+          category: trimDealTextValue(deal.category) || 'uncategorized',
           businessName: trimDealTextValue(deal.businessName) || 'Unknown merchant',
           rawIconName,
+          resolvedIconPath: iconResolution.resolvedSrc,
         };
       })
       .filter((entry) => !entry.rawIconName);
@@ -5128,22 +5174,37 @@ export default function App() {
     const iconAuditRows = deals
       .map((deal) => {
         const rawIconName = trimDealTextValue(deal.iconName);
+        const iconResolution = resolveDealCardIconSource({
+          iconName: rawIconName,
+          category: trimDealTextValue(deal.category),
+          cardImageUrl: trimDealTextValue(deal.cardImageUrl),
+          cardImage: trimDealTextValue(deal.cardImage),
+          imageUrl: trimDealTextValue(deal.imageUrl),
+          detailImageUrl: trimDealTextValue(deal.detailImageUrl),
+          detailImage: trimDealTextValue(deal.detailImage),
+        });
         if (!rawIconName) return null;
         const normalizedIconName = normalizeDealIconName(rawIconName);
-        const expectedPath = buildDealIconPngPath(rawIconName);
+        const expectedPath = buildDealIconPngPath(normalizedIconName);
         return {
           dealId: deal.id,
+          title: trimDealTextValue(deal.title) || 'Untitled deal',
+          category: trimDealTextValue(deal.category) || 'uncategorized',
           rawIconName,
           normalizedIconName,
           expectedPath,
+          resolvedIconPath: iconResolution.resolvedSrc,
           isKnown: isKnownDealIconName(rawIconName),
         };
       })
       .filter((entry): entry is {
         dealId: string;
+        title: string;
+        category: string;
         rawIconName: string;
         normalizedIconName: string;
         expectedPath: string;
+        resolvedIconPath: string;
         isKnown: boolean;
       } => Boolean(entry));
 
@@ -5153,6 +5214,15 @@ export default function App() {
       return;
     }
     iconAuditSignatureRef.current = signature;
+
+    console.info('[LiveDrop] rendered online deal icon paths', iconAuditRows.map((entry) => ({
+      dealId: entry.dealId,
+      title: entry.title,
+      category: entry.category,
+      iconName: entry.normalizedIconName,
+      resolvedIconPath: entry.resolvedIconPath,
+      expectedPath: entry.expectedPath,
+    })));
 
     if (mismatches.length > 0) {
       console.warn('[LiveDrop] deal iconName mismatch audit', {
@@ -6578,23 +6648,24 @@ export default function App() {
       }));
 
       const mappedDeals = (data ?? []).map((row) => mapDealRowToDeal(row as Partial<DealRow>));
+      const hydratedDeals = applyStoredDealImageSnapshot(mappedDeals);
       if (import.meta.env.DEV) {
-        const onlineCount = mappedDeals.filter((deal) => deal.businessType === 'online').length;
+        const onlineCount = hydratedDeals.filter((deal) => deal.businessType === 'online').length;
         console.info('[LiveDrop] Shared deals mapped snapshot', {
-          mappedCount: mappedDeals.length,
+          mappedCount: hydratedDeals.length,
           onlineCount,
-          localCount: mappedDeals.length - onlineCount,
-          activeCount: mappedDeals.filter((deal) => (deal.status ?? 'active') === 'active').length,
+          localCount: hydratedDeals.length - onlineCount,
+          activeCount: hydratedDeals.filter((deal) => (deal.status ?? 'active') === 'active').length,
         });
       }
-      writeSharedDealsFastCache(mappedDeals);
+      writeSharedDealsFastCache(hydratedDeals);
       sharedDealsCacheRef.current = {
         mode: fetchMode,
         limit: requestedLimit,
         fetchedAt: Date.now(),
-        deals: cloneDealsForCache(mappedDeals),
+        deals: cloneDealsForCache(hydratedDeals),
       };
-      return mappedDeals;
+      return hydratedDeals;
     })();
 
     sharedDealsInFlightRef.current = {
@@ -9272,13 +9343,26 @@ const deleteDealFromBackend = async (
       : shouldPublish
         ? 'active'
         : 'draft';
+    const inferredDraftIconName = inferDealIconNameFromDealSignals({
+      title: trimDealTextValue(dealData.title) || trimDealTextValue(existingDraft?.title),
+      businessName: trimDealTextValue(dealData.businessName) || trimDealTextValue(existingDraft?.businessName),
+      description: trimDealTextValue(dealData.description) || trimDealTextValue(existingDraft?.description),
+      category: trimDealTextValue(dealData.category) || trimDealTextValue(existingDraft?.category),
+    });
+    const requestedDraftIconName = normalizeDealIconName(
+      trimDealTextValue(dealData.iconName)
+      || normalizeDealIconName(trimDealTextValue(existingDraft?.iconName)),
+    );
+    const normalizedDraftIconName = (
+      isKnownDealIconName(requestedDraftIconName)
+        ? requestedDraftIconName
+        : normalizeDealIconName(inferredDraftIconName) || requestedDraftIconName
+    ) || undefined;
     const localDeal: Deal = {
       ...dealData,
       id: persistedEditingDealId ?? createUuid(),
       createdAt: relaunchedCreatedAt,
-      iconName: normalizeDealIconName(trimDealTextValue(dealData.iconName))
-        || normalizeDealIconName(trimDealTextValue(existingDraft?.iconName))
-        || undefined,
+      iconName: normalizedDraftIconName,
       currentClaims: dealData.currentClaims ?? dealData.claimCount ?? 0,
       claimCount: dealData.claimCount ?? dealData.currentClaims ?? 0,
       status: nextStatus,
@@ -9292,10 +9376,10 @@ const deleteDealFromBackend = async (
     const requiresSharedPersistence = Boolean(
       supabase
       && hasSupabaseConfig
-      && (shouldPublish || isEditingExistingDeal),
+      && shouldPublish,
     );
 
-    if (supabase && hasSupabaseConfig) {
+    if (supabase && hasSupabaseConfig && shouldPublish) {
       try {
         const sharedWritePromise = editingDealId
           ? upsertDealInBackend(localDeal)
@@ -9328,6 +9412,12 @@ const deleteDealFromBackend = async (
       markDealAsLocalOnly(localDeal.id);
       setLastSharedPublishFailure(null);
       setDealsError(`Shared backend is not configured for ${DEALS_SCHEMA}.${DEALS_TABLE} in ${resolvedSupabaseUrl || '(missing VITE_SUPABASE_URL)'}. Showing local-only publishing fallback.`);
+    } else {
+      // Draft saves should always complete locally, even when shared backend is slow/unavailable.
+      setLastSharedPublishFailure(null);
+      if (!hasSupabaseConfig) {
+        setDealsError('');
+      }
     }
 
     setDeals((prev) => {
@@ -11492,6 +11582,36 @@ const deleteDealFromBackend = async (
         });
         onlineDebugSignatureRef.current = debugSignature;
       }
+
+      if (!isMobileViewport) {
+        const desktopVisibleDeals = (
+          isOnlineCategoryView
+            ? categoryOnlineBatchItems
+            : onlineByTabBatchItems
+        )
+          .filter((item): item is { type: 'deal'; deal: Deal } => item.type === 'deal')
+          .map((item) => item.deal);
+
+        const desktopIconSignature = JSON.stringify(
+          desktopVisibleDeals.map((deal) => `${deal.id}:${trimDealTextValue(deal.iconName)}`),
+        );
+
+        if (desktopOnlineIconDebugSignatureRef.current !== desktopIconSignature) {
+          console.info(
+            '[LiveDrop] desktop online card image resolver snapshot',
+            desktopVisibleDeals.map((deal) => {
+              const artwork = resolveDealArtworkPayload(deal, 'card');
+              return {
+                dealId: deal.id,
+                title: trimDealTextValue(deal.title) || 'Untitled deal',
+                iconName: trimDealTextValue(deal.iconName) || '',
+                resolvedImagePath: artwork.src || '',
+              };
+            }),
+          );
+          desktopOnlineIconDebugSignatureRef.current = desktopIconSignature;
+        }
+      }
     }
 
     const getOnlineDealHeroLabel = (offerText?: string | null) => {
@@ -11514,6 +11634,29 @@ const deleteDealFromBackend = async (
 
       return uppercaseOffer.length > 18 ? `${uppercaseOffer.slice(0, 18).trim()}...` : uppercaseOffer;
     };
+
+    function resolveDealArtworkPayload(deal: Deal, preferred: 'card' | 'detail' = 'card') {
+      const iconResolution = resolveDealCardIconSource({
+        iconName: trimDealTextValue(deal.iconName),
+        category: trimDealTextValue(deal.category),
+        cardImageUrl: trimDealTextValue(deal.cardImageUrl),
+        cardImage: trimDealTextValue(deal.cardImage),
+        imageUrl: trimDealTextValue(deal.imageUrl),
+        detailImageUrl: trimDealTextValue(deal.detailImageUrl),
+        detailImage: trimDealTextValue(deal.detailImage),
+      });
+      const cardSrc = iconResolution.resolvedSrc || getDealCardImageSource(deal) || '';
+      const detailSrc = getDealDetailImageSource(deal) || cardSrc;
+      const selectedSrc = preferred === 'detail'
+        ? detailSrc || cardSrc
+        : cardSrc || detailSrc;
+      return {
+        src: selectedSrc || undefined,
+        cardSrc: cardSrc || undefined,
+        detailSrc: detailSrc || undefined,
+        normalizedIconName: iconResolution.normalizedIconName || undefined,
+      };
+    }
 
     const activeCategoryOptions = dropMode === 'local' ? CATEGORY_OPTIONS : ONLINE_CATEGORY_OPTIONS;
     const selectedStatusLabel = getDealStatusFilterLabel(selectedFeedFilter).toLowerCase();
@@ -11555,7 +11698,7 @@ const deleteDealFromBackend = async (
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
       const statusLabel = getFeaturedDealStatusLabel(deal);
-      const featuredImageSrc = getDealDetailImageSource(deal) || getDealCardImageSource(deal);
+      const artwork = resolveDealArtworkPayload(deal, 'detail');
 
       return (
         <article
@@ -11612,9 +11755,11 @@ const deleteDealFromBackend = async (
             </div>
             <div className="relative aspect-[4/3] overflow-hidden rounded-[1rem] border border-white/70 bg-white/80">
               <DealArtwork
-                src={featuredImageSrc}
+                src={artwork.src}
+                iconName={artwork.normalizedIconName}
                 alt={displayTitle}
                 dealId={deal.id}
+                debugScope="desktop-featured"
                 fit="cover"
                 iconSize={26}
                 fallbackIconName={getCategoryIconName(deal.category)}
@@ -11635,7 +11780,7 @@ const deleteDealFromBackend = async (
       const priceSnapshot = getDealPriceSnapshot(deal);
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
-      const cardArtworkSrc = getDealCardImageSource(deal);
+      const artwork = resolveDealArtworkPayload(deal, 'card');
       const discountPercentValue = getDealDiscountPercentValue(deal);
       const discountValueLabel = discountPercentValue !== null ? `${discountPercentValue}%` : 'DEAL';
       const discountTypeLabel = discountPercentValue !== null ? 'OFF' : 'COUPON';
@@ -11657,21 +11802,23 @@ const deleteDealFromBackend = async (
               handleOpenDealDetail(deal);
             }
           }}
-          className="group relative h-full overflow-hidden rounded-[1.3rem] border border-indigo-100/70 bg-[linear-gradient(160deg,rgba(255,255,255,0.98),rgba(247,249,255,0.96))] p-3 shadow-[0_10px_24px_rgba(99,102,241,0.12)] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-[0_16px_32px_rgba(99,102,241,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
+          className="group relative overflow-hidden rounded-[1.3rem] border border-indigo-100/70 bg-[linear-gradient(160deg,rgba(255,255,255,0.98),rgba(247,249,255,0.96))] p-3 shadow-[0_10px_24px_rgba(99,102,241,0.12)] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-[0_16px_32px_rgba(99,102,241,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:ring-offset-2"
         >
-          <div className="flex h-full gap-3.5">
+          <div className="flex gap-3.5">
             <div className="relative flex h-[182px] w-[182px] shrink-0 items-center justify-center overflow-hidden rounded-[1.05rem] bg-white/90 ring-1 ring-indigo-100/70 min-[1280px]:h-[198px] min-[1280px]:w-[198px]">
               <DealArtwork
-                src={cardArtworkSrc}
+                src={artwork.src}
+                iconName={artwork.normalizedIconName}
                 alt={displayTitle}
                 dealId={deal.id}
+                debugScope="desktop-online-feed"
                 fit="contain"
                 iconSize={78}
                 fallbackIconName={getCategoryIconName(deal.category)}
                 preferredWidth={1024}
                 sizes="(min-width: 1280px) 198px, 182px"
                 imageClassName="p-1 !bg-transparent"
-                fallbackClassName="!bg-transparent text-indigo-300"
+                fallbackClassName="text-indigo-300"
               />
               <span className="pointer-events-none absolute left-2 top-2 inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50/90 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-indigo-600">
                 {getCategoryLabel(deal.category)}
@@ -11814,7 +11961,7 @@ const deleteDealFromBackend = async (
       const displayTitle = deal.title?.trim() || 'Limited-Time Deal';
       const displayDescription = deal.description?.trim() || 'Fresh deal available right now.';
       const displayOfferText = deal.offerText?.trim() || 'Live Deal';
-      const cardArtworkSrc = getDealCardImageSource(deal);
+      const artwork = resolveDealArtworkPayload(deal, 'card');
       const priceSnapshot = getDealPriceSnapshot(deal);
       const currentPriceLabel = formatPriceValue(priceSnapshot.currentPrice);
       const originalPriceLabel = formatPriceValue(priceSnapshot.originalPrice);
@@ -11844,9 +11991,11 @@ const deleteDealFromBackend = async (
         >
           <div className="relative aspect-[4/3] overflow-hidden bg-slate-50">
             <DealArtwork
-              src={cardArtworkSrc}
+              src={artwork.src}
+              iconName={artwork.normalizedIconName}
               alt={displayTitle}
               dealId={deal.id}
+              debugScope="mobile-online-feed"
               fit="contain"
               iconSize={24}
               fallbackIconName={getCategoryIconName(deal.category)}
@@ -11974,15 +12123,15 @@ const deleteDealFromBackend = async (
         onClick={onClick}
         aria-label="Load more deals"
         disabled={state !== 'ready'}
-        className={`hidden min-[360px]:block w-full h-full overflow-hidden rounded-[1.3rem] border border-slate-200/70 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 ${
+        className={`hidden min-[360px]:block w-full self-start overflow-hidden rounded-[1.3rem] border border-slate-200/70 bg-white shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/70 ${
           state === 'ready'
             ? 'hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(99,102,241,0.14)]'
             : 'cursor-not-allowed opacity-80'
         }`}
       >
-        <div className="flex h-full flex-col">
+        <div className="flex flex-col">
           {/* Media area */}
-          <div className="relative aspect-[1/1] rounded-[1.05rem] bg-white transition-all duration-150 active:brightness-[1.08]">
+          <div className="relative h-[176px] rounded-[1.05rem] bg-white transition-all duration-150 active:brightness-[1.08] min-[1280px]:h-[192px]">
             <div className="absolute inset-0 flex items-center justify-center">
                 <img
                   src={brandBoltLogo3d}
@@ -11998,7 +12147,7 @@ const deleteDealFromBackend = async (
             </div>
           </div>
           {/* Content area */}
-          <div className="flex flex-1 flex-col items-center justify-center px-3 pb-3 pt-1.5">
+          <div className="flex flex-col items-center justify-center px-3 pb-3 pt-1.5">
             <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               {label}
             </span>
@@ -12985,14 +13134,14 @@ const deleteDealFromBackend = async (
                 />
               ) : pagedCategoryOnlineDeals.length > 0 ? (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 lg:items-start">
                     {categoryOnlineBatchItems.map((item, index) => (
                       item.type === 'deal' ? (
-                        <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                        <div key={item.deal.id} className={`${getBatchItemClassName(index)} self-start`}>
                           {renderOnlineDealCard(item.deal)}
                         </div>
                       ) : (
-                        <div key={`category-load-more-${safeOnlineCategoryPage}-${index}`} className={getBatchItemClassName(index)}>
+                        <div key={`category-load-more-${safeOnlineCategoryPage}-${index}`} className={`${getBatchItemClassName(index)} self-start`}>
                           {renderOnlineGridFiller(
                             () => {
                               setIsMoreDealsAnimating(true);
@@ -13075,16 +13224,16 @@ const deleteDealFromBackend = async (
                   subtitle="We’re scanning for the latest LiveDrop drops right now."
                 />
               ) : sortedOnlineDealsByTab.length > 0 ? (
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 lg:items-start">
                   {onlineByTabBatchItems.map((item, index) => (
                     item.type === 'deal'
                       ? (
-                        <div key={item.deal.id} className={getBatchItemClassName(index)}>
+                        <div key={item.deal.id} className={`${getBatchItemClassName(index)} self-start`}>
                           {renderOnlineDealCard(item.deal)}
                         </div>
                       )
                       : (
-                        <div key={`online-load-more-${safeOnlineDealPage}-${index}`} className={getBatchItemClassName(index)}>
+                        <div key={`online-load-more-${safeOnlineDealPage}-${index}`} className={`${getBatchItemClassName(index)} self-start`}>
                           {renderOnlineGridFiller(
                             () => {
                               if (loadingMoreOnlineDeals || onlineDealPages.length === 0) return;

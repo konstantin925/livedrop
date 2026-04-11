@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AppIcon } from './AppIcon';
 import type { IconName } from './AppIcon';
 import { getOptimizedDealImageSrcSet, getOptimizedDealImageUrl } from '../utils/dealImages';
-import { buildDealIconCandidatePaths, buildDealIconPngPath, normalizeDealIconName } from '../utils/dealIcons';
+import {
+  buildDealIconCandidatePaths,
+  normalizeDealIconName,
+  resolveDealIcon,
+} from '../utils/dealIcons';
 
 interface DealArtworkProps {
   src?: string | null;
@@ -15,6 +19,7 @@ interface DealArtworkProps {
   iconName?: string | null;
   fallbackIconName?: IconName;
   dealId?: string | null;
+  debugScope?: string;
   preferredWidth?: number;
   sizes?: string;
   fetchPriority?: 'high' | 'low' | 'auto';
@@ -34,6 +39,7 @@ export const DealArtwork = React.memo(({
   iconName,
   fallbackIconName = 'deal',
   dealId,
+  debugScope,
   preferredWidth,
   sizes,
   fetchPriority = 'low',
@@ -49,13 +55,15 @@ export const DealArtwork = React.memo(({
     () => normalizeDealIconName(iconName),
     [iconName],
   );
-  const customIconSrc = useMemo(
-    () => buildDealIconPngPath(normalizedIconName),
+  const iconResolution = useMemo(
+    () => resolveDealIcon(normalizedIconName),
     [normalizedIconName],
   );
   const imageCandidates = useMemo(() => {
     const candidates: string[] = [];
-    if (normalizedIconName) {
+    if (iconResolution.primarySrc) {
+      candidates.push(...iconResolution.candidatePaths);
+    } else if (normalizedIconName) {
       candidates.push(...buildDealIconCandidatePaths(normalizedIconName));
     }
 
@@ -71,12 +79,9 @@ export const DealArtwork = React.memo(({
       }
     }
 
-    if (customIconSrc) {
-      candidates.unshift(customIconSrc);
-    }
-
-    return Array.from(new Set(candidates.filter(Boolean)));
-  }, [customIconSrc, normalizedIconName, normalizedSrc]);
+    const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
+    return uniqueCandidates;
+  }, [iconResolution.candidatePaths, iconResolution.primarySrc, normalizedIconName, normalizedSrc]);
   const effectiveSrc = imageCandidates[imageCandidateIndex] || '';
   const optimizedSrc = useMemo(() => {
     return getOptimizedDealImageUrl(effectiveSrc, { width: preferredWidth, fit });
@@ -111,6 +116,19 @@ export const DealArtwork = React.memo(({
     setImageLoaded(false);
   }, [effectiveSrc, imageCandidateIndex, imageCandidates]);
 
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!normalizedIconName) return;
+    if (iconResolution.candidatePaths.length > 0) return;
+
+    console.warn('[LiveDrop] missing canonical icon asset in registry', {
+      scope: debugScope || 'unspecified',
+      dealId: dealId ?? null,
+      title: alt,
+      normalizedIconName,
+    });
+  }, [alt, debugScope, dealId, iconResolution.candidatePaths.length, normalizedIconName]);
+
   return (
     <div className={`h-full w-full ${className}`}>
       {showImage ? (
@@ -126,14 +144,43 @@ export const DealArtwork = React.memo(({
             loading="lazy"
             decoding="async"
             fetchPriority={fetchPriority}
-            onLoad={() => setImageLoaded(true)}
+            onLoad={() => {
+              setImageLoaded(true);
+              if (import.meta.env.DEV && debugScope?.startsWith('desktop')) {
+                console.info('[LiveDrop] deal artwork load event', {
+                  scope: debugScope,
+                  event: 'onLoad',
+                  dealId: dealId ?? null,
+                  title: alt,
+                  iconName: normalizedIconName || null,
+                  resolvedImagePath: effectiveSrc,
+                });
+              }
+            }}
             onError={() => {
+              if (import.meta.env.DEV) {
+                console.warn('[LiveDrop] deal artwork image load failed', {
+                  scope: debugScope || 'unspecified',
+                  event: 'onError',
+                  dealId,
+                  title: alt,
+                  iconName: normalizedIconName || null,
+                  resolvedImagePath: effectiveSrc,
+                });
+              }
               const nextCandidateIndex = getCandidateIndex(imageCandidates, imageCandidateIndex + 1);
               if (nextCandidateIndex >= 0) {
                 setImageCandidateIndex(nextCandidateIndex);
                 setImageLoaded(false);
                 setImageFailed(false);
                 return;
+              }
+              if (import.meta.env.DEV && normalizedIconName) {
+                console.warn('[LiveDrop] all icon candidates failed, falling back to category icon', {
+                  dealId,
+                  iconName: normalizedIconName,
+                  candidates: imageCandidates,
+                });
               }
               setImageFailed(true);
             }}
